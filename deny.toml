@@ -1,0 +1,73 @@
+# cargo-deny configuration for hodeishield-cli.
+# Run locally with: cargo deny check
+# Docs: https://embarkstudios.github.io/cargo-deny/
+
+[graph]
+all-features = false
+no-default-features = false
+
+[output]
+feature-depth = 1
+
+# https://embarkstudios.github.io/cargo-deny/checks/advisories/cfg.html
+[advisories]
+ignore = [
+    #"RUSTSEC-0000-0000",
+]
+
+# https://embarkstudios.github.io/cargo-deny/checks/licenses/cfg.html
+[licenses]
+# Only the licenses actually present in the dependency graph (see
+# `cargo deny check licenses` / `cargo tree -f "{p} {l}"`) are allowed here.
+# For an SPDX expression with an OR, only one side needs to be in this list;
+# for AND, every side must be present.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "ISC",
+    "BSD-3-Clause",
+    "MPL-2.0",
+    # Unicode data tables (icu_*, litemap, zerovec, etc., pulled in via idna/url).
+    "Unicode-3.0",
+    # webpki-root-certs vendors Mozilla's CA bundle under this Community Data
+    # License Agreement; it is a non-code data license, OSI/FSF-listed as free,
+    # and widely allowed alongside MIT/Apache-2.0 in the Rust TLS ecosystem.
+    "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.8
+exceptions = []
+
+[licenses.private]
+ignore = false
+registries = []
+
+# https://embarkstudios.github.io/cargo-deny/checks/bans/cfg.html
+[bans]
+# Keep duplicate-version detection as a warning, not a hard failure: several
+# transitive deps (windows-*, syn, core-foundation, etc.) legitimately pull in
+# more than one major version and bumping them is outside this crate's control.
+multiple-versions = "warn"
+# Wildcard version requirements are refused, except for this workspace's own
+# path dependencies (`hodeishield-api = { path = ... }`), which are never
+# published.
+wildcards = "deny"
+allow-wildcard-paths = true
+highlight = "all"
+workspace-default-features = "allow"
+external-default-features = "allow"
+allow = []
+deny = []
+skip = []
+skip-tree = []
+
+# https://embarkstudios.github.io/cargo-deny/checks/sources/cfg.html
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
+
+[sources.allow-org]
+github = []
+gitlab = []
+bitbucket = []
