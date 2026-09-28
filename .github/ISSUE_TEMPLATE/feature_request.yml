@@ -1,0 +1,19 @@
+name: Feature request
+description: Suggest a command, flag or output format.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: The CLI only reads data. Requests to create, change or delete data are out of scope.
+  - type: textarea
+    id: need
+    attributes:
+      label: What do you need to do?
+      description: The task you are trying to get done, not only the solution.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would help
+      description: The command or flag you have in mind, with an example (made-up values only).

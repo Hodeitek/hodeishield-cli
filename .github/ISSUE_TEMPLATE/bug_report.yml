@@ -1,0 +1,38 @@
+name: Bug report
+description: Something in the CLI does not work as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Security problem?** Do not file it here: use [Report a vulnerability](https://github.com/Hodeitek/hodeishield-cli/security/advisories/new).
+        **Never paste an API key, a token, or data from your organisation** into this issue.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `hodeishield --version`.
+      placeholder: hodeishield 0.1.0
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options: [Linux x86_64, Linux aarch64, macOS, Windows, Other]
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: The command you ran and its output. Run it with `--verbose` and include the request id if there is one; remove anything identifying your organisation.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
