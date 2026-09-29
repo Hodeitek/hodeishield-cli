@@ -115,11 +115,11 @@ framework the app offers; evidence; endpoints) and for a refresh token. To ask f
 
 The token is kept in the system keychain (macOS Keychain, Windows Credential Manager, or the Secret
 Service — GNOME Keyring, KWallet — on Linux) and refreshed automatically, also when the app ends an
-access token early (signing out of the web session you approved a browser sign-in from does). Without
-a keychain, signing in is refused rather than falling back to a file: use an API key there.
+access token early. Without a keychain, signing in is refused rather than falling back to a file: use
+an API key there.
 
 To cut the CLI's access from elsewhere, revoke it in [the app](https://app.hodeishield.com) under
-**Account → Application access**.
+**Account → Application access**. Signing out of the web app does not cut it.
 
 ## Use
 

@@ -228,8 +228,8 @@ pub fn whoami(ctx: &Context, out: &mut dyn Write) -> Result<()> {
 /// now: the tokens themselves travel in the requests.
 ///
 /// The access token first, then the refresh token, each whatever happened to the other. An access
-/// token the app no longer knows (ended by signing out of the web session that approved it, say) is
-/// not a failure; a refresh token it does not know, or any other refusal, is reported.
+/// token the app no longer knows (one that already expired, say) is not a failure; a refresh token it
+/// does not know, or any other refusal, is reported.
 fn revoke_at_issuer(token: &StoredToken) -> Result<()> {
     let issuer = auth::issuer_url(token)?;
     let http = oauth::http_client(&issuer)?;

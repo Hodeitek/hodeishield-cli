@@ -117,9 +117,8 @@ pub fn current_token(settings: &Settings, store: &dyn TokenStore) -> Result<Opti
 }
 
 /// A new access token after the API refused the profile's one before it expired, which the app does
-/// when it ends a token early: signing out of the web session that approved a browser sign-in ends
-/// that session's access tokens, not the refresh token. `None` when it cannot be renewed; the
-/// refusal then stands.
+/// when it ends a token early. `None` when it cannot be renewed (the sign-in revoked, or the account
+/// deactivated, say); the refusal then stands.
 pub fn renew(settings: &Settings, store: &dyn TokenStore) -> Option<SecretString> {
     let token = store.load(&settings.profile).ok()??;
     // The profile may have been signed in again meanwhile, for another API: only a sign-in for this
