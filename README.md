@@ -1,6 +1,6 @@
 # hodeishield
 
-HodeiShield CLI — the official command-line client for [HodeiShield](https://hodeishield.com), by
+HodeiShield CLI — the official command-line client for [HodeiShield](https://app.hodeishield.com), by
 [Hodeitek](https://hodeitek.com).
 
 Read your third-party inventory, supply-chain alerts, risk register, compliance posture, evidence and
@@ -197,7 +197,6 @@ public issue ([SECURITY.md](SECURITY.md)).
 
 ## About
 
-- [HodeiShield](https://hodeishield.com): the third-party risk, supply-chain security and compliance
-  platform that this CLI reads from.
-- [HodeiShield app](https://app.hodeishield.com): where you sign in and create API keys.
+- [HodeiShield](https://app.hodeishield.com): the third-party risk, supply-chain security and
+  compliance platform that this CLI reads from; sign in there and create API keys.
 - [Hodeitek](https://hodeitek.com): the company that builds HodeiShield and maintains this CLI.
