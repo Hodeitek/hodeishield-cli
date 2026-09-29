@@ -376,21 +376,26 @@ fn login_finds_the_sign_in_server_through_the_api_and_asks_for_the_scopes_it_nee
         )
         .expect(1)
         .create();
+    // Denied at the end, so no token exists to store: on macOS and Windows the test would otherwise
+    // write to the machine's real keychain.
     let token = app
         .mock("POST", "/api/auth/oauth2/token")
-        .with_body(r#"{"access_token":"hs_at_x","token_type":"Bearer","expires_in":900}"#)
+        .match_body(mockito::Matcher::UrlEncoded(
+            "client_id".into(),
+            "hodeishield-cli".into(),
+        ))
+        .with_status(400)
+        .with_body(r#"{"error":"access_denied"}"#)
         .expect(1)
         .create();
-    // The test machine has no keychain: the sign-in gets as far as storing the token, and says why
-    // it cannot.
     env.cmd()
         .env("HODEISHIELD_API_URL", api.url())
         .env("HODEISHIELD_APP_URL", app.url())
         .args(["login", "--device"])
         .assert()
-        .code(1)
+        .code(3)
         .stderr(predicate::str::contains("ABCD-EFGH"))
-        .stderr(predicate::str::contains("keychain"));
+        .stderr(predicate::str::contains("denied"));
     resource.assert();
     device.assert();
     token.assert();
