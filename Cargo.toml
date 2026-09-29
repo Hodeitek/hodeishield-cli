@@ -10,6 +10,7 @@ rust-version = "1.98"
 license = "Apache-2.0"
 repository = "https://github.com/Hodeitek/hodeishield-cli"
 homepage = "https://hodeishield.com"
+documentation = "https://github.com/Hodeitek/hodeishield-cli#readme"
 publish = false
 
 [workspace.dependencies]

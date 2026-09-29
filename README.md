@@ -1,8 +1,10 @@
 # hodeishield
 
-The command-line client for [HodeiShield](https://hodeishield.com): read your third-party inventory,
-supply-chain alerts, risk register, compliance posture, evidence and endpoint agents from a terminal
-or a script.
+HodeiShield CLI — the official command-line client for [HodeiShield](https://hodeishield.com), by
+[Hodeitek](https://hodeitek.com).
+
+Read your third-party inventory, supply-chain alerts, risk register, compliance posture, evidence and
+endpoint agents from a terminal or a script.
 
 - **Read-only.** Every command is a `GET` against the public `/v1` API. Nothing here can change data in
   your organisation.
@@ -61,8 +63,8 @@ tag, with no long-lived key involved; put your version in the identity rather th
 
 ### With a tenant API key (scripts, CI, servers)
 
-Create a key in the app under **Settings → API keys**, with only the read scopes you need, and export
-it:
+Create a key in [the app](https://app.hodeishield.com) under **Settings → API keys**, with only the
+read scopes you need, and export it:
 
 ```sh
 export HODEISHIELD_API_KEY=hsk_...
@@ -81,9 +83,9 @@ hodeishield whoami
 hodeishield logout           # revokes the token at the app and removes it from the keychain
 ```
 
-You sign in to `app.hodeishield.com` as usual (2FA, passkey or SSO), and on the consent screen you
-choose **the one tenant** the CLI may read. A sign-in token never covers more than that tenant, and it
-only reads. To use another tenant, sign in again with another profile (`--profile`).
+You sign in to [app.hodeishield.com](https://app.hodeishield.com) as usual (2FA, passkey or SSO), and
+on the consent screen you choose **the one tenant** the CLI may read. A sign-in token never covers
+more than that tenant, and it only reads. To use another tenant, sign in again with another profile (`--profile`).
 
 With `--device`, open the address the CLI prints on any device and **type the code by hand**: the app
 does not accept a link with the code filled in, on purpose.
@@ -97,7 +99,8 @@ Service — GNOME Keyring, KWallet — on Linux) and refreshed automatically, al
 access token early (signing out of the web session you approved a browser sign-in from does). Without
 a keychain, signing in is refused rather than falling back to a file: use an API key there.
 
-To cut the CLI's access from elsewhere, revoke it in the app under **Account → Application access**.
+To cut the CLI's access from elsewhere, revoke it in [the app](https://app.hodeishield.com) under
+**Account → Application access**.
 
 ## Use
 
@@ -191,3 +194,10 @@ public issue ([SECURITY.md](SECURITY.md)).
 ## License
 
 [Apache License 2.0](LICENSE).
+
+## About
+
+- [HodeiShield](https://hodeishield.com): the third-party risk, supply-chain security and compliance
+  platform that this CLI reads from.
+- [HodeiShield app](https://app.hodeishield.com): where you sign in and create API keys.
+- [Hodeitek](https://hodeitek.com): the company that builds HodeiShield and maintains this CLI.
