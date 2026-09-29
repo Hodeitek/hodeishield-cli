@@ -1,3 +1,5 @@
+![HodeiShield CLI — by Hodeitek](.github/banner.png)
+
 # HodeiShield CLI
 
 [![Latest release](https://img.shields.io/github/v/release/Hodeitek/hodeishield-cli?sort=semver)](https://github.com/Hodeitek/hodeishield-cli/releases/latest)
@@ -8,6 +10,17 @@
 The official command-line client for [HodeiShield](https://app.hodeishield.com), by
 [Hodeitek](https://hodeitek.com). HodeiShield covers third-party risk, supply-chain security and
 compliance (NIS2, DORA, ISO 27001, ENS).
+
+## Quick start
+
+```sh
+# Download and unpack the archive for your platform from
+# https://github.com/Hodeitek/hodeishield-cli/releases/latest, then:
+hodeishield login            # sign in through the browser and pick a tenant
+hodeishield vendors list     # your third-party inventory
+```
+
+Verify the download before you run it: see [Install](#install) and [Verify a download](#verify-a-download).
 
 Read your third-party inventory, supply-chain alerts, risk register, compliance posture, evidence and
 endpoint agents from a terminal or a script.
@@ -20,17 +33,6 @@ endpoint agents from a terminal or a script.
   `HODEISHIELD_API_KEY` works without any interactive step.
 - **Verifiable.** Every release is signed with Sigstore (keyless, from GitHub Actions) and carries
   SLSA build provenance.
-
-## Quick start
-
-```sh
-# Download and unpack the archive for your platform from
-# https://github.com/Hodeitek/hodeishield-cli/releases/latest, then:
-hodeishield login            # sign in through the browser and pick a tenant
-hodeishield vendors list     # your third-party inventory
-```
-
-Verify the download before you run it: see [Install](#install) and [Verify a download](#verify-a-download).
 
 > The CLI is at version 0.x: commands and output may still change before 1.0.
 
