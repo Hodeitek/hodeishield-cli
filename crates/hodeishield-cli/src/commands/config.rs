@@ -30,16 +30,12 @@ pub fn run(ctx: &Context, command: ConfigCommand, out: &mut dyn Write) -> Result
             }
             let scopes = settings
                 .oauth_scopes
-                .map_or_else(|| "(decided by the app)".to_owned(), |s| s.join(" "));
+                .map_or_else(|| "(what the commands need)".to_owned(), |s| s.join(" "));
             writeln!(out, "config_file      {}", settings.config_path.display())?;
             writeln!(out, "profile          {}", settings.profile)?;
             writeln!(out, "api_url          {}", settings.api_url)?;
             writeln!(out, "app_url          {}", settings.app_url)?;
-            writeln!(
-                out,
-                "oauth_client_id  {}",
-                settings.oauth_client_id.as_deref().unwrap_or("(not set)")
-            )?;
+            writeln!(out, "oauth_client_id  {}", settings.oauth_client_id)?;
             writeln!(out, "oauth_scopes     {scopes}")?;
             Ok(())
         }

@@ -12,10 +12,9 @@ use url::Url;
 pub const DEFAULT_PROFILE: &str = "default";
 pub const DEFAULT_APP_URL: &str = "https://app.hodeishield.com";
 
-/// The OAuth client id of this CLI, registered in the app as a public client. `None` until the app
-/// publishes it; until then `login` needs `oauth_client_id` in the profile or
-/// `HODEISHIELD_OAUTH_CLIENT_ID`, and says so.
-pub const DEFAULT_OAUTH_CLIENT_ID: Option<&str> = None;
+/// The OAuth client id of this CLI, pre-registered in the app as a public client. A profile or
+/// `HODEISHIELD_OAUTH_CLIENT_ID` can name another one, for an app that registers it differently.
+pub const DEFAULT_OAUTH_CLIENT_ID: &str = "hodeishield-cli";
 
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -39,7 +38,7 @@ pub struct Profile {
     /// OAuth client id of the CLI in the app.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oauth_client_id: Option<String>,
-    /// OAuth scopes to request. Unset: the app decides.
+    /// OAuth scopes to request. Unset: the ones the CLI's commands need, among those the app offers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oauth_scopes: Option<Vec<String>>,
 }
@@ -180,7 +179,7 @@ pub struct Settings {
     pub profile: String,
     pub api_url: Url,
     pub app_url: Url,
-    pub oauth_client_id: Option<String>,
+    pub oauth_client_id: String,
     pub oauth_scopes: Option<Vec<String>>,
     pub config_path: PathBuf,
 }
@@ -235,7 +234,7 @@ pub fn resolve_with(
     };
     let oauth_client_id = env("HODEISHIELD_OAUTH_CLIENT_ID")
         .or_else(|| profile.oauth_client_id.clone())
-        .or_else(|| DEFAULT_OAUTH_CLIENT_ID.map(str::to_owned));
+        .unwrap_or_else(|| DEFAULT_OAUTH_CLIENT_ID.to_owned());
     Ok(Settings {
         profile: profile_name,
         api_url,
@@ -266,7 +265,7 @@ mod tests {
         assert_eq!(s.profile, "default");
         assert_eq!(s.api_url.as_str(), "https://api.hodeishield.com/");
         assert_eq!(s.app_url.as_str(), "https://app.hodeishield.com/");
-        assert_eq!(s.oauth_client_id, None);
+        assert_eq!(s.oauth_client_id, "hodeishield-cli");
     }
 
     #[test]
@@ -287,7 +286,7 @@ mod tests {
             resolve_with(&config, PathBuf::new(), &Overrides::default(), no_env).expect("profile");
         assert_eq!(s.profile, "staging");
         assert_eq!(s.api_url.host_str(), Some("api.staging.example.test"));
-        assert_eq!(s.oauth_client_id.as_deref(), Some("from-profile"));
+        assert_eq!(s.oauth_client_id, "from-profile");
 
         let overrides = Overrides {
             api_url: Some("http://localhost:4000".to_owned()),
@@ -301,7 +300,7 @@ mod tests {
         let s = resolve_with(&config, PathBuf::new(), &overrides, env).expect("overrides");
         assert_eq!(s.api_url.as_str(), "http://localhost:4000/");
         assert_eq!(s.app_url.as_str(), "http://127.0.0.1:3000/");
-        assert_eq!(s.oauth_client_id.as_deref(), Some("from-env"));
+        assert_eq!(s.oauth_client_id, "from-env");
     }
 
     #[test]

@@ -10,12 +10,13 @@ use crate::config::{Overrides, Settings};
 use crate::failure::{ApiContext, CredentialSource, Result, from_api};
 use hodeishield_api::Client;
 use std::io::Write;
+use std::sync::Arc;
 
 pub struct Context {
     pub overrides: Overrides,
     pub json: bool,
     pub verbose: bool,
-    pub store: Box<dyn TokenStore>,
+    pub store: Arc<dyn TokenStore + Send + Sync>,
 }
 
 impl Context {
@@ -28,6 +29,10 @@ impl Context {
         let (credential, source) = auth::credential_for_api(settings, self.store.as_ref())?;
         let mut builder =
             Client::builder(settings.api_url.clone(), credential).user_agent(crate::USER_AGENT);
+        if source == CredentialSource::OAuth {
+            let (settings, store) = (settings.clone(), Arc::clone(&self.store));
+            builder = builder.renew_credential(move || auth::renew(&settings, store.as_ref()));
+        }
         if self.verbose {
             builder = builder.observer(|event| {
                 eprintln!(
@@ -63,7 +68,7 @@ pub fn run(cli: Cli, out: &mut dyn Write) -> Result<()> {
         },
         json: cli.json,
         verbose: cli.verbose,
-        store: Box::new(auth::store::Keychain),
+        store: Arc::new(auth::store::Keychain),
     };
     match cli.command {
         Command::Vendors(command) => resources::vendors(&ctx, command, out),

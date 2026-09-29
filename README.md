@@ -72,7 +72,7 @@ hodeishield whoami
 When `HODEISHIELD_API_KEY` is set it is used for every call, whatever else is configured. Keep it in
 your CI's secret store; the CLI never prints it.
 
-### By signing in (people) — preview
+### By signing in (people)
 
 ```sh
 hodeishield login            # opens the browser; the app redirects back to 127.0.0.1
@@ -81,12 +81,23 @@ hodeishield whoami
 hodeishield logout           # revokes the token at the app and removes it from the keychain
 ```
 
-The token is kept in the system keychain (macOS Keychain, Windows Credential Manager, or the Secret
-Service — GNOME Keyring, KWallet — on Linux) and refreshed automatically. Without a keychain, signing
-in is refused rather than falling back to a file: use an API key there.
+You sign in to `app.hodeishield.com` as usual (2FA, passkey or SSO), and on the consent screen you
+choose **the one tenant** the CLI may read. A sign-in token never covers more than that tenant, and it
+only reads. To use another tenant, sign in again with another profile (`--profile`).
 
-**Sign-in from the CLI depends on OAuth support in the app that is still being rolled out.** Until it
-is available, `login` says so and changes nothing; use an API key meanwhile.
+With `--device`, open the address the CLI prints on any device and **type the code by hand**: the app
+does not accept a link with the code filled in, on purpose.
+
+The CLI asks for the read scopes its commands need (vendors, alerts and risks; every compliance
+framework the app offers; evidence; endpoints) and for a refresh token. To ask for fewer, set them:
+`hodeishield config set oauth_scopes "supply_risk:read offline_access"`.
+
+The token is kept in the system keychain (macOS Keychain, Windows Credential Manager, or the Secret
+Service — GNOME Keyring, KWallet — on Linux) and refreshed automatically, also when the app ends an
+access token early (signing out of the web session you approved a browser sign-in from does). Without
+a keychain, signing in is refused rather than falling back to a file: use an API key there.
+
+To cut the CLI's access from elsewhere, revoke it in the app under **Account → Application access**.
 
 ## Use
 

@@ -97,8 +97,8 @@ pub fn from_api(error: hodeishield_api::Error, context: &ApiContext<'_>) -> Fail
                         "Check HODEISHIELD_API_KEY: the key may be revoked, expired or mistyped."
                     }
                     CredentialSource::OAuth => {
-                        "Run `hodeishield login` again. If it keeps failing, the API may not accept \
-                         sign-in tokens yet: use a tenant API key in HODEISHIELD_API_KEY."
+                        "Run `hodeishield login` again: the sign-in was revoked, has expired, or no \
+                         longer covers its tenant."
                     }
                 }),
                 403 => {

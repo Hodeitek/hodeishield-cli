@@ -6,7 +6,7 @@ pub mod store;
 
 use crate::config::Settings;
 use crate::failure::{CredentialSource, Failure, Kind, Result};
-use secrecy::SecretString;
+use secrecy::{ExposeSecret, SecretString};
 use std::time::{SystemTime, UNIX_EPOCH};
 pub use store::{StoredToken, TokenStore};
 
@@ -98,13 +98,14 @@ pub fn current_token(settings: &Settings, store: &dyn TokenStore) -> Result<Opti
     let Some(token) = store.load(&settings.profile)? else {
         return Ok(None);
     };
-    let app = settings.app_url.as_str().trim_end_matches('/');
-    if token.issuer.trim_end_matches('/') != app {
+    // The issuer is where sign-in lives on the app (its path comes from the API's metadata); a
+    // profile that now points to another app does not keep using or refreshing it.
+    if !issuer_url(&token).is_ok_and(|issuer| oauth::same_origin(&issuer, &settings.app_url)) {
         return Err(Failure::new(
             Kind::NotAuthenticated,
             format!(
-                "This profile is signed in to {}, but now points to {app}.",
-                token.issuer
+                "This profile is signed in to {}, but now points to {}.",
+                token.issuer, settings.app_url
             ),
         )
         .hint("Run `hodeishield logout` and `hodeishield login` again."));
@@ -113,6 +114,27 @@ pub fn current_token(settings: &Settings, store: &dyn TokenStore) -> Result<Opti
         return Ok(Some(token));
     }
     refresh_stored(settings, store, token).map(Some)
+}
+
+/// A new access token after the API refused the profile's one before it expired, which the app does
+/// when it ends a token early: signing out of the web session that approved a browser sign-in ends
+/// that session's access tokens, not the refresh token. `None` when it cannot be renewed; the
+/// refusal then stands.
+pub fn renew(settings: &Settings, store: &dyn TokenStore) -> Option<SecretString> {
+    let token = store.load(&settings.profile).ok()??;
+    // The profile may have been signed in again meanwhile, for another API: only a sign-in for this
+    // API is renewed for it. And one without a refresh token is left alone, not deleted: it can
+    // still be revoked with `logout`.
+    let api = settings.api_url.as_str().trim_end_matches('/');
+    if token.api_url.trim_end_matches('/') != api
+        || token.refresh_token.is_none()
+        || !issuer_url(&token).is_ok_and(|issuer| oauth::same_origin(&issuer, &settings.app_url))
+    {
+        return None;
+    }
+    refresh_stored(settings, store, token)
+        .ok()
+        .map(|renewed| renewed.access_token)
 }
 
 fn refresh_stored(
@@ -131,8 +153,9 @@ fn refresh_stored(
         store.delete(&settings.profile)?;
         return Err(expired());
     };
-    let http = oauth::http_client(&settings.app_url)?;
-    let metadata = oauth::discover(&http, &settings.app_url)?;
+    let issuer = issuer_url(&token)?;
+    let http = oauth::http_client(&issuer)?;
+    let metadata = oauth::discover(&http, &issuer)?;
     match oauth::refresh(&http, &metadata, &token.client_id, &refresh_token)? {
         Some(tokens) => {
             let renewed = StoredToken {
@@ -149,10 +172,24 @@ fn refresh_stored(
             Ok(renewed)
         }
         None => {
-            store.delete(&settings.profile)?;
+            // Another process may have used this refresh token first and saved the one it got in
+            // exchange: that one is alive, and deleting it would leave it beyond `logout`'s reach.
+            let still_ours = store
+                .load(&settings.profile)?
+                .and_then(|stored| stored.refresh_token)
+                .is_none_or(|stored| stored.expose_secret() == refresh_token.expose_secret());
+            if still_ours {
+                store.delete(&settings.profile)?;
+            }
             Err(expired())
         }
     }
+}
+
+/// The authorization server that issued a stored token.
+pub fn issuer_url(token: &StoredToken) -> Result<url::Url> {
+    url::Url::parse(&token.issuer)
+        .map_err(|_| Failure::general("The stored sign-in names an invalid issuer."))
 }
 
 /// Whether a stored token is the one that would be sent, for `whoami`.
@@ -279,6 +316,119 @@ mod tests {
                 .map(|r| r.expose_secret().to_owned())
                 .as_deref(),
             Some("rt_1")
+        );
+    }
+
+    #[test]
+    fn an_issuer_under_a_path_of_the_app_is_its_own() {
+        let store = MemoryStore::default();
+        store
+            .save(
+                "default",
+                &token(
+                    "https://app.example.test/api/auth",
+                    Some(now() + 3_600),
+                    None,
+                ),
+            )
+            .expect("save");
+        assert!(
+            current_token(&settings("https://app.example.test"), &store)
+                .expect("ok")
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn a_token_the_api_refused_is_renewed_before_it_expires() {
+        let mut server = mockito::Server::new();
+        server
+            .mock("GET", "/.well-known/oauth-authorization-server")
+            .with_body(metadata_body(&server))
+            .create();
+        let refresh = server
+            .mock("POST", "/oauth/token")
+            .match_body(mockito::Matcher::UrlEncoded(
+                "refresh_token".into(),
+                "rt_1".into(),
+            ))
+            .with_body(r#"{"access_token":"at_new","token_type":"Bearer","expires_in":900,"refresh_token":"rt_2"}"#)
+            .expect(1)
+            .create();
+        let s = settings(&server.url());
+        let store = MemoryStore::default();
+        store
+            .save(
+                "default",
+                &token(&server.url(), Some(now() + 3_600), Some("rt_1")),
+            )
+            .expect("save");
+        let renewed = renew(&s, &store).expect("renewed");
+        refresh.assert();
+        assert_eq!(renewed.expose_secret(), "at_new");
+        let saved = store.load("default").expect("load").expect("saved");
+        assert_eq!(
+            saved
+                .refresh_token
+                .map(|r| r.expose_secret().to_owned())
+                .as_deref(),
+            Some("rt_2"),
+            "the rotated refresh token replaces the used one"
+        );
+    }
+
+    #[test]
+    fn a_refused_token_without_a_refresh_token_is_kept_for_logout_to_revoke() {
+        let store = MemoryStore::default();
+        store
+            .save(
+                "default",
+                &token("https://app.example.test", Some(now() + 3_600), None),
+            )
+            .expect("save");
+        assert!(renew(&settings("https://app.example.test"), &store).is_none());
+        assert!(store.load("default").expect("load").is_some());
+    }
+
+    #[test]
+    fn a_sign_in_for_another_api_is_not_renewed_for_this_one() {
+        // Signed in again meanwhile, with --api-url pointing elsewhere: its token never goes here.
+        let store = MemoryStore::default();
+        let mut elsewhere = token("https://app.example.test", Some(now() + 3_600), Some("rt"));
+        elsewhere.api_url = "https://api.other.example.test".to_owned();
+        store.save("default", &elsewhere).expect("save");
+        assert!(renew(&settings("https://app.example.test"), &store).is_none());
+    }
+
+    #[test]
+    fn a_refresh_token_another_process_already_rotated_is_not_deleted() {
+        let mut server = mockito::Server::new();
+        server
+            .mock("GET", "/.well-known/oauth-authorization-server")
+            .with_body(metadata_body(&server))
+            .create();
+        server
+            .mock("POST", "/oauth/token")
+            .with_status(400)
+            .with_body(r#"{"error":"invalid_grant"}"#)
+            .create();
+        let s = settings(&server.url());
+        let store = MemoryStore::default();
+        // The other process already swapped rt_1 for rt_2 and saved it.
+        store
+            .save(
+                "default",
+                &token(&server.url(), Some(now() + 3_600), Some("rt_2")),
+            )
+            .expect("save");
+        let used = token(&server.url(), Some(now() + 3_600), Some("rt_1"));
+        assert!(refresh_stored(&s, &store, used).is_err());
+        let kept = store.load("default").expect("load").expect("kept");
+        assert_eq!(
+            kept.refresh_token
+                .map(|r| r.expose_secret().to_owned())
+                .as_deref(),
+            Some("rt_2")
         );
     }
 

@@ -1,10 +1,9 @@
 //! `login`, `logout` and `whoami`.
 
 use super::Context;
-use crate::auth::oauth::{self, Pkce};
+use crate::auth::oauth::{self, Pkce, Revocation};
 use crate::auth::{self, StoredToken, loopback::Loopback};
 use crate::cli::LoginArgs;
-use crate::config::DEFAULT_OAUTH_CLIENT_ID;
 use crate::failure::{CredentialSource, Failure, Result};
 use crate::output::{clean, print_json, unix_to_rfc3339};
 use serde_json::{Map, Value, json};
@@ -15,24 +14,19 @@ const BROWSER_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 pub fn login(ctx: &Context, args: &LoginArgs) -> Result<()> {
     let settings = ctx.settings()?;
-    let Some(client_id) = settings.oauth_client_id.clone() else {
-        return Err(Failure::general(
-            "Signing in from the CLI is not available yet: the app has not published the CLI's OAuth client.",
-        )
-        .hint(
-            "Use a tenant API key meanwhile: export HODEISHIELD_API_KEY=<key>. If you were given a \
-             client id for a preview, set it with `hodeishield config set oauth_client_id <id>`.",
-        ));
-    };
-    if DEFAULT_OAUTH_CLIENT_ID.is_none() {
-        eprintln!(
-            "Preview: CLI sign-in depends on OAuth support in the app that is still being rolled \
-             out. The API may not accept the resulting token yet."
-        );
-    }
-    let http = oauth::http_client(&settings.app_url)?;
-    let metadata = oauth::discover(&http, &settings.app_url)?;
-    let scopes = settings.oauth_scopes.as_deref();
+    let client_id = settings.oauth_client_id.clone();
+    let issuer = oauth::authorization_server(
+        &oauth::http_client(&settings.api_url)?,
+        &settings.api_url,
+        &settings.app_url,
+    )?;
+    let http = oauth::http_client(&issuer)?;
+    let metadata = oauth::discover(&http, &issuer)?;
+    let scopes = settings
+        .oauth_scopes
+        .clone()
+        .unwrap_or_else(|| oauth::default_scopes(&metadata));
+    let scopes = Some(scopes.as_slice()).filter(|s| !s.is_empty());
 
     let tokens = if args.device {
         let authorization = oauth::start_device(&http, &metadata, &client_id, scopes)?;
@@ -41,9 +35,6 @@ pub fn login(ctx: &Context, args: &LoginArgs) -> Result<()> {
             authorization.verification_uri,
             clean(&authorization.user_code)
         );
-        if let Some(complete) = &authorization.verification_uri_complete {
-            eprintln!("Or open this address, which carries the code: {complete}");
-        }
         eprintln!(
             "Waiting for approval (the code expires in {} min)…",
             authorization.expires_in.div_ceil(60)
@@ -99,7 +90,7 @@ pub fn login(ctx: &Context, args: &LoginArgs) -> Result<()> {
         refresh_token: tokens.refresh_token,
         expires_at: tokens.expires_in.map(|s| auth::now().saturating_add(s)),
         scope: tokens.scope,
-        issuer: settings.app_url.as_str().trim_end_matches('/').to_owned(),
+        issuer: issuer.as_str().trim_end_matches('/').to_owned(),
         api_url: settings.api_url.as_str().trim_end_matches('/').to_owned(),
         client_id,
     };
@@ -134,24 +125,7 @@ fn logout_with(settings: &crate::config::Settings, store: &dyn auth::TokenStore)
     };
     // Revoke at the app first, so a copy of the token elsewhere stops working too; then forget it
     // here whatever the app said.
-    // Revoke at the app that issued the token, never at whatever the profile points to now: the
-    // tokens themselves travel in the revocation request.
-    let revoked = (|| -> Result<()> {
-        let issuer = url::Url::parse(&token.issuer)
-            .map_err(|_| Failure::general("The stored sign-in names an invalid issuer."))?;
-        let http = oauth::http_client(&issuer)?;
-        let metadata = oauth::discover(&http, &issuer)?;
-        if let Some(refresh) = &token.refresh_token {
-            oauth::revoke(&http, &metadata, &token.client_id, refresh, "refresh_token")?;
-        }
-        oauth::revoke(
-            &http,
-            &metadata,
-            &token.client_id,
-            &token.access_token,
-            "access_token",
-        )
-    })();
+    let revoked = revoke_at_issuer(&token);
     store.delete(&settings.profile)?;
     eprintln!(
         "Signed out (profile {}); the token is removed from this machine.",
@@ -161,7 +135,7 @@ fn logout_with(settings: &crate::config::Settings, store: &dyn auth::TokenStore)
         eprintln!(
             "Warning: the app did not confirm the revocation ({}). Revoke the CLI's access from \
              the app's settings if you need it cut off now.",
-            failure.message
+            clean(&failure.message)
         );
     }
     if auth::api_key_from_env().is_some() {
@@ -192,9 +166,10 @@ pub fn whoami(ctx: &Context, out: &mut dyn Write) -> Result<()> {
                         .map_or(Value::Null, |t| json!(unix_to_rfc3339(t))),
                 );
                 info.insert("scope".into(), json!(token.scope));
-                let user = oauth::http_client(&settings.app_url)
-                    .and_then(|http| {
-                        let metadata = oauth::discover(&http, &settings.app_url)?;
+                let user = auth::issuer_url(&token)
+                    .and_then(|issuer| {
+                        let http = oauth::http_client(&issuer)?;
+                        let metadata = oauth::discover(&http, &issuer)?;
                         oauth::userinfo(&http, &metadata, &token.access_token)
                     })
                     .ok()
@@ -246,6 +221,43 @@ pub fn whoami(ctx: &Context, out: &mut dyn Write) -> Result<()> {
     match source {
         Some(_) => Ok(()),
         None => Err(auth::not_signed_in(&settings)),
+    }
+}
+
+/// Revokes a stored sign-in at the app that issued it, never at whatever the profile points to
+/// now: the tokens themselves travel in the requests.
+///
+/// The access token first, then the refresh token, each whatever happened to the other. An access
+/// token the app no longer knows (ended by signing out of the web session that approved it, say) is
+/// not a failure; a refresh token it does not know, or any other refusal, is reported.
+fn revoke_at_issuer(token: &StoredToken) -> Result<()> {
+    let issuer = auth::issuer_url(token)?;
+    let http = oauth::http_client(&issuer)?;
+    let metadata = oauth::discover(&http, &issuer)?;
+    let access = oauth::revoke(
+        &http,
+        &metadata,
+        &token.client_id,
+        &token.access_token,
+        "access_token",
+    );
+    let refresh = token
+        .refresh_token
+        .as_ref()
+        .map(|refresh| oauth::revoke(&http, &metadata, &token.client_id, refresh, "refresh_token"));
+    let mut problems = Vec::new();
+    if let Err(failure) = access {
+        problems.push(failure.message);
+    }
+    match refresh {
+        Some(Ok(Revocation::Unknown(detail))) => problems.push(detail),
+        Some(Err(failure)) => problems.push(failure.message),
+        Some(Ok(Revocation::Revoked)) | None => {}
+    }
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(Failure::general(problems.join("; ")))
     }
 }
 
@@ -325,5 +337,94 @@ mod tests {
         never.assert();
         never_post.assert();
         assert!(store.load("default").expect("load").is_none());
+    }
+
+    fn signed_in(issuer: &mockito::ServerGuard, refresh: Option<&str>) -> StoredToken {
+        StoredToken {
+            access_token: SecretString::from("at"),
+            refresh_token: refresh.map(|r| SecretString::from(r.to_owned())),
+            expires_at: None,
+            scope: None,
+            issuer: issuer.url(),
+            api_url: "https://api.hodeishield.com".to_owned(),
+            client_id: "cli".to_owned(),
+        }
+    }
+
+    fn revocation_server(access_status: usize, refresh_status: usize) -> mockito::ServerGuard {
+        let mut issuer = mockito::Server::new();
+        issuer
+            .mock("GET", "/.well-known/oauth-authorization-server")
+            .with_body(
+                json!({
+                    "issuer": issuer.url(),
+                    "token_endpoint": format!("{}/token", issuer.url()),
+                    "revocation_endpoint": format!("{}/revoke", issuer.url()),
+                })
+                .to_string(),
+            )
+            .create();
+        for (hint, status) in [
+            ("access_token", access_status),
+            ("refresh_token", refresh_status),
+        ] {
+            issuer
+                .mock("POST", "/revoke")
+                .match_body(mockito::Matcher::UrlEncoded(
+                    "token_type_hint".into(),
+                    hint.into(),
+                ))
+                .with_status(status)
+                .with_body(
+                    r#"{"error":"invalid_request","error_description":"Invalid access token"}"#,
+                )
+                .expect(1)
+                .create();
+        }
+        issuer
+    }
+
+    #[test]
+    fn an_access_token_already_gone_does_not_fail_a_revoked_sign_in() {
+        // The app answers 400 for an access token it already ended; revoking the refresh token is
+        // what cuts the sign-in, and it succeeded.
+        let issuer = revocation_server(400, 200);
+        revoke_at_issuer(&signed_in(&issuer, Some("rt"))).expect("revoked");
+    }
+
+    #[test]
+    fn a_refused_refresh_token_revocation_is_reported_with_the_app_s_reason() {
+        let issuer = revocation_server(200, 400);
+        let err = revoke_at_issuer(&signed_in(&issuer, Some("rt"))).expect_err("refused");
+        assert!(
+            err.message.contains("refresh token") && err.message.contains("invalid_request"),
+            "{}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn an_access_token_revocation_that_failed_is_reported_even_if_the_refresh_one_worked() {
+        let issuer = revocation_server(500, 200);
+        let err = revoke_at_issuer(&signed_in(&issuer, Some("rt"))).expect_err("reported");
+        assert!(err.message.contains("access token"), "{}", err.message);
+    }
+
+    #[test]
+    fn without_a_refresh_token_the_access_token_revocation_decides() {
+        let mut issuer = mockito::Server::new();
+        issuer
+            .mock("GET", "/.well-known/oauth-authorization-server")
+            .with_body(
+                json!({
+                    "issuer": issuer.url(),
+                    "token_endpoint": format!("{}/token", issuer.url()),
+                    "revocation_endpoint": format!("{}/revoke", issuer.url()),
+                })
+                .to_string(),
+            )
+            .create();
+        issuer.mock("POST", "/revoke").with_status(400).create();
+        assert!(revoke_at_issuer(&signed_in(&issuer, None)).is_err());
     }
 }

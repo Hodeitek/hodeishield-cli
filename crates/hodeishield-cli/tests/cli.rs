@@ -330,29 +330,94 @@ fn config_profiles_round_trip() {
 }
 
 #[test]
-fn login_says_clearly_when_the_app_does_not_offer_it() {
+fn login_finds_the_sign_in_server_through_the_api_and_asks_for_the_scopes_it_needs() {
     let env = Env::new();
+    let mut api = mockito::Server::new();
+    let mut app = mockito::Server::new();
+    let issuer = format!("{}/api/auth", app.url());
+    let resource = api
+        .mock("GET", "/.well-known/oauth-protected-resource")
+        .with_body(
+            serde_json::json!({ "resource": api.url(), "authorization_servers": [issuer] })
+                .to_string(),
+        )
+        .expect(1)
+        .create();
+    // RFC 8414 §3.1: the issuer's path goes after the well-known segment.
+    app.mock("GET", "/.well-known/oauth-authorization-server/api/auth")
+        .with_body(
+            serde_json::json!({
+                "issuer": issuer,
+                "token_endpoint": format!("{issuer}/oauth2/token"),
+                "device_authorization_endpoint": format!("{issuer}/device/code"),
+                "scopes_supported": ["supply_risk:read", "compliance.nis2:read", "radar:read", "offline_access"],
+            })
+            .to_string(),
+        )
+        .create();
+    let device = app
+        .mock("POST", "/api/auth/device/code")
+        .match_body(mockito::Matcher::AllOf(vec![
+            mockito::Matcher::UrlEncoded("client_id".into(), "hodeishield-cli".into()),
+            mockito::Matcher::UrlEncoded(
+                "scope".into(),
+                "supply_risk:read compliance.nis2:read offline_access".into(),
+            ),
+        ]))
+        .with_body(
+            serde_json::json!({
+                "device_code": "dc",
+                "user_code": "ABCD-EFGH",
+                "verification_uri": format!("{}/device", app.url()),
+                "expires_in": 600,
+                "interval": 1,
+            })
+            .to_string(),
+        )
+        .expect(1)
+        .create();
+    let token = app
+        .mock("POST", "/api/auth/oauth2/token")
+        .with_body(r#"{"access_token":"hs_at_x","token_type":"Bearer","expires_in":900}"#)
+        .expect(1)
+        .create();
+    // The test machine has no keychain: the sign-in gets as far as storing the token, and says why
+    // it cannot.
     env.cmd()
-        .args(["login"])
+        .env("HODEISHIELD_API_URL", api.url())
+        .env("HODEISHIELD_APP_URL", app.url())
+        .args(["login", "--device"])
         .assert()
         .code(1)
-        .stderr(predicate::str::contains("not available yet"))
-        .stderr(predicate::str::contains("HODEISHIELD_API_KEY"));
+        .stderr(predicate::str::contains("ABCD-EFGH"))
+        .stderr(predicate::str::contains("keychain"));
+    resource.assert();
+    device.assert();
+    token.assert();
+}
 
+#[test]
+fn login_says_clearly_when_the_app_does_not_offer_it() {
+    let env = Env::new();
+    let mut api = mockito::Server::new();
     let mut app = mockito::Server::new();
+    api.mock("GET", "/.well-known/oauth-protected-resource")
+        .with_status(404)
+        .create();
     app.mock("GET", mockito::Matcher::Regex("^/.well-known/".into()))
         .with_status(404)
         .expect(2)
         .create();
     env.cmd()
+        .env("HODEISHIELD_API_URL", api.url())
         .env("HODEISHIELD_APP_URL", app.url())
-        .env("HODEISHIELD_OAUTH_CLIENT_ID", "preview-client")
         .args(["login", "--device"])
         .assert()
         .code(1)
         .stderr(predicate::str::contains(
             "does not offer sign-in for the CLI yet",
-        ));
+        ))
+        .stderr(predicate::str::contains("HODEISHIELD_API_KEY"));
 }
 
 #[test]

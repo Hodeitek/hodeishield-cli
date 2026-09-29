@@ -76,7 +76,7 @@ pub enum Command {
     /// Enrolled endpoint agents.
     #[command(subcommand)]
     Endpoints(EndpointsCommand),
-    /// Sign in to the app (browser, or --device without one). Preview: see `login --help`.
+    /// Sign in to the app (browser, or --device without one).
     #[command(long_about = LOGIN_ABOUT)]
     Login(LoginArgs),
     /// Sign out: revoke the sign-in token and remove it from the keychain.
@@ -98,11 +98,12 @@ Sign in to the HodeiShield app. The token is kept in the system keychain (macOS 
 Credential Manager, Secret Service on Linux), never in a file, and is refreshed when it expires.
 
 By default a browser window opens and the app redirects back to a one-shot listener on 127.0.0.1. \
-With --device, you get a short code to approve from any other device instead.
+With --device, you get a short code to type in on any other device instead.
 
-Preview: sign-in from the CLI needs the app's OAuth support, which is being rolled out. Until the \
-app offers it, this command says so and changes nothing; use a tenant API key in \
-HODEISHIELD_API_KEY meanwhile.";
+On the consent screen you choose the one tenant the CLI may read; the token covers only that \
+tenant, and only reads. The scopes asked for are the ones the CLI's commands need (see \
+`config set oauth_scopes` to ask for fewer). Revoke the access with `hodeishield logout`, or in the \
+app under Account → Application access.";
 
 #[derive(Debug, Args)]
 pub struct LoginArgs {

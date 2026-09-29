@@ -192,3 +192,95 @@ fn a_body_that_breaks_the_contract_is_a_decode_error() {
         }
     ));
 }
+
+fn page_of_nothing() -> &'static str {
+    r#"{"data":[],"pagination":{"page":1,"per_page":25,"total":0,"total_pages":0}}"#
+}
+
+#[test]
+fn a_401_renews_the_credential_once_and_resends_the_request() {
+    let mut server = mockito::Server::new();
+    let refused = server
+        .mock("GET", "/v1/vendors")
+        .match_header("authorization", "Bearer hs_at_old")
+        .with_status(401)
+        .with_body(
+            r#"{"error":{"code":"unauthorized","message":"NOT_AUTHENTICATED","request_id":"r1"}}"#,
+        )
+        .expect(1)
+        .create();
+    let accepted = server
+        .mock("GET", "/v1/vendors")
+        .match_header("authorization", "Bearer hs_at_new")
+        .with_body(page_of_nothing())
+        .expect(2)
+        .create();
+    let renewals = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = std::sync::Arc::clone(&renewals);
+    let client = Client::builder(
+        server.url().parse().expect("url"),
+        SecretString::from("hs_at_old"),
+    )
+    .renew_credential(move || {
+        counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Some(SecretString::from("hs_at_new"))
+    })
+    .build()
+    .expect("client");
+    client
+        .list_vendors(&ListVendorsParams::default())
+        .expect("renewed");
+    // The renewed credential stays: the next request does not start with the refused one.
+    client
+        .list_vendors(&ListVendorsParams::default())
+        .expect("still renewed");
+    refused.assert();
+    accepted.assert();
+    assert_eq!(renewals.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[test]
+fn a_401_after_renewing_is_returned_and_not_renewed_again() {
+    let mut server = mockito::Server::new();
+    let refused = server
+        .mock("GET", "/v1/vendors")
+        .with_status(401)
+        .with_body(
+            r#"{"error":{"code":"unauthorized","message":"NOT_AUTHENTICATED","request_id":"r1"}}"#,
+        )
+        .expect(2)
+        .create();
+    let renewals = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = std::sync::Arc::clone(&renewals);
+    let client = Client::builder(
+        server.url().parse().expect("url"),
+        SecretString::from("hs_at_old"),
+    )
+    .renew_credential(move || {
+        counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Some(SecretString::from("hs_at_new"))
+    })
+    .build()
+    .expect("client");
+    let err = client
+        .list_vendors(&ListVendorsParams::default())
+        .expect_err("refused");
+    assert_eq!(err.api().map(|a| a.status), Some(401));
+    refused.assert();
+    assert_eq!(renewals.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[test]
+fn without_a_renewal_a_401_is_returned_as_is() {
+    let mut server = mockito::Server::new();
+    let refused = server
+        .mock("GET", "/v1/vendors")
+        .with_status(401)
+        .expect(1)
+        .create();
+    let err = client(&server)
+        .list_vendors(&ListVendorsParams::default())
+        .expect_err("refused");
+    assert_eq!(err.api().map(|a| a.status), Some(401));
+    refused.assert();
+}

@@ -4,7 +4,7 @@ use reqwest::header::{ACCEPT, AUTHORIZATION, HeaderMap, HeaderValue};
 use secrecy::{ExposeSecret, SecretString};
 use serde::de::DeserializeOwned;
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use url::Url;
 
@@ -113,6 +113,7 @@ pub struct RequestEvent<'a> {
 }
 
 type Observer = Arc<dyn Fn(&RequestEvent<'_>) + Send + Sync>;
+type Renew = Arc<dyn Fn() -> Option<SecretString> + Send + Sync>;
 
 /// Builds a [`Client`].
 pub struct ClientBuilder {
@@ -123,6 +124,7 @@ pub struct ClientBuilder {
     max_rate_limit_retries: u32,
     max_retry_wait: Duration,
     observer: Option<Observer>,
+    renew: Option<Renew>,
 }
 
 impl fmt::Debug for ClientBuilder {
@@ -169,6 +171,18 @@ impl ClientBuilder {
         self
     }
 
+    /// Called at most once per request, when the API answers `401`: a credential it returns
+    /// replaces the refused one for this and later requests, and the request is sent again. For an
+    /// OAuth access token the app ended before it expired; a refresh gives a new one.
+    #[must_use]
+    pub fn renew_credential(
+        mut self,
+        renew: impl Fn() -> Option<SecretString> + Send + Sync + 'static,
+    ) -> Self {
+        self.renew = Some(Arc::new(renew));
+        self
+    }
+
     /// Builds the client.
     ///
     /// # Errors
@@ -200,10 +214,11 @@ impl ClientBuilder {
         Ok(Client {
             http,
             base_url: self.base_url,
-            credential: self.credential,
+            credential: Mutex::new(self.credential),
             max_rate_limit_retries: self.max_rate_limit_retries,
             max_retry_wait: self.max_retry_wait,
             observer: self.observer,
+            renew: self.renew,
         })
     }
 }
@@ -213,10 +228,11 @@ impl ClientBuilder {
 pub struct Client {
     http: reqwest::blocking::Client,
     base_url: Url,
-    credential: SecretString,
+    credential: Mutex<SecretString>,
     max_rate_limit_retries: u32,
     max_retry_wait: Duration,
     observer: Option<Observer>,
+    renew: Option<Renew>,
 }
 
 impl fmt::Debug for Client {
@@ -249,6 +265,7 @@ impl Client {
             max_rate_limit_retries: 2,
             max_retry_wait: Duration::from_secs(60),
             observer: None,
+            renew: None,
         }
     }
 
@@ -272,9 +289,12 @@ impl Client {
     }
 
     fn authorization(&self) -> Result<HeaderValue, Error> {
-        let mut value =
-            HeaderValue::from_str(&format!("Bearer {}", self.credential.expose_secret()))
-                .map_err(|_| Error::InvalidCredential)?;
+        let credential = self
+            .credential
+            .lock()
+            .map_err(|_| Error::InvalidCredential)?;
+        let mut value = HeaderValue::from_str(&format!("Bearer {}", credential.expose_secret()))
+            .map_err(|_| Error::InvalidCredential)?;
         // Keeps the value out of `Debug` output of the request and out of HTTP/2 header compression
         // tables.
         value.set_sensitive(true);
@@ -289,6 +309,7 @@ impl Client {
     ) -> Result<ApiResponse<T>, Error> {
         let url = self.url(&path, &query);
         let mut retries = 0;
+        let mut renewed = false;
         loop {
             let started = Instant::now();
             let response = self
@@ -329,6 +350,18 @@ impl Client {
                 retries += 1;
                 std::thread::sleep(wait);
                 continue;
+            }
+            if status == StatusCode::UNAUTHORIZED
+                && !renewed
+                && let Some(renew) = &self.renew
+            {
+                renewed = true;
+                if let Some(credential) = renew()
+                    && let Ok(mut current) = self.credential.lock()
+                {
+                    *current = credential;
+                    continue;
+                }
             }
             return Err(Error::from_response(operation, meta, &body));
         }

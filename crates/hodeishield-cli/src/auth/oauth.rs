@@ -29,6 +29,55 @@ pub struct Metadata {
     pub code_challenge_methods_supported: Option<Vec<String>>,
     #[serde(default)]
     pub authorization_response_iss_parameter_supported: Option<bool>,
+    #[serde(default)]
+    pub scopes_supported: Option<Vec<String>>,
+}
+
+/// Asks for a refresh token, so a sign-in outlives its short access token.
+const OFFLINE_ACCESS: &str = "offline_access";
+
+/// The scopes to ask for when the profile names none: the ones the `/v1` operations this CLI calls
+/// need, with a template such as `compliance.<framework>:read` standing for every scope of that
+/// shape the app offers, plus a refresh token. An app that publishes no list gets the fixed ones.
+/// Asking explicitly matters: an app may grant a request without scopes nothing at all.
+pub fn default_scopes(metadata: &Metadata) -> Vec<String> {
+    let offered = metadata.scopes_supported.as_deref();
+    let mut scopes: Vec<String> = Vec::new();
+    let needed = hodeishield_api::v1::operations::ALL
+        .iter()
+        .flat_map(|operation| operation.scopes.iter().copied())
+        .chain([OFFLINE_ACCESS]);
+    for scope in needed {
+        let matches: Vec<String> = match (scope.split_once('<'), offered) {
+            (Some((prefix, rest)), Some(offered)) => {
+                let suffix = rest.split_once('>').map_or("", |(_, suffix)| suffix);
+                // Only a slug fills the template: the app's list must not be able to slip another
+                // scope (a write one, say) into the space-separated request.
+                offered
+                    .iter()
+                    .filter(|s| {
+                        s.len() > prefix.len() + suffix.len()
+                            && s.starts_with(prefix)
+                            && s.ends_with(suffix)
+                            && s[prefix.len()..s.len() - suffix.len()]
+                                .bytes()
+                                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+                    })
+                    .cloned()
+                    .collect()
+            }
+            // A template means nothing to an app that does not say what it offers.
+            (Some(_), None) => Vec::new(),
+            (None, Some(offered)) if !offered.iter().any(|s| s == scope) => Vec::new(),
+            (None, _) => vec![scope.to_owned()],
+        };
+        for s in matches {
+            if !scopes.contains(&s) {
+                scopes.push(s);
+            }
+        }
+    }
+    scopes
 }
 
 /// HTTP client for the app: no redirects, https only unless the app is on loopback.
@@ -74,7 +123,71 @@ fn well_known(issuer: &Url, suffix: &str) -> Url {
     url
 }
 
-/// Reads the app's authorization server metadata.
+/// The parts of the protected resource metadata (RFC 9728) this client uses.
+#[derive(Debug, Deserialize)]
+struct ResourceMetadata {
+    resource: String,
+    #[serde(default)]
+    authorization_servers: Vec<String>,
+}
+
+/// The issuer of the tokens `api_url` accepts: the first authorization server its protected
+/// resource metadata (RFC 9728) names on the app's origin. The API says where on the app sign-in
+/// lives; the profile's `app_url` decides which server the CLI is willing to sign in to at all.
+/// Without that document, the app itself is the issuer.
+pub fn authorization_server(
+    http: &reqwest::blocking::Client,
+    api_url: &Url,
+    app_url: &Url,
+) -> Result<Url> {
+    let url = well_known(api_url, "oauth-protected-resource");
+    let response = http
+        .get(url.clone())
+        .header(reqwest::header::ACCEPT, "application/json")
+        .send()
+        .map_err(|e| unreachable("sign-in", &e))?;
+    let status = response.status();
+    if status == reqwest::StatusCode::NOT_FOUND {
+        return Ok(app_url.clone());
+    }
+    if !status.is_success() {
+        return Err(Failure::new(
+            Kind::Unavailable,
+            format!("The API answered {status} to {url}."),
+        ));
+    }
+    let metadata: ResourceMetadata = response.json().map_err(|e| {
+        Failure::general(format!(
+            "The API's resource metadata at {url} is not valid: {e}."
+        ))
+    })?;
+    // RFC 9728 §3.3: the resource must be the one the metadata was fetched for.
+    let resource = Url::parse(&metadata.resource)
+        .map_err(|_| Failure::general("The API's resource metadata names an invalid resource."))?;
+    if !same_url(&resource, api_url) {
+        return Err(Failure::general(format!(
+            "The API's resource metadata is for {} but was fetched from {api_url}.",
+            metadata.resource
+        )));
+    }
+    metadata
+        .authorization_servers
+        .iter()
+        .filter_map(|server| Url::parse(server).ok())
+        .find(|server| {
+            same_origin(server, app_url)
+                && server.username().is_empty()
+                && server.password().is_none()
+        })
+        .ok_or_else(|| {
+            Failure::general(format!(
+                "The API at {api_url} does not name a sign-in server on {app_url}.",
+            ))
+            .hint("Check `api_url` and `app_url` with `hodeishield config show`.")
+        })
+}
+
+/// Reads the authorization server metadata of `issuer`.
 pub fn discover(http: &reqwest::blocking::Client, app_url: &Url) -> Result<Metadata> {
     let mut not_published = Vec::new();
     for suffix in ["oauth-authorization-server", "openid-configuration"] {
@@ -152,10 +265,13 @@ fn validate(metadata: &Metadata, app_url: &Url) -> Result<()> {
 }
 
 fn same_url(a: &Url, b: &Url) -> bool {
+    same_origin(a, b) && a.path().trim_end_matches('/') == b.path().trim_end_matches('/')
+}
+
+pub fn same_origin(a: &Url, b: &Url) -> bool {
     a.scheme() == b.scheme()
         && a.host_str().map(str::to_ascii_lowercase) == b.host_str().map(str::to_ascii_lowercase)
         && a.port_or_known_default() == b.port_or_known_default()
-        && a.path().trim_end_matches('/') == b.path().trim_end_matches('/')
 }
 
 /// Random URL-safe string from `bytes` bytes of the operating system's generator.
@@ -363,14 +479,23 @@ pub fn refresh(
     }
 }
 
-/// Revokes a token (RFC 7009). The endpoint answers 200 even for an unknown token.
+/// What the app said to a revocation.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Revocation {
+    Revoked,
+    /// The app does not know the token: already ended, or never its. RFC 7009 answers 200 for that;
+    /// some apps answer 400 `invalid_request` or `invalid_token`. The detail says which.
+    Unknown(String),
+}
+
+/// Revokes a token (RFC 7009).
 pub fn revoke(
     http: &reqwest::blocking::Client,
     metadata: &Metadata,
     client_id: &str,
     token: &SecretString,
     hint: &str,
-) -> Result<()> {
+) -> Result<Revocation> {
     let Some(endpoint) = metadata.revocation_endpoint.clone() else {
         return Err(Failure::general("The app does not offer token revocation."));
     };
@@ -383,13 +508,29 @@ pub fn revoke(
         ])
         .send()
         .map_err(|e| unreachable("revocation", &e))?;
-    if response.status().is_success() {
-        Ok(())
-    } else {
-        Err(Failure::general(format!(
-            "The app answered {} to the revocation.",
-            response.status()
-        )))
+    let status = response.status();
+    if status.is_success() {
+        return Ok(Revocation::Revoked);
+    }
+    let error = response
+        .bytes()
+        .ok()
+        .and_then(|body| serde_json::from_slice::<OAuthError>(&body).ok());
+    let what = hint.replace('_', " ");
+    match error {
+        Some(error)
+            if status == reqwest::StatusCode::BAD_REQUEST
+                && matches!(error.error.as_str(), "invalid_request" | "invalid_token") =>
+        {
+            Ok(Revocation::Unknown(format!(
+                "the app does not know the {what}: {}",
+                error.describe()
+            )))
+        }
+        error => Err(Failure::general(format!(
+            "the app refused to revoke the {what}: {}",
+            error.map_or_else(|| format!("HTTP {status}"), |e| e.describe())
+        ))),
     }
 }
 
@@ -579,6 +720,147 @@ mod tests {
             "token_endpoint": "https://app.example.test/oauth/token",
         }))
         .expect("metadata")
+    }
+
+    fn resource_metadata(api: &mut mockito::ServerGuard, body: serde_json::Value) {
+        api.mock("GET", "/.well-known/oauth-protected-resource")
+            .with_body(body.to_string())
+            .create();
+    }
+
+    #[test]
+    fn the_api_names_where_on_the_app_to_sign_in() {
+        let mut api = mockito::Server::new();
+        let app: Url = "https://app.example.test".parse().expect("url");
+        let api_url: Url = api.url().parse().expect("url");
+        resource_metadata(
+            &mut api,
+            serde_json::json!({
+                "resource": api_url.as_str(),
+                "authorization_servers": ["https://other.example.test/auth", "https://app.example.test/api/auth"],
+            }),
+        );
+        let http = http_client(&api_url).expect("http");
+        let issuer = authorization_server(&http, &api_url, &app).expect("issuer");
+        assert_eq!(issuer.as_str(), "https://app.example.test/api/auth");
+    }
+
+    #[test]
+    fn without_resource_metadata_the_app_is_the_issuer() {
+        let mut api = mockito::Server::new();
+        api.mock("GET", "/.well-known/oauth-protected-resource")
+            .with_status(404)
+            .create();
+        let app: Url = "https://app.example.test".parse().expect("url");
+        let api_url: Url = api.url().parse().expect("url");
+        let http = http_client(&api_url).expect("http");
+        assert_eq!(
+            authorization_server(&http, &api_url, &app).expect("issuer"),
+            app
+        );
+    }
+
+    #[test]
+    fn resource_metadata_of_another_resource_or_server_is_refused() {
+        let app: Url = "https://app.example.test".parse().expect("url");
+
+        let mut replayed = mockito::Server::new();
+        resource_metadata(
+            &mut replayed,
+            serde_json::json!({
+                "resource": "https://api.example.test",
+                "authorization_servers": ["https://app.example.test/api/auth"],
+            }),
+        );
+        let api_url: Url = replayed.url().parse().expect("url");
+        let http = http_client(&api_url).expect("http");
+        let err = authorization_server(&http, &api_url, &app).expect_err("other resource");
+        assert!(err.message.contains("was fetched from"), "{}", err.message);
+
+        let mut elsewhere = mockito::Server::new();
+        let elsewhere_url = elsewhere.url();
+        resource_metadata(
+            &mut elsewhere,
+            serde_json::json!({
+                "resource": elsewhere_url,
+                "authorization_servers": ["https://app.evil.example.test/api/auth"],
+            }),
+        );
+        let api_url: Url = elsewhere.url().parse().expect("url");
+        let err = authorization_server(&http, &api_url, &app).expect_err("other server");
+        assert!(
+            err.message.contains("does not name a sign-in server"),
+            "{}",
+            err.message
+        );
+
+        // Credentials in the server's URL would travel to the app as a Basic header.
+        let mut with_credentials = mockito::Server::new();
+        let with_credentials_url = with_credentials.url();
+        resource_metadata(
+            &mut with_credentials,
+            serde_json::json!({
+                "resource": with_credentials_url,
+                "authorization_servers": ["https://user:pass@app.example.test/api/auth"],
+            }),
+        );
+        let api_url: Url = with_credentials_url.parse().expect("url");
+        assert!(authorization_server(&http, &api_url, &app).is_err());
+    }
+
+    #[test]
+    fn default_scopes_are_what_the_commands_need_among_what_the_app_offers() {
+        let mut offered = metadata("https://app.example.test");
+        offered.scopes_supported = Some(
+            [
+                "supply_risk:read",
+                "compliance.nis2:read",
+                "compliance.ens:read",
+                "radar:read",
+                "evidence:read",
+                "endpoints:read",
+                "management:read",
+                "offline_access",
+            ]
+            .map(str::to_owned)
+            .to_vec(),
+        );
+        assert_eq!(
+            default_scopes(&offered),
+            [
+                "supply_risk:read",
+                "compliance.nis2:read",
+                "compliance.ens:read",
+                "evidence:read",
+                "endpoints:read",
+                "offline_access",
+            ]
+        );
+
+        // Only a slug fills a template: an offered entry cannot smuggle more scopes into the request.
+        let mut hostile = metadata("https://app.example.test");
+        hostile.scopes_supported = Some(
+            [
+                "compliance.x:read management:write radar:read",
+                "compliance.:read",
+                "compliance.a.b:read",
+                "compliance.ok_1-2:read",
+            ]
+            .map(str::to_owned)
+            .to_vec(),
+        );
+        assert_eq!(default_scopes(&hostile), ["compliance.ok_1-2:read"]);
+
+        // An app that does not publish its scopes gets the fixed ones; a template stands for none.
+        assert_eq!(
+            default_scopes(&metadata("https://app.example.test")),
+            [
+                "supply_risk:read",
+                "evidence:read",
+                "endpoints:read",
+                "offline_access"
+            ]
+        );
     }
 
     #[test]
