@@ -1,0 +1,54 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended"
+  ],
+  "description": [
+    "Renovate covers ONLY what Dependabot cannot read: the Rust toolchain pinned in rust-toolchain.toml and the cargo-installed CI tools (cargo-deny, cargo-audit) pinned in .github/workflows/ci.yml. Dependabot (.github/dependabot.yml) keeps cargo (Cargo.toml/Cargo.lock) and github-actions, so enabledManagers is restricted to the two managers below and Renovate never opens a PR for either of those.",
+    "The MSRV (`rust-version` in Cargo.toml) is deliberately not tracked: it is a compatibility promise and stays a manual decision. Requires the Renovate GitHub App enabled on the repo."
+  ],
+  "enabledManagers": [
+    "rust-toolchain",
+    "custom.regex"
+  ],
+  "baseBranchPatterns": [
+    "dev"
+  ],
+  "schedule": [
+    "before 6am on monday"
+  ],
+  "minimumReleaseAge": "7 days",
+  "automerge": false,
+  "labels": [
+    "dependencies"
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "cargo-installed CI tools pinned with `cargo install <tool> --locked --version X` in the workflow",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/ci\\.yml$/"
+      ],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s*\\n\\s*run:\\s*cargo install \\S+ --locked --version (?<currentValue>\\S+)"
+      ]
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "One weekly PR for the toolchain and the CI tools.",
+      "matchManagers": [
+        "rust-toolchain",
+        "custom.regex"
+      ],
+      "groupName": "rust toolchain and CI tools"
+    },
+    {
+      "description": "No automatic major bumps; a person decides those.",
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "enabled": false
+    }
+  ]
+}

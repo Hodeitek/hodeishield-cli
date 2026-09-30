@@ -116,6 +116,7 @@ jobs:
 
       # Pinned to the version validated locally against deny.toml.
       - name: Install cargo-deny
+        # renovate: datasource=crate depName=cargo-deny
         run: cargo install cargo-deny --locked --version 0.20.2
 
       - name: cargo deny check
@@ -138,7 +139,42 @@ jobs:
 
       # Pinned to the version validated locally.
       - name: Install cargo-audit
+        # renovate: datasource=crate depName=cargo-audit
         run: cargo install cargo-audit --locked --version 0.22.2
 
       - name: cargo audit
         run: cargo audit
+
+  commit-messages:
+    name: commit-messages
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Same check as the local commit-msg hook (.githooks/check-message.sh).
+      # Untrusted values go through env, never straight into the script.
+      - name: Check commit messages and PR description
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          # Commits up to and including this one predate the rule and are not checked.
+          MESSAGE_RULE_SINCE: f14c8b418bd37fb3c51e689edba0e668162fd90c
+        run: |
+          status=0
+          for commit in $(git rev-list "$HEAD_SHA" ^"$BASE_SHA" ^"$MESSAGE_RULE_SINCE"); do
+            if ! git log -1 --format=%B "$commit" | sh .githooks/check-message.sh 2>/dev/null; then
+              echo "::error::Commit $commit mentions Claude (see CONTRIBUTING.md)"
+              status=1
+            fi
+          done
+          if ! printf '%s\n' "$PR_BODY" | sh .githooks/check-message.sh 2>/dev/null; then
+            echo "::error::The PR description mentions Claude (see CONTRIBUTING.md)"
+            status=1
+          fi
+          exit "$status"

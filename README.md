@@ -142,7 +142,9 @@ ID                                    NAME             DOMAIN               CRIT
 ```
 
 Lists show one page (50 items by default); `--page`, `--per-page` (up to 200) and `--all` walk the
-rest. Every list takes `--sort` and `--order`; `--help` on any command lists what it accepts.
+rest. `--all` stops with an error past 100,000 items (or 1,000 pages); narrow the list with filters
+or walk it with `--page`. Every list takes `--sort` and `--order`; `--help` on any command lists
+what it accepts.
 
 ### JSON for scripts
 

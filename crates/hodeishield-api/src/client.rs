@@ -4,6 +4,7 @@ use reqwest::header::{ACCEPT, AUTHORIZATION, HeaderMap, HeaderValue};
 use secrecy::{ExposeSecret, SecretString};
 use serde::de::DeserializeOwned;
 use std::fmt;
+use std::io::Read;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use url::Url;
@@ -329,7 +330,7 @@ impl Client {
                     elapsed: started.elapsed(),
                 });
             }
-            let body = response.bytes().map_err(Error::Transport)?;
+            let body = read_body(response, MAX_RESPONSE_BYTES).map_err(Error::Body)?;
             if status.is_success() {
                 let raw: serde_json::Value =
                     serde_json::from_slice(&body).map_err(|source| Error::Decode {
@@ -366,6 +367,41 @@ impl Client {
             return Err(Error::from_response(operation, meta, &body));
         }
     }
+}
+
+/// Largest answer body this client reads: far above any `/v1` page, well below what would strain
+/// memory.
+pub const MAX_RESPONSE_BYTES: u64 = 8 * 1024 * 1024;
+
+/// Reads the body of `response`, failing once it is larger than `limit` bytes instead of buffering
+/// the rest.
+///
+/// # Errors
+/// An [`std::io::Error`] when the body cannot be read, or is larger than `limit`.
+pub fn read_body(
+    response: reqwest::blocking::Response,
+    limit: u64,
+) -> Result<Vec<u8>, std::io::Error> {
+    let too_large = || {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("the answer is larger than {limit} bytes"),
+        )
+    };
+    if response
+        .content_length()
+        .is_some_and(|length| length > limit)
+    {
+        return Err(too_large());
+    }
+    let mut body = Vec::new();
+    response
+        .take(limit.saturating_add(1))
+        .read_to_end(&mut body)?;
+    if body.len() as u64 > limit {
+        return Err(too_large());
+    }
+    Ok(body)
 }
 
 /// Whether the URL's host is `localhost` or a loopback address: the only hosts plain `http` is

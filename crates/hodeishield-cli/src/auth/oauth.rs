@@ -112,6 +112,16 @@ fn unreachable(what: &str, error: &reqwest::Error) -> Failure {
     )
 }
 
+/// The body of an app or API answer, refused once it is larger than the client's size limit.
+fn read_body(response: reqwest::blocking::Response, what: &str) -> Result<Vec<u8>> {
+    hodeishield_api::read_body(response, hodeishield_api::MAX_RESPONSE_BYTES).map_err(|e| {
+        Failure::new(
+            Kind::Unavailable,
+            format!("Could not read the app's answer for {what}: {e}."),
+        )
+    })
+}
+
 /// The well-known URL for `suffix` under `issuer` (RFC 8414 §3.1: inserted after the host, before
 /// any path of the issuer).
 fn well_known(issuer: &Url, suffix: &str) -> Url {
@@ -156,7 +166,8 @@ pub fn authorization_server(
             format!("The API answered {status} to {url}."),
         ));
     }
-    let metadata: ResourceMetadata = response.json().map_err(|e| {
+    let body = read_body(response, "sign-in")?;
+    let metadata: ResourceMetadata = serde_json::from_slice(&body).map_err(|e| {
         Failure::general(format!(
             "The API's resource metadata at {url} is not valid: {e}."
         ))
@@ -208,7 +219,8 @@ pub fn discover(http: &reqwest::blocking::Client, app_url: &Url) -> Result<Metad
                 format!("The app answered {status} to {url}."),
             ));
         }
-        let metadata: Metadata = response.json().map_err(|e| {
+        let body = read_body(response, "sign-in")?;
+        let metadata: Metadata = serde_json::from_slice(&body).map_err(|e| {
             Failure::general(format!(
                 "The app's sign-in metadata at {url} is not valid: {e}."
             ))
@@ -361,7 +373,7 @@ pub fn token_request(
         .send()
         .map_err(|e| unreachable("sign-in", &e))?;
     let status = response.status();
-    let body = response.bytes().map_err(|e| unreachable("sign-in", &e))?;
+    let body = read_body(response, "sign-in")?;
     if status.is_success() {
         let wire: TokenWire = serde_json::from_slice(&body)
             .map_err(|_| Failure::general("The app's token answer is not valid."))?;
@@ -512,8 +524,7 @@ pub fn revoke(
     if status.is_success() {
         return Ok(Revocation::Revoked);
     }
-    let error = response
-        .bytes()
+    let error = read_body(response, "revocation")
         .ok()
         .and_then(|body| serde_json::from_slice::<OAuthError>(&body).ok());
     let what = hint.replace('_', " ");
@@ -572,7 +583,7 @@ pub fn start_device(
         .send()
         .map_err(|e| unreachable("sign-in", &e))?;
     let status = response.status();
-    let body = response.bytes().map_err(|e| unreachable("sign-in", &e))?;
+    let body = read_body(response, "sign-in")?;
     if !status.is_success() {
         let detail = serde_json::from_slice::<OAuthError>(&body)
             .map_or_else(|_| format!("HTTP {status}"), |e| e.describe());
@@ -681,7 +692,9 @@ pub fn userinfo(
     if !response.status().is_success() {
         return Ok(None);
     }
-    Ok(response.json().ok())
+    Ok(read_body(response, "the user profile")
+        .ok()
+        .and_then(|body| serde_json::from_slice(&body).ok()))
 }
 
 #[cfg(test)]
@@ -743,6 +756,24 @@ mod tests {
         let http = http_client(&api_url).expect("http");
         let issuer = authorization_server(&http, &api_url, &app).expect("issuer");
         assert_eq!(issuer.as_str(), "https://app.example.test/api/auth");
+    }
+
+    #[test]
+    fn resource_metadata_larger_than_the_size_limit_is_refused() {
+        let mut api = mockito::Server::new();
+        let app: Url = "https://app.example.test".parse().expect("url");
+        let api_url: Url = api.url().parse().expect("url");
+        resource_metadata(
+            &mut api,
+            serde_json::json!({
+                "resource": api_url.as_str(),
+                "authorization_servers": ["https://app.example.test/api/auth"],
+                "padding": "x".repeat(9 * 1024 * 1024),
+            }),
+        );
+        let http = http_client(&api_url).expect("http");
+        let err = authorization_server(&http, &api_url, &app).expect_err("over the limit");
+        assert!(err.to_string().contains("larger than"), "{err}");
     }
 
     #[test]

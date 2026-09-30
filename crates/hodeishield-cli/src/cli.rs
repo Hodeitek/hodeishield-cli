@@ -124,7 +124,7 @@ pub struct Paging {
     /// Items per page, 1 to 200.
     #[arg(long, value_parser = clap::value_parser!(i64).range(1..=200))]
     pub per_page: Option<i64>,
-    /// Fetch every page. With --json, prints one JSON array of all items.
+    /// Fetch every page, up to 100000 items. With --json, prints one JSON array of all items.
     #[arg(long)]
     pub all: bool,
     /// Sort direction.

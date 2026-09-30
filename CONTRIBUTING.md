@@ -48,6 +48,9 @@ cargo run -- vendors list
 - Branch from `dev` and open the pull request against `dev`. `main` only receives releases.
 - Keep changes focused, with tests for new behaviour.
 - Commits must be signed (GPG or SSH) and use a clear, imperative message.
+- Commit messages and pull request descriptions must not mention Claude: no session trailer, no
+  co-author line, no claude.ai link, and not the word itself. Enable the local check with
+  `git config core.hooksPath .githooks`; CI runs the same check on every pull request.
 - By contributing you agree that your contribution is licensed under the Apache License 2.0.
 
 ## Security issues

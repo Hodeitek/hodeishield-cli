@@ -24,6 +24,11 @@ type Fetch<'a, R> =
 /// Most pages `--all` fetches: 200 000 items at the largest page size.
 const MAX_PAGES: i64 = 1_000;
 
+/// Most items `--all` collects. The walk keeps every item twice (as received and decoded), so
+/// this bounds memory, not just requests; 100 000 is far above any tenant's list and a few
+/// hundred MiB at most.
+const MAX_ITEMS: usize = 100_000;
+
 /// Prints one page, or every page with `--all`.
 #[allow(clippy::too_many_arguments)]
 fn list<R, T>(
@@ -62,11 +67,33 @@ fn list<R, T>(
     }
 
     let per_page = paging.per_page.or(Some(200));
+    let (raw_items, items) = collect_pages(noun, &api, per_page, MAX_ITEMS, fetch, split)?;
+    if ctx.json {
+        return Ok(print_json(out, &Value::Array(raw_items))?);
+    }
+    if items.is_empty() {
+        eprintln!("No {noun} found.");
+        return Ok(());
+    }
+    print_table(out, &render(&items))?;
+    eprintln!("{} {noun}.", items.len());
+    Ok(())
+}
+
+/// Walks every page, as received and decoded, stopping with an error past `max_items` items.
+fn collect_pages<R, T>(
+    noun: &str,
+    api: &ApiContext<'_>,
+    per_page: Option<i64>,
+    max_items: usize,
+    fetch: &mut Fetch<'_, R>,
+    split: fn(R) -> (Vec<T>, Pagination),
+) -> Result<(Vec<Value>, Vec<T>)> {
     let mut raw_items = Vec::new();
     let mut items = Vec::new();
     let mut page = 1;
     loop {
-        let response = fetch(Some(page), per_page).map_err(|e| from_api(e, &api))?;
+        let response = fetch(Some(page), per_page).map_err(|e| from_api(e, api))?;
         if let Some(Value::Array(batch)) = response.raw.get("data") {
             raw_items.extend(batch.iter().cloned());
         }
@@ -77,6 +104,13 @@ fn list<R, T>(
             || pagination.page != page
             || page.saturating_mul(pagination.per_page.max(1)) >= pagination.total;
         items.append(&mut batch);
+        if items.len() > max_items {
+            return Err(crate::failure::Failure::general(format!(
+                "Stopped after {} {noun}; --all collects at most {max_items}, so the rest was not fetched.",
+                items.len()
+            ))
+            .hint("Narrow the list with filters, or walk it with --page."));
+        }
         if done {
             break;
         }
@@ -89,16 +123,7 @@ fn list<R, T>(
         }
         page += 1;
     }
-    if ctx.json {
-        return Ok(print_json(out, &Value::Array(raw_items))?);
-    }
-    if items.is_empty() {
-        eprintln!("No {noun} found.");
-        return Ok(());
-    }
-    print_table(out, &render(&items))?;
-    eprintln!("{} {noun}.", items.len());
-    Ok(())
+    Ok((raw_items, items))
 }
 
 /// Prints one resource: the API's JSON, or its fields one per line.
@@ -488,4 +513,61 @@ fn endpoint_table(items: &[Endpoint]) -> Table {
             })
             .collect(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::failure::CredentialSource;
+
+    /// Serves `total` items, `per_page` at a time, as numbers.
+    fn walk(total: i64, per_page: i64, max_items: usize) -> Result<(Vec<Value>, Vec<i64>)> {
+        let api = ApiContext {
+            source: CredentialSource::ApiKey,
+            framework: None,
+        };
+        let total_pages = (total + per_page - 1) / per_page;
+        collect_pages(
+            "things",
+            &api,
+            Some(per_page),
+            max_items,
+            &mut |page, _| {
+                let page = page.unwrap_or(1);
+                let first = (page - 1) * per_page;
+                let batch: Vec<i64> = (first..(first + per_page).min(total)).collect();
+                Ok(ApiResponse {
+                    raw: serde_json::json!({ "data": batch }),
+                    data: (
+                        batch,
+                        Pagination {
+                            page,
+                            per_page,
+                            total,
+                            total_pages,
+                        },
+                    ),
+                    meta: Default::default(),
+                })
+            },
+            |r: (Vec<i64>, Pagination)| r,
+        )
+    }
+
+    #[test]
+    fn a_walk_within_the_item_limit_collects_everything() {
+        let (raw, items) = walk(10, 4, 10).expect("within the limit");
+        assert_eq!((raw.len(), items.len()), (10, 10));
+    }
+
+    #[test]
+    fn a_walk_past_the_item_limit_stops_with_a_hint() {
+        let failure = walk(11, 4, 10).expect_err("over the limit");
+        assert!(
+            failure.message.contains("at most 10"),
+            "{}",
+            failure.message
+        );
+        assert!(failure.hint.is_some_and(|h| h.contains("--page")));
+    }
 }

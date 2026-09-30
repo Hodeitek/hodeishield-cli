@@ -1,0 +1,7 @@
+#!/bin/sh
+# Enable with: git config core.hooksPath .githooks
+# Lines starting with '#' are dropped first, as git strips them from the message.
+set -eu
+
+dir=$(dirname -- "$0")
+grep -v '^#' -- "$1" | sh "$dir/check-message.sh"
