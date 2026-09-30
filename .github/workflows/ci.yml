@@ -116,6 +116,7 @@ jobs:
 
       # Pinned to the version validated locally against deny.toml.
       - name: Install cargo-deny
+        # renovate: datasource=crate depName=cargo-deny
         run: cargo install cargo-deny --locked --version 0.20.2
 
       - name: cargo deny check
@@ -138,6 +139,7 @@ jobs:
 
       # Pinned to the version validated locally.
       - name: Install cargo-audit
+        # renovate: datasource=crate depName=cargo-audit
         run: cargo install cargo-audit --locked --version 0.22.2
 
       - name: cargo audit
