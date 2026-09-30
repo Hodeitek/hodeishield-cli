@@ -208,9 +208,9 @@ Shell completions: `hodeishield completions bash|zsh|fish|powershell|elvish`.
 
 ## Contributing and security
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). To report a vulnerability, use
-[private reporting](https://github.com/Hodeitek/hodeishield-cli/security/advisories/new), never a
-public issue ([SECURITY.md](SECURITY.md)).
+See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md). To report a vulnerability,
+use [GitHub private reporting](https://github.com/Hodeitek/hodeishield-cli/security/advisories/new)
+or email [security@hodeitek.com](mailto:security@hodeitek.com), never a public issue.
 
 ## License
 
