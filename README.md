@@ -49,14 +49,14 @@ section), and put `hodeishield` (`hodeishield.exe` on Windows) somewhere on your
 | macOS (Apple silicon and Intel) | `hodeishield-<version>-universal-apple-darwin.tar.gz` |
 | Windows x86_64 | `hodeishield-<version>-x86_64-pc-windows-msvc.zip` |
 
-`<version>` has no leading `v`: release `v0.1.0` ships `hodeishield-0.1.0-…`. The Linux binaries are
+`<version>` has no leading `v`: release `v0.1.1` ships `hodeishield-0.1.1-…`. The Linux binaries are
 statically linked and run on any distribution. A Homebrew tap and a Windows installer (MSI) are
 planned but not available yet.
 
 From source, with the Rust toolchain installed (pin the release tag you want):
 
 ```sh
-cargo install --locked --git https://github.com/Hodeitek/hodeishield-cli --tag v0.1.0 hodeishield-cli
+cargo install --locked --git https://github.com/Hodeitek/hodeishield-cli --tag v0.1.1 hodeishield-cli
 ```
 
 ## Verify a download
@@ -67,9 +67,9 @@ Each release has a `SHA256SUMS` file, a Sigstore bundle (`*.sigstore.json`) for 
 ```sh
 sha256sum --ignore-missing -c SHA256SUMS
 
-cosign verify-blob hodeishield-0.1.0-x86_64-unknown-linux-musl.tar.gz \
-  --bundle hodeishield-0.1.0-x86_64-unknown-linux-musl.tar.gz.sigstore.json \
-  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.1.0 \
+cosign verify-blob hodeishield-0.1.1-x86_64-unknown-linux-musl.tar.gz \
+  --bundle hodeishield-0.1.1-x86_64-unknown-linux-musl.tar.gz.sigstore.json \
+  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.1.1 \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --certificate-github-workflow-trigger push
 ```
