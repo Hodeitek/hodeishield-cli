@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        **Security problem?** Do not file it here: use [Report a vulnerability](https://github.com/Hodeitek/hodeishield-cli/security/advisories/new).
+        **Security problem?** Do not file it here: use [GitHub private reporting](https://github.com/Hodeitek/hodeishield-cli/security/advisories/new) or email [security@hodeitek.com](mailto:security@hodeitek.com).
         **Never paste an API key, a token, or data from your organisation** into this issue.
   - type: input
     id: version

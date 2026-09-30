@@ -7,7 +7,8 @@ product's.
 
 **Do not open a public issue.** Report it privately through GitHub:
 [**Report a vulnerability**](https://github.com/Hodeitek/hodeishield-cli/security/advisories/new)
-(the *Security* tab of this repository → *Report a vulnerability*).
+(the *Security* tab of this repository → *Report a vulnerability*), or email
+[security@hodeitek.com](mailto:security@hodeitek.com).
 
 Please include the version (`hodeishield --version`), your platform, what you did, what happened and
 what you expected, and a proof of concept if you have one. **Never include a real API key or token**:
