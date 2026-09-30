@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Hodeitek S.L.
+
 //! `config`: read and change the configuration file. It never holds a credential.
 
 use super::Context;

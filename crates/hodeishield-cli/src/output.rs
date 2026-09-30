@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Hodeitek S.L.
+
 //! Rendering: tables and detail views for people, the API's own JSON for programs.
 //!
 //! Everything printed for people passes through [`clean`]: vendor names, alert titles and the like

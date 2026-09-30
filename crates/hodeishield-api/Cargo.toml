@@ -1,6 +1,7 @@
 [package]
 name = "hodeishield-api"
 description = "Read-only client for the HodeiShield /v1 API, generated from its OpenAPI document"
+authors.workspace = true
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

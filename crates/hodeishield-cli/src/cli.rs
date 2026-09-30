@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Hodeitek S.L.
+
 //! Command-line surface.
 
 use clap::builder::{PossibleValuesParser, TypedValueParser};

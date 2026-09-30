@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Hodeitek S.L.
+
 //! Where sign-in tokens are kept: the system keychain, and nowhere else.
 //!
 //! macOS Keychain, Windows Credential Manager, or the Secret Service on Linux and the BSDs (GNOME

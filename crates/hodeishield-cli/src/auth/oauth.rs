@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Hodeitek S.L.
+
 //! OAuth 2.0 client for signing in to the app: discovery (RFC 8414, with OpenID Connect discovery as
 //! fallback), authorization code with PKCE (RFC 7636) over a loopback redirect (RFC 8252), device
 //! authorization (RFC 8628), refresh, and revocation (RFC 7009).

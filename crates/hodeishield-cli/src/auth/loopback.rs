@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Hodeitek S.L.
+
 //! The one-shot loopback listener that receives the browser's redirect (RFC 8252 §7.3).
 //!
 //! It listens on `127.0.0.1` on a port the operating system picks, answers exactly one valid
