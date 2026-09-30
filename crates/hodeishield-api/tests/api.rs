@@ -284,3 +284,21 @@ fn without_a_renewal_a_401_is_returned_as_is() {
     assert_eq!(err.api().map(|a| a.status), Some(401));
     refused.assert();
 }
+
+#[test]
+fn an_answer_larger_than_the_size_limit_is_not_read_in_full() {
+    let mut server = mockito::Server::new();
+    let padding = "x".repeat(9 * 1024 * 1024);
+    let mock = server
+        .mock("GET", "/v1/vendors")
+        .with_status(200)
+        .with_body(format!(
+            r#"{{"data":[],"pagination":{{"page":1,"per_page":50,"total":0,"total_pages":0}},"padding":"{padding}"}}"#
+        ))
+        .create();
+    let err = client(&server)
+        .list_vendors(&ListVendorsParams::default())
+        .expect_err("over the limit");
+    mock.assert();
+    assert!(err.to_string().contains("larger than"), "{err}");
+}

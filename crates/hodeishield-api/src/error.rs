@@ -56,6 +56,9 @@ pub enum Error {
     /// The request could not be sent or the answer could not be read.
     #[error("could not reach the API: {0}")]
     Transport(#[source] reqwest::Error),
+    /// The answer's body could not be read, or was larger than the client accepts.
+    #[error("could not read the API's answer: {0}")]
+    Body(#[source] std::io::Error),
     /// A successful answer did not match the OpenAPI document.
     #[error("the answer to {operation} does not match the published API description: {source}")]
     Decode {
