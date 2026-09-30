@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Hodeitek S.L.
+
 //! Read-only client for the HodeiShield `/v1` API.
 //!
 //! The types, query parameters and operations in [`v1`] are generated from the vendored OpenAPI

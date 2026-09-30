@@ -4,6 +4,7 @@ members = ["crates/hodeishield-api", "crates/hodeishield-cli", "xtask"]
 default-members = ["crates/hodeishield-api", "crates/hodeishield-cli"]
 
 [workspace.package]
+authors = ["Hodeitek S.L. <info@hodeitek.com>"]
 version = "0.1.1"
 edition = "2024"
 rust-version = "1.98"

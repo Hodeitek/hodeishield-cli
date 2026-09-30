@@ -89,7 +89,7 @@ jobs:
           stage="$(mktemp -d)/hodeishield-${VERSION}-${TARGET}"
           mkdir -p "$stage"
           cp "target/${TARGET}/release/${BIN_NAME}" "$stage/"
-          cp LICENSE README.md "$stage/"
+          cp LICENSE NOTICE README.md "$stage/"
           tar -C "$(dirname "$stage")" -czf "hodeishield-${VERSION}-${TARGET}.tar.gz" "$(basename "$stage")"
 
       - name: Upload archive
@@ -142,7 +142,7 @@ jobs:
           stage="$(mktemp -d)/hodeishield-${VERSION}-${TARGET}"
           mkdir -p "$stage"
           cp "target/${TARGET}/release/${BIN_NAME}" "$stage/"
-          cp LICENSE README.md "$stage/"
+          cp LICENSE NOTICE README.md "$stage/"
           tar -C "$(dirname "$stage")" -czf "hodeishield-${VERSION}-${TARGET}.tar.gz" "$(basename "$stage")"
 
       - name: Upload archive
@@ -180,6 +180,7 @@ jobs:
           New-Item -ItemType Directory -Path $stage | Out-Null
           Copy-Item "target/$target/release/$env:BIN_NAME.exe" $stage
           Copy-Item "LICENSE" $stage
+          Copy-Item "NOTICE" $stage
           Copy-Item "README.md" $stage
           Compress-Archive -Path "$stage/*" -DestinationPath "hodeishield-$env:VERSION-$target.zip"
 

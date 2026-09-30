@@ -1,6 +1,7 @@
 [package]
 name = "xtask"
 description = "Repository tasks: generates the /v1 client from the vendored OpenAPI document"
+authors.workspace = true
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

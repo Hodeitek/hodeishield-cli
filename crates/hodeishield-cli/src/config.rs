@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Hodeitek S.L.
+
 //! Configuration file and profiles.
 //!
 //! The file holds URLs and OAuth client settings per profile. It never holds a credential: tokens

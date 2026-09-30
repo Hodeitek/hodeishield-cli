@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Hodeitek S.L.
+
 //! The one error type the commands return, and the exit code each kind maps to.
 
 use std::fmt;

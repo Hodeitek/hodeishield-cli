@@ -214,7 +214,11 @@ public issue ([SECURITY.md](SECURITY.md)).
 
 ## License
 
-[Apache License 2.0](LICENSE).
+Licensed under the [Apache License, Version 2.0](LICENSE). Copyright 2026 Hodeitek S.L.; see
+[NOTICE](NOTICE).
+
+HodeiShield® and Hodeitek® are registered trademarks of Hodeitek S.L.; the license grants no rights
+to them (Apache-2.0 §6).
 
 ## About
 

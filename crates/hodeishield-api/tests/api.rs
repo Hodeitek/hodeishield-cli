@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Hodeitek S.L.
+
 //! The generated client against a mock `/v1`.
 
 use hodeishield_api::v1::{ListComplianceControlsParams, ListVendorsParams, Order, VendorSort};

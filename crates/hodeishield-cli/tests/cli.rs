@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Hodeitek S.L.
+
 //! The `hodeishield` binary end to end, against a mock `/v1` and a mock app.
 //!
 //! Every test runs with a throw-away configuration file and, on Linux, with the Secret Service

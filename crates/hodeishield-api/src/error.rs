@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Hodeitek S.L.
+
 use crate::client::{Operation, ResponseMeta};
 use crate::v1::ErrorEnvelope;
 use std::fmt;
