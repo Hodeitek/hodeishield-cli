@@ -960,7 +960,7 @@ dependencies = [
 
 [[package]]
 name = "hodeishield-api"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "mockito",
  "reqwest",
@@ -973,7 +973,7 @@ dependencies = [
 
 [[package]]
 name = "hodeishield-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "apple-native-keyring-store",
  "assert_cmd",
@@ -3050,7 +3050,7 @@ checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
 
 [[package]]
 name = "xtask"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde_json",
  "sha2",

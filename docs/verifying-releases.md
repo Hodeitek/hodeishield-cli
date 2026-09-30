@@ -12,14 +12,14 @@ Every release of `hodeishield-cli` publishes, for each platform archive:
   [`slsa-framework/slsa-github-generator`](https://github.com/slsa-framework/slsa-github-generator)
   generic generator.
 
-The steps below use `v0.1.0` and `hodeishield-0.1.0-x86_64-unknown-linux-musl.tar.gz`
+The steps below use `v0.1.1` and `hodeishield-0.1.1-x86_64-unknown-linux-musl.tar.gz`
 as examples — substitute the actual version and archive you downloaded.
 
 ## 1. Download the files
 
 From the release page, download:
 
-- the archive you want (e.g. `hodeishield-0.1.0-x86_64-unknown-linux-musl.tar.gz`)
+- the archive you want (e.g. `hodeishield-0.1.1-x86_64-unknown-linux-musl.tar.gz`)
 - `SHA256SUMS`
 - the matching `<archive>.sigstore.json`
 - `SHA256SUMS.sigstore.json`
@@ -42,7 +42,7 @@ Requires [`cosign`](https://github.com/sigstore/cosign) (v2 or newer).
 ```sh
 cosign verify-blob \
   --bundle SHA256SUMS.sigstore.json \
-  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.1.0 \
+  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.1.1 \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --certificate-github-workflow-trigger push \
   SHA256SUMS
@@ -52,11 +52,11 @@ Repeat for the archive itself, using its own `.sigstore.json`:
 
 ```sh
 cosign verify-blob \
-  --bundle hodeishield-0.1.0-x86_64-unknown-linux-musl.tar.gz.sigstore.json \
-  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.1.0 \
+  --bundle hodeishield-0.1.1-x86_64-unknown-linux-musl.tar.gz.sigstore.json \
+  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.1.1 \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --certificate-github-workflow-trigger push \
-  hodeishield-0.1.0-x86_64-unknown-linux-musl.tar.gz
+  hodeishield-0.1.1-x86_64-unknown-linux-musl.tar.gz
 ```
 
 A successful verification confirms the file was signed by the
@@ -71,10 +71,10 @@ Requires [`slsa-verifier`](https://github.com/slsa-framework/slsa-verifier).
 
 ```sh
 slsa-verifier verify-artifact \
-  hodeishield-0.1.0-x86_64-unknown-linux-musl.tar.gz \
+  hodeishield-0.1.1-x86_64-unknown-linux-musl.tar.gz \
   --provenance-path hodeishield.intoto.jsonl \
   --source-uri github.com/Hodeitek/hodeishield-cli \
-  --source-tag v0.1.0
+  --source-tag v0.1.1
 ```
 
 `hodeishield.intoto.jsonl` is attached to the release and covers every
