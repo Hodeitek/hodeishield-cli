@@ -51,6 +51,11 @@ cargo run -- vendors list
 - Commit messages and pull request descriptions must not mention Claude: no session trailer, no
   co-author line, no claude.ai link, and not the word itself. Enable the local check with
   `git config core.hooksPath .githooks`; CI runs the same check on every pull request.
+- Every commit must be signed off: it needs a `Signed-off-by: Name <email>` trailer matching the
+  commit author, which certifies the [Developer Certificate of Origin 1.1](https://developercertificate.org/).
+  Add it with `git commit -s`. Merge commits count too (`git merge --signoff`). If you forgot, use
+  `git commit --amend -s` for the last commit or `git rebase --signoff <base>` for several. CI
+  checks every pull request; sign-off is never added automatically.
 - By contributing you agree that your contribution is licensed under the Apache License 2.0.
 
 ## Security issues

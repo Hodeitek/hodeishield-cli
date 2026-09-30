@@ -178,3 +178,14 @@ jobs:
             status=1
           fi
           exit "$status"
+
+      # Developer Certificate of Origin: every commit needs a matching
+      # Signed-off-by trailer (.githooks/check-signoff.sh). Independent of the
+      # step above: both run, and the job fails if either fails.
+      - name: Check DCO sign-off
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # Commits up to and including this one predate the DCO requirement and are not checked.
+          DCO_SINCE: b6b722db7c85ecc89b95280d393c81b45136658c
+        run: sh .githooks/check-signoff.sh "$HEAD_SHA" ^"$BASE_SHA" ^"$DCO_SINCE"
