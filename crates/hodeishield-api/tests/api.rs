@@ -302,3 +302,55 @@ fn an_answer_larger_than_the_size_limit_is_not_read_in_full() {
     mock.assert();
     assert!(err.to_string().contains("larger than"), "{err}");
 }
+
+/// Serves one chunked answer (no `Content-Length`) of unbounded length until the peer hangs up, and
+/// returns how many body bytes it managed to send.
+fn serve_chunked_until_closed(listener: std::net::TcpListener) -> u64 {
+    use std::io::{Read, Write};
+    const CHUNK: usize = 16 * 1024;
+    const GIVE_UP_AFTER: u64 = 1024 * 1024 * 1024;
+    let (mut stream, _) = listener.accept().expect("accept");
+    let mut request = Vec::new();
+    let mut buf = [0_u8; 1024];
+    while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+        let n = stream.read(&mut buf).expect("read request");
+        assert!(n > 0, "the client closed before sending a request");
+        request.extend_from_slice(&buf[..n]);
+    }
+    stream
+        .write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n")
+        .expect("write head");
+    let mut frame = format!("{CHUNK:x}\r\n").into_bytes();
+    frame.extend(std::iter::repeat_n(b'x', CHUNK));
+    frame.extend_from_slice(b"\r\n");
+    let mut sent = 0_u64;
+    while sent < GIVE_UP_AFTER {
+        if stream.write_all(&frame).is_err() {
+            break;
+        }
+        sent += CHUNK as u64;
+    }
+    sent
+}
+
+#[test]
+fn a_chunked_answer_without_a_content_length_is_still_cut_off_at_the_size_limit() {
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let server = std::thread::spawn(move || serve_chunked_until_closed(listener));
+
+    let response = reqwest::blocking::get(format!("http://127.0.0.1:{port}/")).expect("response");
+    assert!(
+        response.content_length().is_none(),
+        "the answer must not declare its length"
+    );
+    let err = hodeishield_api::read_body(response, 1024).expect_err("over the limit");
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert!(err.to_string().contains("larger than 1024"), "{err}");
+
+    let sent = server.join().expect("server thread");
+    assert!(
+        sent < 64 * 1024 * 1024,
+        "the reader kept consuming a body it had already rejected ({sent} bytes sent)"
+    );
+}
