@@ -7,7 +7,7 @@
 [![License: Apache-2.0](https://img.shields.io/github/license/Hodeitek/hodeishield-cli)](LICENSE)
 [![Signed with Sigstore · SLSA provenance](https://img.shields.io/badge/signed_with-Sigstore_%C2%B7_SLSA_provenance-7a5bf5)](docs/verifying-releases.md)
 
-The official command-line client for [HodeiShield](https://app.hodeishield.com), by
+The official command-line client for [HodeiShield](https://hodeishield.com), by
 [Hodeitek](https://hodeitek.com). HodeiShield covers third-party risk, supply-chain security and
 compliance (NIS2, DORA, ISO 27001, ENS).
 
@@ -222,6 +222,7 @@ to them (Apache-2.0 §6).
 
 ## About
 
-- [HodeiShield](https://app.hodeishield.com): the third-party risk, supply-chain security and
-  compliance platform that this CLI reads from; sign in there and create API keys.
+- [HodeiShield](https://hodeishield.com): the third-party risk, supply-chain security and
+  compliance platform that this CLI reads from; sign in at
+  [app.hodeishield.com](https://app.hodeishield.com) and create API keys there.
 - [Hodeitek](https://hodeitek.com): the company that builds HodeiShield and maintains this CLI.
