@@ -78,6 +78,37 @@ A valid signature proves the file was built by this repository's release workflo
 tag, with no long-lived key involved; put your version in the identity rather than matching any tag. The full steps, including the provenance check with `slsa-verifier`, are in
 [docs/verifying-releases.md](docs/verifying-releases.md).
 
+### If macOS or Windows blocks the binary
+
+The binaries are not yet signed with an Apple Developer ID or a Windows Authenticode certificate
+([#50](https://github.com/Hodeitek/hodeishield-cli/issues/50)), so a file downloaded with a browser can be blocked or flagged. The cosign check above is the
+proof that the file is genuine; once it passes, unblock the binary as follows.
+
+**macOS.** Gatekeeper may refuse to open `hodeishield` ("Apple could not verify… is free of
+malware"). Remove the quarantine attribute from the unpacked binary:
+
+```sh
+xattr -d com.apple.quarantine ./hodeishield   # "No such xattr" means there was nothing to remove
+```
+
+Or download with `curl`, which does not set that attribute in the first place:
+
+```sh
+curl -LO https://github.com/Hodeitek/hodeishield-cli/releases/download/v0.1.1/hodeishield-0.1.1-universal-apple-darwin.tar.gz
+```
+
+**Windows.** Unblock the archive before unpacking it, so the executable does not inherit the
+download mark:
+
+```powershell
+Unblock-File .\hodeishield-0.1.1-x86_64-pc-windows-msvc.zip
+Expand-Archive .\hodeishield-0.1.1-x86_64-pc-windows-msvc.zip
+```
+
+If you already unpacked it, run `Unblock-File` on `hodeishield.exe` instead. If SmartScreen still
+shows "Windows protected your PC", choose **More info → Run anyway** («Más información → Ejecutar de
+todos modos» on a Spanish system).
+
 ## Authenticate
 
 ### With a tenant API key (scripts, CI, servers)
