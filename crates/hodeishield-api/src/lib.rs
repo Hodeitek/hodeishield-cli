@@ -30,6 +30,6 @@ pub mod v1;
 
 pub use client::{
     ApiResponse, Client, ClientBuilder, MAX_RESPONSE_BYTES, Operation, RateLimit, RequestEvent,
-    ResponseMeta, encode_path_segment, is_loopback_host, read_body,
+    ResponseMeta, RetryEvent, encode_path_segment, is_loopback_host, read_body,
 };
 pub use error::{ApiError, ApiErrorBody, Error, ParseEnumError};

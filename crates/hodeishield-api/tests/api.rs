@@ -6,7 +6,7 @@
 use hodeishield_api::v1::{ListComplianceControlsParams, ListVendorsParams, Order, VendorSort};
 use hodeishield_api::{Client, Error};
 use secrecy::SecretString;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const VENDOR: &str = r#"{
   "id": "0b8f2a52-6a0e-4d5c-9d3e-1f2a3b4c5d6e",
@@ -200,6 +200,17 @@ fn page_of_nothing() -> &'static str {
     r#"{"data":[],"pagination":{"page":1,"per_page":25,"total":0,"total_pages":0}}"#
 }
 
+/// Helper to build a client with fast transient retries.
+fn client_with_transient_retries(server: &mockito::Server, max_retries: u32) -> Client {
+    Client::builder(
+        server.url().parse().expect("url"),
+        SecretString::from("hsk_example"),
+    )
+    .transient_retries(max_retries, Duration::from_millis(1))
+    .build()
+    .expect("client")
+}
+
 #[test]
 fn a_401_renews_the_credential_once_and_resends_the_request() {
     let mut server = mockito::Server::new();
@@ -356,4 +367,242 @@ fn a_chunked_answer_without_a_content_length_is_still_cut_off_at_the_size_limit(
         sent < 64 * 1024 * 1024,
         "the reader kept consuming a body it had already rejected ({sent} bytes sent)"
     );
+}
+
+#[test]
+fn a_503_then_200_is_retried_and_succeeds() {
+    let mut server = mockito::Server::new();
+    let unavailable = server
+        .mock("GET", "/v1/vendors")
+        .with_status(503)
+        .expect(1)
+        .create();
+    let success = server
+        .mock("GET", "/v1/vendors")
+        .with_status(200)
+        .with_body(page_of_nothing())
+        .expect(1)
+        .create();
+    let result =
+        client_with_transient_retries(&server, 2).list_vendors(&ListVendorsParams::default());
+    assert!(result.is_ok(), "should succeed after retry");
+    unavailable.assert();
+    success.assert();
+}
+
+#[test]
+fn a_502_and_504_then_200_is_retried_and_succeeds() {
+    let mut server = mockito::Server::new();
+    let bad_gateway = server
+        .mock("GET", "/v1/vendors")
+        .with_status(502)
+        .expect(1)
+        .create();
+    let gateway_timeout = server
+        .mock("GET", "/v1/vendors")
+        .with_status(504)
+        .expect(1)
+        .create();
+    let success = server
+        .mock("GET", "/v1/vendors")
+        .with_status(200)
+        .with_body(page_of_nothing())
+        .expect(1)
+        .create();
+    let result =
+        client_with_transient_retries(&server, 2).list_vendors(&ListVendorsParams::default());
+    assert!(result.is_ok(), "should succeed after retries");
+    bad_gateway.assert();
+    gateway_timeout.assert();
+    success.assert();
+}
+
+#[test]
+fn three_503s_exhausts_retries_and_fails_on_the_third() {
+    let mut server = mockito::Server::new();
+    let unavailable = server
+        .mock("GET", "/v1/vendors")
+        .with_status(503)
+        .expect(3)
+        .create();
+    let result =
+        client_with_transient_retries(&server, 2).list_vendors(&ListVendorsParams::default());
+    assert!(result.is_err(), "should fail after exhausting retries");
+    let err = result.expect_err("unwrap error");
+    assert_eq!(err.api().map(|a| a.status), Some(503));
+    unavailable.assert();
+}
+
+#[test]
+fn a_500_is_not_retried() {
+    let mut server = mockito::Server::new();
+    let error = server
+        .mock("GET", "/v1/vendors")
+        .with_status(500)
+        .expect(1)
+        .create();
+    let result =
+        client_with_transient_retries(&server, 2).list_vendors(&ListVendorsParams::default());
+    assert!(result.is_err(), "500 should not be retried");
+    error.assert();
+}
+
+#[test]
+fn a_404_is_not_retried() {
+    let mut server = mockito::Server::new();
+    let not_found = server
+        .mock("GET", "/v1/vendors")
+        .with_status(404)
+        .expect(1)
+        .create();
+    let result =
+        client_with_transient_retries(&server, 2).list_vendors(&ListVendorsParams::default());
+    assert!(result.is_err(), "404 should not be retried");
+    not_found.assert();
+}
+
+#[test]
+fn a_503_with_retry_after_1s_within_max_wait_is_honored() {
+    let mut server = mockito::Server::new();
+    let unavailable = server
+        .mock("GET", "/v1/vendors")
+        .with_status(503)
+        .with_header("retry-after", "1")
+        .expect(1)
+        .create();
+    let success = server
+        .mock("GET", "/v1/vendors")
+        .with_status(200)
+        .with_body(page_of_nothing())
+        .expect(1)
+        .create();
+
+    let started = Instant::now();
+    let result = Client::builder(
+        server.url().parse().expect("url"),
+        SecretString::from("hsk_example"),
+    )
+    .transient_retries(2, Duration::from_millis(1))
+    .build()
+    .expect("client")
+    .list_vendors(&ListVendorsParams::default());
+    let elapsed = started.elapsed();
+
+    assert!(
+        result.is_ok(),
+        "should succeed after respecting Retry-After"
+    );
+    assert!(
+        elapsed >= Duration::from_secs(1),
+        "should have waited at least 1 second, waited {:?}",
+        elapsed
+    );
+    unavailable.assert();
+    success.assert();
+}
+
+#[test]
+fn a_503_with_retry_after_longer_than_max_wait_does_not_retry() {
+    let mut server = mockito::Server::new();
+    let unavailable = server
+        .mock("GET", "/v1/vendors")
+        .with_status(503)
+        .with_header("retry-after", "120")
+        .expect(1)
+        .create();
+
+    let result = Client::builder(
+        server.url().parse().expect("url"),
+        SecretString::from("hsk_example"),
+    )
+    .transient_retries(2, Duration::from_millis(1))
+    .build()
+    .expect("client")
+    .list_vendors(&ListVendorsParams::default());
+
+    assert!(
+        result.is_err(),
+        "should not retry when Retry-After exceeds max_wait"
+    );
+    unavailable.assert();
+}
+
+#[test]
+fn a_connection_error_is_retried() {
+    // Bind to port 0 to get an ephemeral port, then drop the listener to free it.
+    // The next connection attempt to that port will be refused.
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    drop(listener);
+
+    let url = format!("http://127.0.0.1:{port}");
+    let retry_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = std::sync::Arc::clone(&retry_count);
+
+    let result = Client::builder(url.parse().expect("url"), SecretString::from("hsk_example"))
+        .transient_retries(2, Duration::from_millis(1))
+        .retry_observer(move |_event| {
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        })
+        .build()
+        .expect("client")
+        .list_vendors(&ListVendorsParams::default());
+
+    assert!(result.is_err(), "should fail with a connection error");
+    assert!(matches!(result.expect_err("error"), Error::Transport(_)));
+    let retries = retry_count.load(std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(retries, 2, "should have retried exactly 2 times");
+}
+
+#[test]
+fn retry_observer_receives_expected_events() {
+    let mut server = mockito::Server::new();
+    let unavailable = server
+        .mock("GET", "/v1/vendors")
+        .with_status(503)
+        .expect(2)
+        .create();
+    let success = server
+        .mock("GET", "/v1/vendors")
+        .with_status(200)
+        .with_body(page_of_nothing())
+        .expect(1)
+        .create();
+
+    let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let collected = std::sync::Arc::clone(&events);
+
+    let result = Client::builder(
+        server.url().parse().expect("url"),
+        SecretString::from("hsk_example"),
+    )
+    .transient_retries(2, Duration::from_millis(1))
+    .retry_observer(move |event| {
+        if let Ok(mut e) = collected.lock() {
+            e.push((event.attempt, event.reason.to_owned()));
+        }
+    })
+    .build()
+    .expect("client")
+    .list_vendors(&ListVendorsParams::default());
+
+    assert!(result.is_ok());
+    let collected_events = events.lock().expect("lock");
+    assert_eq!(
+        collected_events.len(),
+        2,
+        "should have exactly 2 retry events"
+    );
+    assert_eq!(collected_events[0].0, 1, "first retry should be attempt 1");
+    assert!(
+        collected_events[0].1.contains("503"),
+        "first retry reason should mention 503"
+    );
+    assert_eq!(collected_events[1].0, 2, "second retry should be attempt 2");
+    assert!(
+        collected_events[1].1.contains("503"),
+        "second retry reason should mention 503"
+    );
+    unavailable.assert();
+    success.assert();
 }
