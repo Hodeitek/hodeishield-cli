@@ -19,7 +19,7 @@ Credentials:
 
 Exit codes:
   0 ok · 1 error · 2 usage · 3 not authenticated · 4 missing scope · 5 not found
-  6 rate limited · 7 API unreachable or failing";
+  6 rate limited · 7 API unreachable or failing · 8 tenant licence not in force";
 
 /// Read-only command-line client for HodeiShield.
 ///

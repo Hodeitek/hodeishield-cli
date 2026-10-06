@@ -184,6 +184,56 @@ fn a_missing_scope_exits_4_and_names_the_framework_scope() {
 }
 
 #[test]
+fn an_inactive_licence_exits_8_without_blaming_a_scope() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    server
+        .mock("GET", "/v1/vendors")
+        .match_query(mockito::Matcher::Any)
+        .with_status(403)
+        .with_header("x-request-id", "req_lic")
+        .with_body(
+            r#"{"error":{"code":"forbidden","message":"no licence","request_id":"req_lic","details":{"code":"LICENCE_INACTIVE","licence":"suspended"}}}"#,
+        )
+        .create();
+    let output = env
+        .api(&server)
+        .args(["vendors", "list"])
+        .output()
+        .expect("run");
+    assert_eq!(output.status.code(), Some(8), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("licence is not in force (licence: suspended)"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("tenant administrator"), "{stderr}");
+    assert!(stderr.contains("request id: req_lic"), "{stderr}");
+    assert!(!stderr.contains("scope"), "no scope is blamed: {stderr}");
+    assert_no_key(&output);
+}
+
+#[test]
+fn an_unexpected_licence_state_is_not_echoed() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    server
+        .mock("GET", "/v1/vendors")
+        .match_query(mockito::Matcher::Any)
+        .with_status(403)
+        .with_body(
+            r#"{"error":{"code":"forbidden","message":"no","request_id":"r","details":{"code":"LICENCE_INACTIVE","licence":"\u001b[31mred"}}}"#,
+        )
+        .create();
+    env.api(&server)
+        .args(["vendors", "list"])
+        .assert()
+        .code(8)
+        .stderr(predicate::str::contains("licence is not in force."))
+        .stderr(predicate::str::contains("red").not());
+}
+
+#[test]
 fn a_rejected_key_exits_3_without_printing_it() {
     let env = Env::new();
     let mut server = mockito::Server::new();
