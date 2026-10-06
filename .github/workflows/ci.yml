@@ -114,9 +114,9 @@ jobs:
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
-      # Pinned to the version validated locally against deny.toml.
+      # Pinned to the version validated locally against deny.toml. Bumped by hand in the periodic
+      # dependency review (CONTRIBUTING.md).
       - name: Install cargo-deny
-        # renovate: datasource=crate depName=cargo-deny
         run: cargo install cargo-deny --locked --version 0.20.2
 
       - name: cargo deny check
@@ -137,9 +137,9 @@ jobs:
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
-      # Pinned to the version validated locally.
+      # Pinned to the version validated locally. Bumped by hand in the periodic dependency review
+      # (CONTRIBUTING.md).
       - name: Install cargo-audit
-        # renovate: datasource=crate depName=cargo-audit
         run: cargo install cargo-audit --locked --version 0.22.2
 
       - name: cargo audit

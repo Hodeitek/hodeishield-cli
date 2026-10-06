@@ -41,6 +41,20 @@ cargo deny check && cargo audit   # dependency policy and advisories
 CI runs the tests on Linux, macOS and Windows and the other checks on Linux; a pull request needs
 them all green.
 
+### Dependency updates
+
+Dependabot (`.github/dependabot.yml`) proposes cargo and GitHub Actions updates once a week, against
+`dev`, for versions published at least seven days earlier. Major versions are left to a person.
+
+Three pins are not covered by Dependabot and are reviewed by hand in the periodic dependency review:
+
+- the Rust toolchain in `rust-toolchain.toml` (latest stable, at least seven days old);
+- `cargo-deny` and `cargo-audit`, installed with `--version` in `.github/workflows/ci.yml`.
+
+The same review runs `cargo audit` and `cargo outdated`, and checks that every action is pinned by
+full commit SHA. The MSRV (`rust-version` in `Cargo.toml`) is a compatibility promise, not a
+dependency: it changes only by a deliberate decision.
+
 ### The API client is generated
 
 `crates/hodeishield-api/src/generated.rs` is generated from the vendored OpenAPI document
