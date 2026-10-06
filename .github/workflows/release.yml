@@ -26,6 +26,8 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       dry_run: ${{ steps.version.outputs.dry_run }}
+      sign_macos: ${{ steps.signing.outputs.sign_macos }}
+      sign_windows: ${{ steps.signing.outputs.sign_windows }}
     steps:
       - name: Determine version and mode
         id: version
@@ -43,6 +45,36 @@ jobs:
             echo "version=${REF_NAME#v}" >> "$GITHUB_OUTPUT"
             echo "dry_run=false" >> "$GITHUB_OUTPUT"
           fi
+
+      # Platform signing happens only for a pushed release tag, and only once the maintainers have
+      # provisioned it and set the variable to exactly "true". A manual run never signs. GitHub's
+      # comparison is case-sensitive, so "True" or "1" would silently mean "off": refuse them.
+      - name: Decide platform signing
+        id: signing
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          MACOS_SIGNING_ENABLED: ${{ vars.MACOS_SIGNING_ENABLED }}
+          WINDOWS_SIGNING_ENABLED: ${{ vars.WINDOWS_SIGNING_ENABLED }}
+        run: |
+          set -euo pipefail
+          for name in MACOS_SIGNING_ENABLED WINDOWS_SIGNING_ENABLED; do
+            case "${!name}" in
+              ""|true|false) ;;
+              *) echo "::error::$name must be exactly 'true', 'false' or unset."; exit 1 ;;
+            esac
+          done
+          release=false
+          if [ "$EVENT_NAME" = "push" ] && [[ "$REF" == refs/tags/v* ]]; then
+            release=true
+          fi
+          sign_macos=false
+          sign_windows=false
+          if [ "$release" = true ] && [ "$MACOS_SIGNING_ENABLED" = true ]; then sign_macos=true; fi
+          if [ "$release" = true ] && [ "$WINDOWS_SIGNING_ENABLED" = true ]; then sign_windows=true; fi
+          echo "sign_macos=$sign_macos" >> "$GITHUB_OUTPUT"
+          echo "sign_windows=$sign_windows" >> "$GITHUB_OUTPUT"
+          echo "macOS signing: $sign_macos; Windows signing: $sign_windows"
 
   build-linux:
     name: build (${{ matrix.target }})
@@ -133,23 +165,196 @@ jobs:
             "target/aarch64-apple-darwin/release/${BIN_NAME}"
           lipo -info "target/universal-apple-darwin/release/${BIN_NAME}"
 
-      - name: Package archive
-        env:
-          VERSION: ${{ needs.version.outputs.version }}
-          TARGET: universal-apple-darwin
+      - name: Stage the unsigned binary for the signing job
         run: |
           set -euo pipefail
-          stage="$(mktemp -d)/hodeishield-${VERSION}-${TARGET}"
-          mkdir -p "$stage"
-          cp "target/${TARGET}/release/${BIN_NAME}" "$stage/"
-          cp LICENSE NOTICE README.md "$stage/"
-          tar -C "$(dirname "$stage")" -czf "hodeishield-${VERSION}-${TARGET}.tar.gz" "$(basename "$stage")"
+          mkdir stage
+          cp "target/universal-apple-darwin/release/${BIN_NAME}" LICENSE NOTICE README.md stage/
+
+      - name: Upload the unsigned binary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: unsigned-universal-apple-darwin
+          path: stage/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # Signs, notarizes and packages the macOS binary. Split from the build on purpose: the Developer
+  # ID keys and the App Store Connect key must never share a runner with `cargo build`, which runs
+  # every dependency's build script. This job checks nothing out and runs no repository code, only
+  # inline steps and pinned actions.
+  #
+  # Two artifacts when signing is on:
+  # - the .tar.gz as before, with a signed and notarized binary. A bare executable cannot carry a
+  #   stapled ticket, so Gatekeeper confirms its notarization online on first run; curl and
+  #   scripts are unaffected (they set no quarantine attribute).
+  # - a .pkg that installs /usr/local/bin/hodeishield, signed with Developer ID Installer,
+  #   notarized and stapled, so it also passes Gatekeeper offline and can be deployed by MDM.
+  #
+  # Environment secrets (release-signing): MACOS_CERTIFICATE and MACOS_CERTIFICATE_PASSWORD
+  # (Developer ID Application, base64 .p12), MACOS_SIGNING_IDENTITY, MACOS_INSTALLER_CERTIFICATE,
+  # MACOS_INSTALLER_CERTIFICATE_PASSWORD, MACOS_INSTALLER_IDENTITY (Developer ID Installer),
+  # APPLE_NOTARIZATION_KEY (base64 .p8), APPLE_NOTARIZATION_KEY_ID, APPLE_NOTARIZATION_ISSUER_ID.
+  sign-macos:
+    name: sign and package (universal-apple-darwin)
+    needs: [version, build-macos]
+    runs-on: macos-latest
+    timeout-minutes: 60
+    # The environment, and its required reviewer, only when this run signs. An empty name means
+    # no environment, so a dry run never waits for approval.
+    environment: ${{ needs.version.outputs.sign_macos == 'true' && 'release-signing' || '' }}
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      TARGET: universal-apple-darwin
+      SIGN: ${{ needs.version.outputs.sign_macos }}
+    steps:
+      - name: Download the unsigned binary
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: unsigned-universal-apple-darwin
+          path: stage
+
+      # Anything else in the hand-off would be packaged, and possibly signed, as ours.
+      - name: Refuse anything but the expected files
+        run: |
+          set -euo pipefail
+          found="$(cd stage && find . -mindepth 1 | sed 's|^\./||' | LC_ALL=C sort | tr '\n' ' ')"
+          if [ "$found" != "LICENSE NOTICE README.md hodeishield " ]; then
+            echo "::error::Unexpected hand-off contents: $found"
+            exit 1
+          fi
+          chmod 0755 "stage/${BIN_NAME}"
+
+      - name: Check the signing inputs are present
+        if: env.SIGN == 'true'
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          MACOS_INSTALLER_CERTIFICATE: ${{ secrets.MACOS_INSTALLER_CERTIFICATE }}
+          MACOS_INSTALLER_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_INSTALLER_CERTIFICATE_PASSWORD }}
+          MACOS_INSTALLER_IDENTITY: ${{ secrets.MACOS_INSTALLER_IDENTITY }}
+          APPLE_NOTARIZATION_KEY: ${{ secrets.APPLE_NOTARIZATION_KEY }}
+          APPLE_NOTARIZATION_KEY_ID: ${{ secrets.APPLE_NOTARIZATION_KEY_ID }}
+          APPLE_NOTARIZATION_ISSUER_ID: ${{ secrets.APPLE_NOTARIZATION_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for name in MACOS_CERTIFICATE MACOS_CERTIFICATE_PASSWORD MACOS_SIGNING_IDENTITY \
+                      MACOS_INSTALLER_CERTIFICATE MACOS_INSTALLER_CERTIFICATE_PASSWORD \
+                      MACOS_INSTALLER_IDENTITY APPLE_NOTARIZATION_KEY APPLE_NOTARIZATION_KEY_ID \
+                      APPLE_NOTARIZATION_ISSUER_ID; do
+            if [ -z "${!name}" ]; then
+              echo "::error::MACOS_SIGNING_ENABLED is true but the secret $name is missing."
+              missing=1
+            fi
+          done
+          exit "$missing"
+
+      - name: Import the Developer ID certificates into a temporary keychain
+        if: env.SIGN == 'true'
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_INSTALLER_CERTIFICATE: ${{ secrets.MACOS_INSTALLER_CERTIFICATE }}
+          MACOS_INSTALLER_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_INSTALLER_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password="$(openssl rand -hex 24)"
+          echo "::add-mask::$password"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 1800 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          printf '%s' "$MACOS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/application.p12"
+          printf '%s' "$MACOS_INSTALLER_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/installer.p12"
+          security import "$RUNNER_TEMP/application.p12" -k "$keychain" \
+            -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security import "$RUNNER_TEMP/installer.p12" -k "$keychain" \
+            -P "$MACOS_INSTALLER_CERTIFICATE_PASSWORD" -T /usr/bin/productsign
+          rm -f "$RUNNER_TEMP/application.p12" "$RUNNER_TEMP/installer.p12"
+          security list-keychains -d user -s "$keychain" login.keychain
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain" > /dev/null
+
+      - name: Sign the binary (hardened runtime, secure timestamp)
+        if: env.SIGN == 'true'
+        env:
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+          codesign --force --timestamp --options runtime \
+            --identifier com.hodeitek.hodeishield \
+            --keychain "$RUNNER_TEMP/signing.keychain-db" \
+            --sign "$MACOS_SIGNING_IDENTITY" "stage/${BIN_NAME}"
+          codesign --verify --strict --verbose=2 "stage/${BIN_NAME}"
+          codesign --display --verbose=2 "stage/${BIN_NAME}"
+
+      - name: Build and sign the installer package
+        if: env.SIGN == 'true'
+        env:
+          MACOS_INSTALLER_IDENTITY: ${{ secrets.MACOS_INSTALLER_IDENTITY }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/pkgroot"
+          mkdir -p "$root/usr/local/bin"
+          cp -p "stage/${BIN_NAME}" "$root/usr/local/bin/"
+          pkgbuild --root "$root" --install-location / \
+            --identifier com.hodeitek.hodeishield --version "$VERSION" \
+            "$RUNNER_TEMP/unsigned.pkg"
+          mkdir -p dist
+          productsign --timestamp --keychain "$RUNNER_TEMP/signing.keychain-db" \
+            --sign "$MACOS_INSTALLER_IDENTITY" \
+            "$RUNNER_TEMP/unsigned.pkg" "dist/hodeishield-${VERSION}-${TARGET}.pkg"
+          pkgutil --check-signature "dist/hodeishield-${VERSION}-${TARGET}.pkg"
+
+      - name: Remove the temporary keychain
+        if: always() && env.SIGN == 'true'
+        run: |
+          security delete-keychain "$RUNNER_TEMP/signing.keychain-db" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP/application.p12" "$RUNNER_TEMP/installer.p12"
+
+      # notarytool takes a zip, a pkg or a dmg, not a bare executable or a tar.gz: the binary goes
+      # in a zip used only for the submission. Its ticket is then known to Gatekeeper online.
+      - name: Notarize the binary and the package, staple the package
+        if: env.SIGN == 'true'
+        env:
+          APPLE_NOTARIZATION_KEY: ${{ secrets.APPLE_NOTARIZATION_KEY }}
+          APPLE_NOTARIZATION_KEY_ID: ${{ secrets.APPLE_NOTARIZATION_KEY_ID }}
+          APPLE_NOTARIZATION_ISSUER_ID: ${{ secrets.APPLE_NOTARIZATION_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          key="$RUNNER_TEMP/notary.p8"
+          trap 'rm -f "$key"' EXIT
+          printf '%s' "$APPLE_NOTARIZATION_KEY" | base64 --decode > "$key"
+          notarize() {
+            xcrun notarytool submit "$1" --key "$key" --key-id "$APPLE_NOTARIZATION_KEY_ID" \
+              --issuer "$APPLE_NOTARIZATION_ISSUER_ID" --wait --timeout 30m
+          }
+          ditto -c -k "stage/${BIN_NAME}" "$RUNNER_TEMP/notarize.zip"
+          notarize "$RUNNER_TEMP/notarize.zip"
+          pkg="dist/hodeishield-${VERSION}-${TARGET}.pkg"
+          notarize "$pkg"
+          xcrun stapler staple "$pkg"
+          xcrun stapler validate "$pkg"
+          spctl --assess --type install --verbose=2 "$pkg"
+
+      - name: Package archive
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          dir="$RUNNER_TEMP/hodeishield-${VERSION}-${TARGET}"
+          mkdir -p "$dir"
+          cp -p stage/* "$dir/"
+          tar -C "$RUNNER_TEMP" -czf "dist/hodeishield-${VERSION}-${TARGET}.tar.gz" "$(basename "$dir")"
+          ls -l dist
 
       - name: Upload archive
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: archive-universal-apple-darwin
-          path: hodeishield-*.tar.gz
+          path: dist/*
           if-no-files-found: error
           retention-days: 7
 
@@ -169,26 +374,144 @@ jobs:
       - name: Build
         run: cargo build --release --locked --target x86_64-pc-windows-msvc -p hodeishield-cli
 
-      - name: Package archive
+      - name: Stage the unsigned executable for the signing job
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path stage | Out-Null
+          Copy-Item -Path "target/x86_64-pc-windows-msvc/release/$env:BIN_NAME.exe", "LICENSE", "NOTICE", "README.md" -Destination stage
+
+      - name: Upload the unsigned executable
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: unsigned-x86_64-pc-windows-msvc
+          path: stage/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # Signs hodeishield.exe with Authenticode through Azure Artifact Signing, then packages it.
+  # There is no certificate, password or .pfx anywhere: the key stays in Microsoft's HSM.
+  # azure/login trades this job's GitHub OIDC token for an Azure session, through a federated
+  # credential that trusts only this repository's `release-signing` environment, and the signing
+  # action uses that session. Split from the build for the same reason as `sign-macos`: the job
+  # that can mint the token checks nothing out and runs no repository or dependency code.
+  #
+  # Environment secrets (release-signing): AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID
+  # (directory identifiers, kept out of public logs). Environment variables: AZURE_SIGNING_ENDPOINT,
+  # AZURE_SIGNING_ACCOUNT_NAME, AZURE_CERTIFICATE_PROFILE_NAME.
+  sign-windows:
+    name: sign and package (x86_64-pc-windows-msvc)
+    needs: [version, build-windows]
+    runs-on: windows-latest
+    timeout-minutes: 30
+    environment: ${{ needs.version.outputs.sign_windows == 'true' && 'release-signing' || '' }}
+    permissions:
+      contents: read
+      id-token: write # OIDC federation to Azure; used only when this run signs
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      SIGN: ${{ needs.version.outputs.sign_windows }}
+    steps:
+      - name: Download the unsigned executable
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: unsigned-x86_64-pc-windows-msvc
+          path: stage
+
+      # Anything else in the hand-off would be packaged, and possibly signed, as ours.
+      - name: Refuse anything but the expected files
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $root = (Resolve-Path stage).Path
+          $found = @(Get-ChildItem -LiteralPath stage -Recurse -Force | ForEach-Object {
+            $_.FullName.Substring($root.Length).TrimStart('\', '/')
+          } | Sort-Object)
+          $expected = @("hodeishield.exe", "LICENSE", "NOTICE", "README.md") | Sort-Object
+          if (Compare-Object $found $expected) {
+            Write-Host "::error::Unexpected hand-off contents: $($found -join ', ')"
+            exit 1
+          }
+
+      - name: Check the signing inputs are present
+        if: env.SIGN == 'true'
         shell: pwsh
         env:
-          VERSION: ${{ needs.version.outputs.version }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          AZURE_SIGNING_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGNING_ACCOUNT_NAME: ${{ vars.AZURE_SIGNING_ACCOUNT_NAME }}
+          AZURE_CERTIFICATE_PROFILE_NAME: ${{ vars.AZURE_CERTIFICATE_PROFILE_NAME }}
         run: |
-          $target = "x86_64-pc-windows-msvc"
-          $stageName = "hodeishield-$env:VERSION-$target"
-          $stage = Join-Path $env:RUNNER_TEMP $stageName
-          New-Item -ItemType Directory -Path $stage | Out-Null
-          Copy-Item "target/$target/release/$env:BIN_NAME.exe" $stage
-          Copy-Item "LICENSE" $stage
-          Copy-Item "NOTICE" $stage
-          Copy-Item "README.md" $stage
-          Compress-Archive -Path "$stage/*" -DestinationPath "hodeishield-$env:VERSION-$target.zip"
+          $missing = @()
+          foreach ($name in @("AZURE_CLIENT_ID", "AZURE_TENANT_ID", "AZURE_SUBSCRIPTION_ID",
+                              "AZURE_SIGNING_ACCOUNT_NAME", "AZURE_CERTIFICATE_PROFILE_NAME")) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) { $missing += $name }
+          }
+          if ($env:AZURE_SIGNING_ENDPOINT -notmatch '^https://[a-z0-9]+\.codesigning\.azure\.net/?$') {
+            $missing += "AZURE_SIGNING_ENDPOINT (https://<region>.codesigning.azure.net)"
+          }
+          foreach ($item in $missing) {
+            Write-Host "::error::WINDOWS_SIGNING_ENABLED is true but $item is missing or malformed."
+          }
+          if ($missing.Count -gt 0) { exit 1 }
+
+      - name: Azure login (OIDC)
+        if: env.SIGN == 'true'
+        uses: Azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # The file is named, never a folder or a pattern: only what this job expects gets signed.
+      - name: Sign hodeishield.exe (Azure Artifact Signing)
+        if: env.SIGN == 'true'
+        uses: Azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ vars.AZURE_CERTIFICATE_PROFILE_NAME }}
+          files: ${{ github.workspace }}\stage\hodeishield.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      # Drop the session before any other action runs. `always()` so it also runs after a failure.
+      - name: Azure logout
+        if: always() && env.SIGN == 'true'
+        shell: pwsh
+        run: |
+          az logout 2>$null
+          exit 0
+
+      - name: Verify the Authenticode signature
+        if: env.SIGN == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $signature = Get-AuthenticodeSignature -LiteralPath stage\hodeishield.exe
+          $signature | Format-List Status, StatusMessage, SignerCertificate, TimeStamperCertificate
+          if ($signature.Status -ne "Valid" -or -not $signature.TimeStamperCertificate) {
+            Write-Host "::error::hodeishield.exe is not validly signed and timestamped."
+            exit 1
+          }
+
+      - name: Package archive
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $stageName = "hodeishield-$env:VERSION-x86_64-pc-windows-msvc"
+          $dir = Join-Path $env:RUNNER_TEMP $stageName
+          New-Item -ItemType Directory -Path $dir, dist | Out-Null
+          Copy-Item stage/* $dir
+          Compress-Archive -Path "$dir/*" -DestinationPath "dist/$stageName.zip"
 
       - name: Upload archive
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: archive-x86_64-pc-windows-msvc
-          path: hodeishield-*.zip
+          path: dist/*.zip
           if-no-files-found: error
           retention-days: 7
 
@@ -198,7 +521,7 @@ jobs:
   # release.
   publish:
     name: publish (draft release)
-    needs: [version, build-linux, build-macos, build-windows]
+    needs: [version, build-linux, sign-macos, sign-windows]
     # Only a pushed tag publishes; a manual run is always a dry run, whatever the ref is called.
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && needs.version.outputs.dry_run != 'true'
     runs-on: ubuntu-latest
@@ -250,7 +573,7 @@ jobs:
         working-directory: dist
         run: |
           set -euo pipefail
-          for f in hodeishield-*.tar.gz hodeishield-*.zip SHA256SUMS; do
+          for f in hodeishield-*.tar.gz hodeishield-*.zip hodeishield-*.pkg SHA256SUMS; do
             [ -e "$f" ] || continue
             cosign sign-blob --yes --bundle "${f}.sigstore.json" "$f"
           done
