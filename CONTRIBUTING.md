@@ -11,6 +11,19 @@ Thanks for helping. Bug reports, fixes and documentation improvements are welcom
 - **Do not include real data** in issues, tests or examples: no real API keys, tokens, tenant names,
   hostnames other than the public `*.hodeishield.com`, or customer data. Use `example.com` /
   `example.test` and made-up values.
+- **Write in English.** Issues, pull requests, commit messages, milestones and labels are in
+  English. Quote any product text as it appears, in its own language.
+
+## Issues
+
+Each issue covers one actionable thing. Its title is lowercase and names the measured defect or
+gap, not the fix (e.g. `whoami does not show which tenant the credential reads`). Its body has
+these sections:
+
+- **Measured**: the evidence, such as a `file:line`, URL, command or output. Mark anything assumed.
+- **Why it matters**: who it affects.
+- **Acceptance criteria**: checks someone else can verify.
+- **Depends on**: other issues, including in other repositories, or `Nothing.`
 
 ## Development
 
@@ -47,7 +60,8 @@ cargo run -- vendors list
 
 - Branch from `dev` and open the pull request against `dev`. `main` only receives releases.
 - Keep changes focused, with tests for new behaviour.
-- Commits must be signed (GPG or SSH) and use a clear, imperative message.
+- Commits must be signed (GPG or SSH) and use a clear, imperative message in English. Reference
+  the issue it resolves with `Closes #N` in the commit message.
 - Commit messages and pull request descriptions must not mention Claude: no session trailer, no
   co-author line, no claude.ai link, and not the word itself. Enable the local check with
   `git config core.hooksPath .githooks`; CI runs the same check on every pull request.
