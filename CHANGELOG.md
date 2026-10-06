@@ -5,6 +5,13 @@ Notable changes to the `hodeishield` CLI. Releases up to 0.1.1 are described on 
 
 ## Unreleased
 
+### Added
+
+- `--csv` on every `list` command and on `compliance controls` prints the items as CSV (RFC 4180,
+  UTF-8, the same fields as `--json`), also with `--all`. Text cells that a spreadsheet would run
+  as a formula are prefixed with `'`.
+  ([#19](https://github.com/Hodeitek/hodeishield-cli/issues/19))
+
 ### Changed (scripting surface)
 
 - **New exit code 8**: the tenant's licence is not in force. A `403` that the API marks as

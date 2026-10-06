@@ -10,7 +10,6 @@ mod config;
 mod failure;
 mod output;
 
-use clap::Parser;
 use std::io::{ErrorKind, Write};
 use std::process::ExitCode;
 
@@ -21,7 +20,7 @@ pub const USER_AGENT: &str = concat!(
 );
 
 fn main() -> ExitCode {
-    let cli = cli::Cli::parse();
+    let cli = cli::Cli::parse_checked();
     let stdout = std::io::stdout();
     let mut out = std::io::BufWriter::new(stdout.lock());
     let result = commands::run(cli, &mut out);

@@ -186,6 +186,25 @@ what it accepts.
 hodeishield alerts list --status open --all --json | jq -r '.[] | [.severity, .title] | @tsv'
 ```
 
+### CSV output
+
+`--csv` prints the items of any `list` command, and of `compliance controls`, as CSV instead of a
+table. It works with `--all`, and not with `--json`:
+
+```sh
+hodeishield vendors list --all --csv > vendors.csv
+```
+
+- The columns are the fields `--json` shows for each item, in the API's order. A nested value (a
+  list or an object) is written as compact JSON.
+- The file follows RFC 4180: a header row, fields quoted when needed, CRLF line ends. It is UTF-8
+  without a byte order mark, which suits scripts; to open it in Excel, use Data → From Text/CSV and
+  choose the file origin "65001: Unicode (UTF-8)".
+- A text cell that starts with `=`, `+`, `-`, `@`, a tab or a carriage return gets a leading `'`,
+  so a spreadsheet shows it as text instead of running it as a formula. Numbers are left as they
+  are, so `-5` stays a number.
+- No items print nothing on standard output; the count and paging notes go to standard error.
+
 ### Exit codes
 
 | Code | Meaning |
