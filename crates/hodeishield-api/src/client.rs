@@ -6,7 +6,9 @@ use reqwest::StatusCode;
 use reqwest::header::{ACCEPT, AUTHORIZATION, HeaderMap, HeaderValue};
 use secrecy::{ExposeSecret, SecretString};
 use serde::de::DeserializeOwned;
+use std::collections::hash_map::RandomState;
 use std::fmt;
+use std::hash::{BuildHasher, Hasher};
 use std::io::Read;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -116,7 +118,22 @@ pub struct RequestEvent<'a> {
     pub elapsed: Duration,
 }
 
+/// What the client reports before it sends a request again, for `--verbose`. It carries no header
+/// and no credential.
+#[derive(Debug, Clone)]
+pub struct RetryEvent<'a> {
+    /// The URL, which never contains a credential.
+    pub url: &'a Url,
+    /// Which retry this is, from 1.
+    pub attempt: u32,
+    /// Why, e.g. `HTTP 503`, `connection error` or `timeout`.
+    pub reason: &'a str,
+    /// How long the client waits before sending it.
+    pub wait: Duration,
+}
+
 type Observer = Arc<dyn Fn(&RequestEvent<'_>) + Send + Sync>;
+type RetryObserver = Arc<dyn Fn(&RetryEvent<'_>) + Send + Sync>;
 type Renew = Arc<dyn Fn() -> Option<SecretString> + Send + Sync>;
 
 /// Builds a [`Client`].
@@ -127,7 +144,10 @@ pub struct ClientBuilder {
     timeout: Duration,
     max_rate_limit_retries: u32,
     max_retry_wait: Duration,
+    max_transient_retries: u32,
+    transient_retry_base_delay: Duration,
     observer: Option<Observer>,
+    retry_observer: Option<RetryObserver>,
     renew: Option<Renew>,
 }
 
@@ -156,12 +176,24 @@ impl ClientBuilder {
         self
     }
 
-    /// How many times a `429` is retried after its `Retry-After`, and the longest wait accepted.
-    /// Defaults to 2 retries of at most 60 s. A longer `Retry-After` is returned as an error.
+    /// How many times a `429` is retried after its `Retry-After`, and the longest `Retry-After`
+    /// accepted, for a `429` or a transient failure. Defaults to 2 retries of at most 60 s. A
+    /// longer `Retry-After` is returned as an error.
     #[must_use]
     pub fn rate_limit_retries(mut self, retries: u32, max_wait: Duration) -> Self {
         self.max_rate_limit_retries = retries;
         self.max_retry_wait = max_wait;
+        self
+    }
+
+    /// How many times a transient failure (`502`, `503`, `504`, a connection error or a timeout) is
+    /// retried, and the base of the exponential backoff between retries: a random wait up to
+    /// `base · 2^n`, at most 8 s, unless the answer has a `Retry-After`. Defaults to 2 retries with
+    /// a base of 500 ms. Only `GET` requests exist in this client, so a retry never repeats a change.
+    #[must_use]
+    pub fn transient_retries(mut self, retries: u32, base_delay: Duration) -> Self {
+        self.max_transient_retries = retries;
+        self.transient_retry_base_delay = base_delay;
         self
     }
 
@@ -172,6 +204,16 @@ impl ClientBuilder {
         observer: impl Fn(&RequestEvent<'_>) + Send + Sync + 'static,
     ) -> Self {
         self.observer = Some(Arc::new(observer));
+        self
+    }
+
+    /// Called before every retry, of a `429` or of a transient failure.
+    #[must_use]
+    pub fn retry_observer(
+        mut self,
+        observer: impl Fn(&RetryEvent<'_>) + Send + Sync + 'static,
+    ) -> Self {
+        self.retry_observer = Some(Arc::new(observer));
         self
     }
 
@@ -221,7 +263,10 @@ impl ClientBuilder {
             credential: Mutex::new(self.credential),
             max_rate_limit_retries: self.max_rate_limit_retries,
             max_retry_wait: self.max_retry_wait,
+            max_transient_retries: self.max_transient_retries,
+            transient_retry_base_delay: self.transient_retry_base_delay,
             observer: self.observer,
+            retry_observer: self.retry_observer,
             renew: self.renew,
         })
     }
@@ -235,7 +280,10 @@ pub struct Client {
     credential: Mutex<SecretString>,
     max_rate_limit_retries: u32,
     max_retry_wait: Duration,
+    max_transient_retries: u32,
+    transient_retry_base_delay: Duration,
     observer: Option<Observer>,
+    retry_observer: Option<RetryObserver>,
     renew: Option<Renew>,
 }
 
@@ -268,7 +316,10 @@ impl Client {
             timeout: Duration::from_secs(30),
             max_rate_limit_retries: 2,
             max_retry_wait: Duration::from_secs(60),
+            max_transient_retries: 2,
+            transient_retry_base_delay: Duration::from_millis(500),
             observer: None,
+            retry_observer: None,
             renew: None,
         }
     }
@@ -305,6 +356,19 @@ impl Client {
         Ok(value)
     }
 
+    /// Reports a retry to the retry observer, then waits.
+    fn before_retry(&self, url: &Url, attempt: u32, reason: &str, wait: Duration) {
+        if let Some(observer) = &self.retry_observer {
+            observer(&RetryEvent {
+                url,
+                attempt,
+                reason,
+                wait,
+            });
+        }
+        std::thread::sleep(wait);
+    }
+
     pub(crate) fn get<T: DeserializeOwned>(
         &self,
         operation: &'static Operation,
@@ -312,16 +376,34 @@ impl Client {
         query: Vec<(&'static str, String)>,
     ) -> Result<ApiResponse<T>, Error> {
         let url = self.url(&path, &query);
-        let mut retries = 0;
+        let mut rate_limit_retries = 0;
+        let mut transient_retries = 0;
         let mut renewed = false;
         loop {
             let started = Instant::now();
-            let response = self
+            let response = match self
                 .http
                 .get(url.clone())
                 .header(AUTHORIZATION, self.authorization()?)
                 .send()
-                .map_err(Error::Transport)?;
+            {
+                Ok(response) => response,
+                Err(e)
+                    if (e.is_connect() || e.is_timeout())
+                        && transient_retries < self.max_transient_retries =>
+                {
+                    let reason = if e.is_connect() {
+                        "connection error"
+                    } else {
+                        "timeout"
+                    };
+                    let wait = backoff(self.transient_retry_base_delay, transient_retries);
+                    transient_retries += 1;
+                    self.before_retry(&url, transient_retries, reason, wait);
+                    continue;
+                }
+                Err(e) => return Err(Error::Transport(e)),
+            };
             let status = response.status();
             let meta = ResponseMeta::from_headers(status, response.headers());
             if let Some(observer) = &self.observer {
@@ -346,13 +428,40 @@ impl Client {
                 })?;
                 return Ok(ApiResponse { data, raw, meta });
             }
+
             if status == StatusCode::TOO_MANY_REQUESTS
-                && retries < self.max_rate_limit_retries
+                && rate_limit_retries < self.max_rate_limit_retries
                 && let Some(wait) = meta.retry_after.map(Duration::from_secs)
                 && wait <= self.max_retry_wait
             {
-                retries += 1;
-                std::thread::sleep(wait);
+                rate_limit_retries += 1;
+                self.before_retry(&url, rate_limit_retries, "HTTP 429", wait);
+                continue;
+            }
+
+            // A gateway or overloaded server: the request is a GET, so sending it again is safe.
+            // A `Retry-After` longer than the caller accepts ends the request instead.
+            if matches!(
+                status,
+                StatusCode::BAD_GATEWAY
+                    | StatusCode::SERVICE_UNAVAILABLE
+                    | StatusCode::GATEWAY_TIMEOUT
+            ) && transient_retries < self.max_transient_retries
+            {
+                let wait = match meta.retry_after.map(Duration::from_secs) {
+                    Some(wait) if wait > self.max_retry_wait => {
+                        return Err(Error::from_response(operation, meta, &body));
+                    }
+                    Some(wait) => wait,
+                    None => backoff(self.transient_retry_base_delay, transient_retries),
+                };
+                transient_retries += 1;
+                self.before_retry(
+                    &url,
+                    transient_retries,
+                    &format!("HTTP {}", status.as_u16()),
+                    wait,
+                );
                 continue;
             }
             if status == StatusCode::UNAUTHORIZED
@@ -370,6 +479,24 @@ impl Client {
             return Err(Error::from_response(operation, meta, &body));
         }
     }
+}
+
+/// Longest wait between two retries of a transient failure.
+const MAX_BACKOFF: Duration = Duration::from_secs(8);
+
+/// The wait before retry `retry` (from 0): a uniformly random time up to `base · 2^retry`, capped at
+/// [`MAX_BACKOFF`] ("full jitter", so many clients failing at once do not retry in step).
+fn backoff(base: Duration, retry: u32) -> Duration {
+    let cap = base
+        .checked_mul(1_u32.checked_shl(retry).unwrap_or(u32::MAX))
+        .map_or(MAX_BACKOFF, |wait| wait.min(MAX_BACKOFF));
+    // `RandomState` is seeded randomly per process and per instance: enough for jitter, without a
+    // dependency for it.
+    let mut hasher = RandomState::new().build_hasher();
+    hasher.write_u32(retry);
+    let fraction = u128::from(hasher.finish());
+    let nanos = cap.as_nanos() * fraction / u128::from(u64::MAX);
+    Duration::from_nanos(u64::try_from(nanos).unwrap_or(u64::MAX))
 }
 
 /// Largest answer body this client reads: far above any `/v1` page, well below what would strain
@@ -519,6 +646,18 @@ mod tests {
         for bad in ["", ".", "..", "..."] {
             assert!(encode_path_segment(bad).is_err(), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn backoff_stays_under_its_exponential_cap() {
+        let base = Duration::from_millis(500);
+        for _ in 0..100 {
+            assert!(backoff(base, 0) <= base);
+            assert!(backoff(base, 1) <= base * 2);
+            assert!(backoff(base, 2) <= base * 4);
+            assert!(backoff(base, 40) <= MAX_BACKOFF);
+        }
+        assert_eq!(backoff(Duration::ZERO, 3), Duration::ZERO);
     }
 
     #[test]

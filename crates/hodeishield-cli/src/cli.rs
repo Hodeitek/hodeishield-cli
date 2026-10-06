@@ -51,7 +51,8 @@ pub struct Cli {
     #[arg(long, global = true, help_heading = "Global options")]
     pub json: bool,
 
-    /// Log each request (method, URL, status, request id) to stderr. Never logs credentials.
+    /// Log each request (method, URL, status, request id) and each retry to stderr. Never logs
+    /// credentials.
     #[arg(short, long, global = true, help_heading = "Global options")]
     pub verbose: bool,
 
