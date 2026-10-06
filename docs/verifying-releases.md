@@ -84,6 +84,42 @@ This confirms the archive was built by the `release.yml` GitHub Actions
 workflow, from the `Hodeitek/hodeishield-cli` source repository, at the tag
 you expect — not from a modified build or a malicious fork.
 
+## 5. Platform signatures (macOS and Windows)
+
+Releases built with platform signing also carry the signatures the operating systems check by
+themselves. They do not replace the steps above: they say the file comes from Hodeitek, not which
+workflow run built it.
+
+**macOS.** The `hodeishield` binary in `hodeishield-<version>-universal-apple-darwin.tar.gz` is
+signed with a Developer ID Application certificate, with the hardened runtime, and notarized by
+Apple. A bare executable cannot carry a stapled ticket, so Gatekeeper confirms the notarization
+online the first time it runs. The release also includes
+`hodeishield-<version>-universal-apple-darwin.pkg`, which installs `/usr/local/bin/hodeishield`. It
+is signed with a Developer ID Installer certificate, notarized and stapled, so it also passes
+Gatekeeper offline and suits deployment with an MDM.
+
+```sh
+codesign --verify --strict --verbose=2 ./hodeishield
+codesign --display --verbose=2 ./hodeishield 2>&1 | grep -E '^(Authority|TeamIdentifier|Timestamp)'
+spctl --assess --type execute --verbose=2 ./hodeishield   # "source=Notarized Developer ID"
+
+pkgutil --check-signature hodeishield-<version>-universal-apple-darwin.pkg
+spctl --assess --type install --verbose=2 hodeishield-<version>-universal-apple-darwin.pkg
+xcrun stapler validate hodeishield-<version>-universal-apple-darwin.pkg
+```
+
+The first `Authority` line must read `Developer ID Application: Hodeitek S.L.` and the package's
+`Developer ID Installer: Hodeitek S.L.`, both followed by the same team identifier.
+
+**Windows.** `hodeishield.exe` is signed with Authenticode and timestamped.
+
+```powershell
+Get-AuthenticodeSignature .\hodeishield.exe | Format-List Status, SignerCertificate, TimeStamperCertificate
+```
+
+`Status` must be `Valid` and the signer's subject must name Hodeitek S.L. In Explorer the same
+information is under Properties → Digital Signatures.
+
 ## Not yet
 
 The following distribution methods are planned but not part of this
