@@ -22,6 +22,8 @@ pub enum Kind {
     RateLimited,
     /// The API could not be reached or failed (network, 5xx). Exit code 7.
     Unavailable,
+    /// The tenant holds no licence in force (403 `LICENCE_INACTIVE`). Exit code 8.
+    LicenceInactive,
 }
 
 impl Kind {
@@ -33,6 +35,7 @@ impl Kind {
             Self::NotFound => 5,
             Self::RateLimited => 6,
             Self::Unavailable => 7,
+            Self::LicenceInactive => 8,
         })
     }
 }
@@ -104,6 +107,24 @@ pub fn from_api(error: hodeishield_api::Error, context: &ApiContext<'_>) -> Fail
                          longer covers its tenant."
                     }
                 }),
+                403 if detail(&api, "code") == Some("LICENCE_INACTIVE") => {
+                    // The state is a short token (none, suspended…); anything else is not shown.
+                    let state = detail(&api, "licence")
+                        .filter(|s| {
+                            !s.is_empty()
+                                && s.len() <= 32
+                                && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+                        })
+                        .map_or_else(String::new, |s| format!(" (licence: {s})"));
+                    Failure::new(
+                        Kind::LicenceInactive,
+                        format!("The tenant's licence is not in force{state}."),
+                    )
+                    .hint(
+                        "Ask a tenant administrator to renew or reactivate it. Signing in again or \
+                         using another key of this tenant will not help.",
+                    )
+                }
                 403 => {
                     let scopes: Vec<String> = api
                         .required_scopes
@@ -128,13 +149,7 @@ pub fn from_api(error: hodeishield_api::Error, context: &ApiContext<'_>) -> Fail
                         .meta
                         .retry_after
                         .map_or_else(String::new, |s| format!(" Try again in {s} s."));
-                    let scope = api
-                        .body
-                        .as_ref()
-                        .and_then(|b| b.details.as_ref())
-                        .and_then(|d| d.get("scope"))
-                        .and_then(|s| s.as_str())
-                        .map_or_else(String::new, |s| format!(" (limit: {s})"));
+                    let scope = detail(&api, "scope").map_or_else(String::new, |s| format!(" (limit: {s})"));
                     Failure::new(
                         Kind::RateLimited,
                         format!("Rate limit exhausted{scope}.{wait}"),
@@ -166,6 +181,15 @@ pub fn from_api(error: hodeishield_api::Error, context: &ApiContext<'_>) -> Fail
         .hint("Your CLI may be older than the API. Check for a newer release."),
         other => Failure::general(other.to_string()),
     }
+}
+
+/// A string member of `error.details`.
+fn detail<'a>(api: &'a hodeishield_api::ApiError, key: &str) -> Option<&'a str> {
+    api.body
+        .as_ref()
+        .and_then(|b| b.details.as_ref())
+        .and_then(|d| d.get(key))
+        .and_then(|v| v.as_str())
 }
 
 /// The error and its causes on one line: `reqwest` puts the useful part (DNS, TLS, refused) in the

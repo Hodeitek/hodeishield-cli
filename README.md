@@ -167,6 +167,7 @@ hodeishield alerts list --status open --all --json | jq -r '.[] | [.severity, .t
 | 5 | Not found (or not in your organisation) |
 | 6 | Rate limit exhausted (the CLI already retried short waits) |
 | 7 | The API could not be reached or failed |
+| 8 | The tenant's licence is not in force: a tenant administrator must renew or reactivate it |
 
 Errors go to stderr with a hint and, when the API gave one, a **request id**: quote it when you
 contact support. `--verbose` logs each request's method, URL, status and request id to stderr, never
