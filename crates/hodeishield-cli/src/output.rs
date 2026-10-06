@@ -141,6 +141,79 @@ pub fn print_detail(out: &mut dyn Write, value: &Value) -> std::io::Result<()> {
     Ok(())
 }
 
+/// The items as CSV (RFC 4180): a header, then one record per item, each ending in CRLF, UTF-8
+/// without a byte order mark. The columns are the items' top-level fields, in the order they first
+/// appear, so they match what `--json` prints. Nothing is printed for no items.
+pub fn print_csv(out: &mut dyn Write, items: &[Value]) -> std::io::Result<()> {
+    let mut columns: Vec<&str> = Vec::new();
+    for item in items {
+        if let Value::Object(map) = item {
+            for key in map.keys() {
+                if !columns.contains(&key.as_str()) {
+                    columns.push(key);
+                }
+            }
+        }
+    }
+    if columns.is_empty() {
+        return Ok(());
+    }
+    let header: Vec<String> = columns.iter().map(|c| csv_field(&defuse(c))).collect();
+    write!(out, "{}\r\n", header.join(","))?;
+    for item in items {
+        let record: Vec<String> = columns
+            .iter()
+            .map(|column| csv_field(&csv_cell(item.get(column))))
+            .collect();
+        write!(out, "{}\r\n", record.join(","))?;
+    }
+    Ok(())
+}
+
+/// A field as cell text: empty for null or absent, the text of a string, a number or a boolean as
+/// written in JSON, and an array or object as compact JSON.
+fn csv_cell(value: Option<&Value>) -> String {
+    match value {
+        None | Some(Value::Null) => String::new(),
+        Some(Value::Number(n)) => n.to_string(),
+        Some(Value::Bool(b)) => b.to_string(),
+        Some(Value::String(s)) => defuse(s),
+        Some(other) => defuse(&other.to_string()),
+    }
+}
+
+/// A spreadsheet runs a cell that starts with `=`, `+`, `-` or `@` (and, in some, a tab or carriage
+/// return) as a formula; a leading `'` makes it text (CWE-1236). Numbers never pass through here, so
+/// `-5` stays a number.
+fn defuse(text: &str) -> String {
+    if text.starts_with(['=', '+', '-', '@', '\t', '\r']) {
+        format!("'{text}")
+    } else {
+        text.to_owned()
+    }
+}
+
+/// One RFC 4180 field: quoted when it holds a comma, a quote, a line break or a leading or trailing
+/// space, with quotes doubled. Tabs and line breaks are kept; every other character [`clean`]
+/// replaces is replaced here too, as the file may well be printed to a terminal.
+fn csv_field(text: &str) -> String {
+    let text: String = text
+        .chars()
+        .map(|c| {
+            if is_unsafe(c) && !matches!(c, '\t' | '\n' | '\r') {
+                '\u{fffd}'
+            } else {
+                c
+            }
+        })
+        .collect();
+    if text.contains([',', '"', '\r', '\n']) || text.starts_with(' ') || text.ends_with(' ') {
+        format!("\"{}\"", text.replace('"', "\"\""))
+    } else {
+        text
+    }
+}
+
 /// Formats Unix seconds as RFC 3339 UTC, without a date library.
 pub fn unix_to_rfc3339(seconds: u64) -> String {
     let days = i64::try_from(seconds / 86_400).unwrap_or(i64::MAX);
@@ -246,5 +319,62 @@ mod tests {
         let text = String::from_utf8(out).expect("utf8");
         assert!(text.lines().all(|l| !l.ends_with(' ')), "{text:?}");
         assert!(text.starts_with("ID"), "{text:?}");
+    }
+
+    fn csv(items: &Value) -> String {
+        let mut out = Vec::new();
+        print_csv(&mut out, items.as_array().expect("array")).expect("print");
+        String::from_utf8(out).expect("utf8")
+    }
+
+    #[test]
+    fn csv_has_a_header_crlf_records_and_no_bom() {
+        let text = csv(&serde_json::json!([
+            {"id": "1", "name": "Café ñ 東京", "score": 7},
+            {"id": "2", "name": "plain", "extra": true}
+        ]));
+        assert_eq!(
+            text,
+            "id,name,score,extra\r\n1,Café ñ 東京,7,\r\n2,plain,,true\r\n"
+        );
+        assert!(csv(&serde_json::json!([])).is_empty());
+    }
+
+    #[test]
+    fn csv_quotes_per_rfc_4180() {
+        let text = csv(&serde_json::json!([{
+            "a": "x,y", "b": "say \"hi\"", "c": "two\nlines", "d": " pad", "e": "pad "
+        }]));
+        assert_eq!(
+            text.lines().nth(1).expect("record"),
+            "\"x,y\",\"say \"\"hi\"\"\",\"two"
+        );
+        assert!(text.ends_with("lines\",\" pad\",\"pad \"\r\n"), "{text:?}");
+    }
+
+    #[test]
+    fn csv_defuses_formulas_but_not_numbers() {
+        let text = csv(&serde_json::json!([{
+            "eq": "=1+1", "plus": "+1", "minus": "-1", "at": "@SUM(A1)",
+            "tab": "\tx", "cr": "\rx", "number": -5, "list": ["=x"], "ok": "a=b"
+        }]));
+        let record = text.split_once("\r\n").expect("header").1;
+        assert_eq!(
+            record,
+            "'=1+1,'+1,'-1,'@SUM(A1),'\tx,\"'\rx\",-5,\"[\"\"=x\"\"]\",a=b\r\n"
+        );
+        assert!(csv(&serde_json::json!([{"=bad": 1}])).starts_with("'=bad\r\n"));
+    }
+
+    #[test]
+    fn csv_replaces_what_could_drive_the_terminal() {
+        let text = csv(&serde_json::json!([{"n": "a\u{1b}[2J\u{202e}b"}]));
+        assert_eq!(text, "n\r\na\u{fffd}[2J\u{fffd}b\r\n");
+    }
+
+    #[test]
+    fn csv_nested_values_are_compact_json() {
+        let text = csv(&serde_json::json!([{"o": {"k": 1}, "l": [1, 2]}]));
+        assert_eq!(text, "o,l\r\n\"{\"\"k\"\":1}\",\"[1,2]\"\r\n");
     }
 }

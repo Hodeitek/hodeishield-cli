@@ -9,7 +9,9 @@ use crate::cli::{
     VendorsCommand,
 };
 use crate::failure::{ApiContext, CredentialSource, Result, from_api};
-use crate::output::{cell, clean, print_detail, print_json, print_table, short_time, table};
+use crate::output::{
+    cell, clean, print_csv, print_detail, print_json, print_table, short_time, table,
+};
 use comfy_table::Table;
 use hodeishield_api::v1::{
     Alert, ComplianceControl, Endpoint, Evidence, ListAlertsParams, ListComplianceControlsParams,
@@ -54,7 +56,12 @@ fn list<R, T>(
             eprintln!("No {noun} found.");
             return Ok(());
         }
-        print_table(out, &render(&items))?;
+        if paging.csv {
+            let raw_items = response.raw.get("data").and_then(Value::as_array);
+            print_csv(out, raw_items.map_or(&[], Vec::as_slice))?;
+        } else {
+            print_table(out, &render(&items))?;
+        }
         if pagination.total_pages > 1 {
             let next = if pagination.page < pagination.total_pages {
                 format!(" Next: --page {}, or --all.", pagination.page + 1)
@@ -78,7 +85,11 @@ fn list<R, T>(
         eprintln!("No {noun} found.");
         return Ok(());
     }
-    print_table(out, &render(&items))?;
+    if paging.csv {
+        print_csv(out, &raw_items)?;
+    } else {
+        print_table(out, &render(&items))?;
+    }
     eprintln!("{} {noun}.", items.len());
     Ok(())
 }

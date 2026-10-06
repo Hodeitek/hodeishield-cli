@@ -4,7 +4,7 @@
 //! Command-line surface.
 
 use clap::builder::{PossibleValuesParser, TypedValueParser};
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, CommandFactory, Parser, Subcommand};
 use hodeishield_api::ParseEnumError;
 use hodeishield_api::v1::{
     AlertSort, AlertStatus, BusinessCriticality, ComplianceControlSort, EndpointSort,
@@ -119,6 +119,38 @@ pub struct LoginArgs {
     pub no_browser: bool,
 }
 
+impl Cli {
+    /// Parses the command line. `--csv` declares its conflict with `--json`, but clap does not see
+    /// it when the global `--json` comes before the subcommand, so it is checked here too.
+    pub fn parse_checked() -> Self {
+        let cli = Self::parse();
+        if cli.json && cli.command.paging().is_some_and(|paging| paging.csv) {
+            Self::command()
+                .error(
+                    clap::error::ErrorKind::ArgumentConflict,
+                    "the argument '--json' cannot be used with '--csv'",
+                )
+                .exit();
+        }
+        cli
+    }
+}
+
+impl Command {
+    /// The paging options, for the commands that list.
+    fn paging(&self) -> Option<&Paging> {
+        match self {
+            Self::Vendors(VendorsCommand::List(list)) => Some(&list.paging),
+            Self::Alerts(AlertsCommand::List(list)) => Some(&list.paging),
+            Self::Risks(RisksCommand::List(list)) => Some(&list.paging),
+            Self::Compliance(ComplianceCommand::Controls(list)) => Some(&list.paging),
+            Self::Evidence(EvidenceCommand::List(list)) => Some(&list.paging),
+            Self::Endpoints(EndpointsCommand::List(list)) => Some(&list.paging),
+            _ => None,
+        }
+    }
+}
+
 /// Paging shared by every list.
 #[derive(Debug, Args)]
 pub struct Paging {
@@ -134,6 +166,9 @@ pub struct Paging {
     /// Sort direction.
     #[arg(long, value_parser = choice::<Order>(Order::VALUES))]
     pub order: Option<Order>,
+    /// Print the items as CSV (RFC 4180) instead of a table. Works with --all.
+    #[arg(long, conflicts_with = "json")]
+    pub csv: bool,
 }
 
 /// A clap parser that accepts exactly the values the OpenAPI document lists.
