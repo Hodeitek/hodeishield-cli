@@ -6,6 +6,7 @@
 mod config;
 mod resources;
 mod session;
+mod tenants;
 
 use crate::auth::{self, TokenStore};
 use crate::cli::{Cli, Command};
@@ -14,11 +15,13 @@ use crate::failure::{ApiContext, CredentialSource, Result, from_api};
 use hodeishield_api::Client;
 use std::io::Write;
 use std::sync::Arc;
+use tenants::Selection;
 
 pub struct Context {
     pub overrides: Overrides,
     pub json: bool,
     pub verbose: bool,
+    pub selection: Selection,
     pub store: Arc<dyn TokenStore + Send + Sync>,
 }
 
@@ -27,14 +30,30 @@ impl Context {
         crate::config::resolve(&self.overrides)
     }
 
-    /// A `/v1` client with the credential in effect.
-    pub fn api(&self, settings: &Settings) -> Result<(Client, CredentialSource)> {
+    /// A `/v1` client with the credential in effect, reading `tenant` (a client tenant's id) when
+    /// one is given and the credential's own tenant otherwise.
+    pub fn api(
+        &self,
+        settings: &Settings,
+        tenant: Option<&str>,
+    ) -> Result<(Client, CredentialSource)> {
         let (credential, source) = auth::credential_for_api(settings, self.store.as_ref())?;
         let mut builder =
             Client::builder(settings.api_url.clone(), credential).user_agent(crate::USER_AGENT);
         if source == CredentialSource::OAuth {
             let (settings, store) = (settings.clone(), Arc::clone(&self.store));
             builder = builder.renew_credential(move || auth::renew(&settings, store.as_ref()));
+        }
+        if let Some(tenant) = tenant {
+            builder = builder.tenant(tenant).map_err(|e| {
+                from_api(
+                    e,
+                    &ApiContext {
+                        source,
+                        framework: None,
+                    },
+                )
+            })?;
         }
         if self.verbose {
             builder = builder.observer(|event| {
@@ -80,6 +99,11 @@ pub fn run(cli: Cli, out: &mut dyn Write) -> Result<()> {
         },
         json: cli.json,
         verbose: cli.verbose,
+        selection: match (cli.tenant, cli.all_tenants) {
+            (Some(tenant), _) => Selection::Tenant(tenant),
+            (None, true) => Selection::All,
+            (None, false) => Selection::Own,
+        },
         store: Arc::new(auth::store::Keychain),
     };
     match cli.command {
@@ -89,6 +113,7 @@ pub fn run(cli: Cli, out: &mut dyn Write) -> Result<()> {
         Command::Compliance(command) => resources::compliance(&ctx, command, out),
         Command::Evidence(command) => resources::evidence(&ctx, command, out),
         Command::Endpoints(command) => resources::endpoints(&ctx, command, out),
+        Command::Tenants(command) => tenants::run(&ctx, command, out),
         Command::Login(args) => session::login(&ctx, &args),
         Command::Logout => session::logout(&ctx),
         Command::Whoami => session::whoami(&ctx, out),

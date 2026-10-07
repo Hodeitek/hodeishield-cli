@@ -122,6 +122,42 @@ pub fn short_time(value: Option<&str>) -> String {
     }
 }
 
+/// A table's header and rows, before they are laid out: what a command knows how to say about its
+/// items. [`tenant_table`] adds the client column when a list spans tenants.
+#[derive(Debug)]
+pub struct Rows {
+    pub headers: &'static [&'static str],
+    pub rows: Vec<Vec<String>>,
+}
+
+impl Rows {
+    pub fn new(headers: &'static [&'static str], rows: Vec<Vec<String>>) -> Self {
+        Self { headers, rows }
+    }
+
+    pub fn into_table(self) -> Table {
+        table(self.headers, self.rows)
+    }
+}
+
+/// Rows of several client tenants in one table, each led by the tenant's slug. The slug is the
+/// server's text, so it is sanitised like every other cell.
+pub fn tenant_table(headers: &[&str], groups: Vec<(String, Vec<Vec<String>>)>) -> Table {
+    let mut all = vec!["TENANT"];
+    all.extend_from_slice(headers);
+    let rows = groups
+        .into_iter()
+        .flat_map(|(slug, rows)| {
+            let label = clean(&slug);
+            rows.into_iter().map(move |mut row| {
+                row.insert(0, label.clone());
+                row
+            })
+        })
+        .collect();
+    table(&all, rows)
+}
+
 pub fn table(headers: &[&str], rows: Vec<Vec<String>>) -> Table {
     let mut table = Table::new();
     table
@@ -415,6 +451,34 @@ mod tests {
             text,
             "id             x\ncontrol_codes  A.1, A.2\nby_status      ok=2\nnone           -\n"
         );
+    }
+
+    #[test]
+    fn a_tenant_column_leads_each_row_and_is_sanitised() {
+        let t = tenant_table(
+            &["ID"],
+            vec![
+                ("acme".to_owned(), vec![vec!["1".into()]]),
+                (
+                    "ev\u{1b}il".to_owned(),
+                    vec![vec!["2".into()], vec!["3".into()]],
+                ),
+            ],
+        );
+        let mut out = Vec::new();
+        print_table(&mut out, &t).expect("print");
+        let text = String::from_utf8(out).expect("utf8");
+        let lines: Vec<&str> = text.lines().collect();
+        assert!(
+            lines[0].starts_with("TENANT") && lines[0].ends_with("ID"),
+            "{text}"
+        );
+        assert!(
+            lines[1].starts_with("acme") && lines[1].ends_with('1'),
+            "{text}"
+        );
+        assert!(lines[2].starts_with("ev\u{fffd}il"), "{text:?}");
+        assert!(!text.contains('\u{1b}'));
     }
 
     #[test]

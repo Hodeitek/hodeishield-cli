@@ -19,6 +19,11 @@ Credentials:
   HODEISHIELD_API_KEY   A tenant API key. When set, it is used for every API call.
   hodeishield login     Otherwise, sign in to the app; the token is kept in the system keychain.
 
+Several client tenants (portfolio credential):
+  hodeishield tenants list                       The client tenants you may read.
+  hodeishield --tenant <slug|id> vendors list    One client.
+  hodeishield --all-tenants vendors list         Every client, with a tenant column.
+
 Exit codes:
   0 ok · 1 error · 2 usage · 3 not authenticated · 4 missing scope · 5 not found
   6 rate limited · 7 API unreachable or failing · 8 tenant licence not in force";
@@ -58,6 +63,27 @@ pub struct Cli {
     #[arg(short, long, global = true, help_heading = "Global options")]
     pub verbose: bool,
 
+    /// Read this client tenant (its slug or id) instead of the credential's own. Needs a
+    /// portfolio credential; see `hodeishield tenants list`.
+    #[arg(
+        long,
+        global = true,
+        help_heading = "Client selection (MSSP)",
+        value_name = "SLUG|ID",
+        conflicts_with = "all_tenants"
+    )]
+    pub tenant: Option<String>,
+
+    /// On a list command, read every client tenant of the portfolio and add a tenant column (or
+    /// `tenant_*` fields) to each row. Fetches every page of each tenant.
+    #[arg(
+        long,
+        global = true,
+        help_heading = "Client selection (MSSP)",
+        conflicts_with = "tenant"
+    )]
+    pub all_tenants: bool,
+
     #[command(subcommand)]
     pub command: Command,
 }
@@ -82,6 +108,9 @@ pub enum Command {
     /// Enrolled endpoint agents.
     #[command(subcommand)]
     Endpoints(EndpointsCommand),
+    /// Client tenants a portfolio (MSSP) credential may read.
+    #[command(subcommand)]
+    Tenants(TenantsCommand),
     /// Sign in to the app (browser, or --device without one).
     #[command(long_about = LOGIN_ABOUT)]
     Login(LoginArgs),
@@ -134,7 +163,46 @@ impl Cli {
                 )
                 .exit();
         }
+        if let Some(message) = cli.selection_error() {
+            Self::command()
+                .error(clap::error::ErrorKind::ArgumentConflict, message)
+                .exit();
+        }
         cli
+    }
+
+    /// Why the client selection cannot go with this command, if it cannot. It is refused rather
+    /// than ignored: a command that does not read the selected client must not look as if it did.
+    fn selection_error(&self) -> Option<&'static str> {
+        if self.tenant.is_some() && self.all_tenants {
+            return Some("the argument '--tenant' cannot be used with '--all-tenants'");
+        }
+        if self.tenant.is_none() && !self.all_tenants {
+            return None;
+        }
+        if !self.command.reads_tenant_data() {
+            return Some(
+                "'--tenant' and '--all-tenants' only apply to the commands that read tenant data",
+            );
+        }
+        if self.all_tenants {
+            match self.command.paging() {
+                None => {
+                    return Some(
+                        "'--all-tenants' applies to list commands; use '--tenant' to read one \
+                         client",
+                    );
+                }
+                Some(paging) if paging.page.is_some() => {
+                    return Some(
+                        "the argument '--all-tenants' cannot be used with '--page': it fetches \
+                         every page of each tenant",
+                    );
+                }
+                Some(_) => {}
+            }
+        }
+        None
     }
 }
 
@@ -150,6 +218,19 @@ impl Cli {
 }
 
 impl Command {
+    /// The commands that read a tenant's data, and so can read a selected client's.
+    fn reads_tenant_data(&self) -> bool {
+        matches!(
+            self,
+            Self::Vendors(_)
+                | Self::Alerts(_)
+                | Self::Risks(_)
+                | Self::Compliance(_)
+                | Self::Evidence(_)
+                | Self::Endpoints(_)
+        )
+    }
+
     /// The paging options, for the commands that list.
     fn paging(&self) -> Option<&Paging> {
         match self {
@@ -159,6 +240,7 @@ impl Command {
             Self::Compliance(ComplianceCommand::Controls(list)) => Some(&list.paging),
             Self::Evidence(EvidenceCommand::List(list)) => Some(&list.paging),
             Self::Endpoints(EndpointsCommand::List(list)) => Some(&list.paging),
+            Self::Tenants(TenantsCommand::List(list)) => Some(&list.paging),
             _ => None,
         }
     }
@@ -190,6 +272,18 @@ where
     T: FromStr<Err = ParseEnumError> + Clone + Send + Sync + 'static,
 {
     PossibleValuesParser::new(values).try_map(|value| T::from_str(&value))
+}
+
+#[derive(Debug, Subcommand)]
+pub enum TenantsCommand {
+    /// List the client tenants this credential may read.
+    List(TenantsList),
+}
+
+#[derive(Debug, Args)]
+pub struct TenantsList {
+    #[command(flatten)]
+    pub paging: Paging,
 }
 
 #[derive(Debug, Subcommand)]

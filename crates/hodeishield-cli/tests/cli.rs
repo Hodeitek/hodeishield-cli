@@ -771,3 +771,454 @@ fn free_form_filters_are_sent_as_typed_without_a_warning() {
         mock.assert();
     }
 }
+
+// Client tenants. The portfolio contract is a draft: these tests pin the CLI's behaviour against the
+// mock in `hodeishield_api::portfolio`, and change with it.
+
+const ACME: &str = "11111111-1111-4111-8111-111111111111";
+const BETA: &str = "22222222-2222-4222-8222-222222222222";
+const OLD: &str = "33333333-3333-4333-8333-333333333333";
+
+fn tenant(id: &str, slug: &str, active: bool, licence: &str) -> String {
+    format!(
+        r#"{{"id":"{id}","name":"{slug} S.L.","slug":"{slug}","organization":null,"internal":false,"active":{active},"licence_status":"{licence}"}}"#
+    )
+}
+
+fn portfolio(tenants: &[String]) -> String {
+    page(tenants, 1, tenants.len() as i64, 1)
+}
+
+fn mock_portfolio(server: &mut mockito::Server, tenants: &[String]) -> mockito::Mock {
+    server
+        .mock("GET", "/v1/portfolio/tenants")
+        .match_query(mockito::Matcher::Any)
+        .match_header("x-hs-tenant", mockito::Matcher::Missing)
+        .with_body(portfolio(tenants))
+        .create()
+}
+
+/// A vendor list for one tenant, confirmed the way the API confirms a selection.
+fn mock_vendors(server: &mut mockito::Server, tenant_id: &str, names: &[&str]) -> mockito::Mock {
+    let items: Vec<String> = names.iter().map(|n| vendor(&format!("v-{n}"), n)).collect();
+    server
+        .mock("GET", "/v1/vendors")
+        .match_query(mockito::Matcher::Any)
+        .match_header("x-hs-tenant", tenant_id)
+        .with_header("x-hs-tenant", tenant_id)
+        .with_body(page(&items, 1, items.len() as i64, 1))
+        .create()
+}
+
+fn two_clients() -> [String; 2] {
+    [
+        tenant(ACME, "acme", true, "in_force"),
+        tenant(BETA, "beta", true, "grace"),
+    ]
+}
+
+#[test]
+fn tenants_list_prints_the_portfolio_as_table_json_and_csv() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    let listing = mock_portfolio(&mut server, &two_clients());
+    let table = env
+        .api(&server)
+        .args(["tenants", "list"])
+        .output()
+        .expect("run");
+    assert!(table.status.success(), "{table:?}");
+    let stdout = String::from_utf8_lossy(&table.stdout);
+    assert!(stdout.starts_with("SLUG"), "{stdout}");
+    assert!(
+        stdout.contains("acme") && stdout.contains(BETA) && stdout.contains("grace"),
+        "{stdout}"
+    );
+
+    let json = env
+        .api(&server)
+        .args(["tenants", "list", "--json"])
+        .output()
+        .expect("run");
+    let body: serde_json::Value = serde_json::from_slice(&json.stdout).expect("json");
+    assert_eq!(body["data"][1]["slug"], "beta");
+
+    let csv = env
+        .api(&server)
+        .args(["tenants", "list", "--csv"])
+        .output()
+        .expect("run");
+    assert!(String::from_utf8_lossy(&csv.stdout).starts_with("id,name,slug,"));
+    listing.expect_at_least(3).assert();
+}
+
+#[test]
+fn a_tenant_is_selected_by_slug_or_id_and_the_table_stays_as_it_was() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    mock_portfolio(&mut server, &two_clients());
+    let beta = mock_vendors(&mut server, BETA, &["Beta Hosting"]);
+    let acme = mock_vendors(&mut server, ACME, &["Acme Hosting"]);
+    for selector in ["beta", "BETA", BETA] {
+        let output = env
+            .api(&server)
+            .args(["--tenant", selector, "vendors", "list"])
+            .output()
+            .expect("run");
+        assert!(output.status.success(), "{selector}: {output:?}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.starts_with("ID") && stdout.contains("Beta Hosting"),
+            "{stdout}"
+        );
+        assert!(
+            !stdout.contains("TENANT") && !stdout.contains("Acme"),
+            "{stdout}"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(&format!("Client tenant: beta ({BETA})")),
+            "{stderr}"
+        );
+        assert_no_key(&output);
+    }
+    beta.expect(3).assert();
+    acme.expect(0).assert();
+}
+
+#[test]
+fn a_selected_tenant_with_json_is_the_api_body_unchanged() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    mock_portfolio(&mut server, &two_clients());
+    let body = format!(r#"{{"data":{}}}"#, vendor("v-1", "Acme Hosting"));
+    server
+        .mock("GET", "/v1/vendors/v-1")
+        .match_header("x-hs-tenant", ACME)
+        .with_header("x-hs-tenant", ACME)
+        .with_body(&body)
+        .create();
+    let output = env
+        .api(&server)
+        .args(["vendors", "get", "v-1", "--json", "--tenant", "acme"])
+        .output()
+        .expect("run");
+    assert!(output.status.success(), "{output:?}");
+    let shown: serde_json::Value = serde_json::from_slice(&output.stdout).expect("json");
+    assert_eq!(
+        shown,
+        serde_json::from_str::<serde_json::Value>(&body).expect("json")
+    );
+}
+
+#[test]
+fn all_tenants_labels_every_row_with_the_tenant_that_returned_it() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    mock_portfolio(&mut server, &two_clients());
+    mock_vendors(&mut server, ACME, &["Acme Hosting", "Shared Name"]);
+    mock_vendors(&mut server, BETA, &["Beta Hosting", "Shared Name"]);
+
+    let table = env
+        .api(&server)
+        .args(["--all-tenants", "vendors", "list"])
+        .output()
+        .expect("run");
+    assert!(table.status.success(), "{table:?}");
+    let stdout = String::from_utf8_lossy(&table.stdout);
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert!(
+        lines[0].starts_with("TENANT") && lines[0].contains("ID"),
+        "{stdout}"
+    );
+    assert_eq!(lines.len(), 5, "{stdout}");
+    let row = |name: &str, slug: &str| {
+        lines
+            .iter()
+            .any(|l| l.starts_with(slug) && l.contains(name))
+    };
+    assert!(
+        row("Acme Hosting", "acme") && row("Beta Hosting", "beta"),
+        "{stdout}"
+    );
+    assert!(
+        !row("Acme Hosting", "beta") && !row("Beta Hosting", "acme"),
+        "{stdout}"
+    );
+    assert!(String::from_utf8_lossy(&table.stderr).contains("4 vendors across 2 client tenants."));
+
+    let json = env
+        .api(&server)
+        .args(["--json", "vendors", "list", "--all-tenants"])
+        .output()
+        .expect("run");
+    let items: serde_json::Value = serde_json::from_slice(&json.stdout).expect("json");
+    let items = items.as_array().expect("array");
+    assert_eq!(items.len(), 4);
+    assert_eq!(items[0]["tenant_id"], ACME);
+    assert_eq!(items[0]["tenant_slug"], "acme");
+    assert_eq!(items[0]["name"], "Acme Hosting");
+    assert_eq!(items[0]["added_later"], 1, "unknown fields are kept");
+    assert_eq!(items[3]["tenant_slug"], "beta");
+
+    let csv = env
+        .api(&server)
+        .args(["vendors", "list", "--all-tenants", "--csv"])
+        .output()
+        .expect("run");
+    let text = String::from_utf8_lossy(&csv.stdout);
+    assert!(
+        text.starts_with("tenant_id,tenant_slug,tenant_name,id,"),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!("{BETA},beta,beta S.L.,v-Beta Hosting,")),
+        "{text}"
+    );
+}
+
+#[test]
+fn all_tenants_skips_inactive_clients_and_says_so() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    mock_portfolio(
+        &mut server,
+        &[
+            tenant(ACME, "acme", true, "in_force"),
+            tenant(OLD, "old", false, "inactive"),
+        ],
+    );
+    mock_vendors(&mut server, ACME, &["Acme Hosting"]);
+    let output = env
+        .api(&server)
+        .args(["--all-tenants", "vendors", "list"])
+        .output()
+        .expect("run");
+    assert!(output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Skipping 1 inactive client tenants"));
+}
+
+#[test]
+fn a_tenant_that_cannot_be_read_is_reported_and_the_command_still_fails() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    mock_portfolio(&mut server, &two_clients());
+    mock_vendors(&mut server, ACME, &["Acme Hosting"]);
+    server
+        .mock("GET", "/v1/vendors")
+        .match_query(mockito::Matcher::Any)
+        .match_header("x-hs-tenant", BETA)
+        .with_status(403)
+        .with_body(r#"{"error":{"code":"forbidden","message":"x","request_id":"r1","details":{"code":"LICENCE_INACTIVE","licence":"expired"}}}"#)
+        .create();
+    let output = env
+        .api(&server)
+        .args(["--all-tenants", "vendors", "list"])
+        .output()
+        .expect("run");
+    assert_eq!(output.status.code(), Some(8), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Acme Hosting"), "{stdout}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("warning: client tenant beta"), "{stderr}");
+    assert!(
+        stderr.contains("Could not read 1 of 2 client tenants"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn a_client_outside_the_portfolio_fails_clearly_without_reading_any_data() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    mock_portfolio(&mut server, &two_clients());
+    let data = server
+        .mock("GET", "/v1/vendors")
+        .match_query(mockito::Matcher::Any)
+        .expect(0)
+        .create();
+    for selector in ["stranger", "44444444-4444-4444-8444-444444444444"] {
+        let output = env
+            .api(&server)
+            .args(["vendors", "list", "--tenant", selector])
+            .output()
+            .expect("run");
+        assert_eq!(output.status.code(), Some(5), "{selector}: {output:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(&format!(
+                "No client tenant {selector} in this credential's portfolio."
+            )),
+            "{stderr}"
+        );
+        assert!(output.stdout.is_empty());
+    }
+    data.assert();
+}
+
+#[test]
+fn the_server_refusing_a_selected_client_is_not_found_too() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    mock_portfolio(&mut server, &two_clients());
+    server
+        .mock("GET", "/v1/vendors")
+        .match_query(mockito::Matcher::Any)
+        .with_status(404)
+        .with_body(r#"{"error":{"code":"not_found","message":"No such tenant in this credential's portfolio.","request_id":"r2"}}"#)
+        .create();
+    let output = env
+        .api(&server)
+        .args(["vendors", "list", "--tenant", "acme"])
+        .output()
+        .expect("run");
+    assert_eq!(output.status.code(), Some(5), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("No such tenant"));
+}
+
+#[test]
+fn an_answer_that_does_not_confirm_the_client_prints_nothing() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    mock_portfolio(&mut server, &two_clients());
+    // The server answers with the other client's confirmation.
+    server
+        .mock("GET", "/v1/vendors")
+        .match_query(mockito::Matcher::Any)
+        .with_header("x-hs-tenant", BETA)
+        .with_body(page(&[vendor("v1", "Beta Hosting")], 1, 1, 1))
+        .create();
+    for args in [&["--tenant", "acme"][..], &["--all-tenants"][..]] {
+        let output = env
+            .api(&server)
+            .args(args)
+            .args(["vendors", "list"])
+            .output()
+            .expect("run");
+        assert_eq!(output.status.code(), Some(1), "{args:?}: {output:?}");
+        assert!(output.stdout.is_empty(), "{output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("did not confirm the client tenant")
+        );
+    }
+}
+
+#[test]
+fn without_a_selection_nothing_changes_for_a_single_tenant_credential() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    let listing = server
+        .mock("GET", "/v1/portfolio/tenants")
+        .match_query(mockito::Matcher::Any)
+        .expect(0)
+        .create();
+    let vendors = server
+        .mock("GET", "/v1/vendors")
+        .match_query(mockito::Matcher::Any)
+        .match_header("x-hs-tenant", mockito::Matcher::Missing)
+        .with_body(page(&[vendor("v1", "Example Hosting")], 1, 1, 1))
+        .create();
+    let output = env
+        .api(&server)
+        .args(["vendors", "list"])
+        .output()
+        .expect("run");
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.starts_with("ID") && !stdout.contains("TENANT"),
+        "{stdout}"
+    );
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("Client tenant"));
+    listing.assert();
+    vendors.assert();
+}
+
+#[test]
+fn selecting_a_client_with_a_single_tenant_credential_explains_what_is_missing() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    server
+        .mock("GET", "/v1/portfolio/tenants")
+        .match_query(mockito::Matcher::Any)
+        .with_status(403)
+        .with_body(r#"{"error":{"code":"forbidden","message":"x","request_id":"r3"}}"#)
+        .create();
+    for args in [&["--tenant", "acme"][..], &["--all-tenants"][..]] {
+        let output = env
+            .api(&server)
+            .args(args)
+            .args(["vendors", "list"])
+            .output()
+            .expect("run");
+        assert_eq!(output.status.code(), Some(4), "{output:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("portfolio:read"), "{stderr}");
+        assert!(stderr.contains("need a portfolio credential"), "{stderr}");
+    }
+    let output = env
+        .api(&server)
+        .args(["tenants", "list"])
+        .output()
+        .expect("run");
+    assert_eq!(output.status.code(), Some(4), "{output:?}");
+}
+
+#[test]
+fn a_portfolio_credential_without_a_selection_is_told_how_to_select() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    server
+        .mock("GET", "/v1/vendors")
+        .match_query(mockito::Matcher::Any)
+        .with_status(400)
+        .with_body(r#"{"error":{"code":"invalid_request","message":"X-HS-Tenant is required","request_id":"r4","details":{"code":"TENANT_REQUIRED"}}}"#)
+        .create();
+    let output = env
+        .api(&server)
+        .args(["vendors", "list"])
+        .output()
+        .expect("run");
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("--all-tenants"));
+}
+
+#[test]
+fn tenant_names_from_the_server_cannot_drive_the_terminal() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    mock_portfolio(
+        &mut server,
+        &[tenant(ACME, "ac\\u001b[2Jme", true, "in_force")],
+    );
+    mock_vendors(&mut server, ACME, &["Acme Hosting"]);
+    let output = env
+        .api(&server)
+        .args(["--all-tenants", "vendors", "list"])
+        .output()
+        .expect("run");
+    assert!(output.status.success(), "{output:?}");
+    let all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!all.contains('\u{1b}'), "{all:?}");
+    assert!(all.contains("ac\u{fffd}[2Jme"), "{all:?}");
+}
+
+#[test]
+fn the_selection_is_refused_where_it_cannot_apply() {
+    let env = Env::new();
+    for args in [
+        &["--tenant", "acme", "--all-tenants", "vendors", "list"][..],
+        &["--tenant", "acme", "whoami"][..],
+        &["--all-tenants", "tenants", "list"][..],
+        &["--all-tenants", "vendors", "get", "v1"][..],
+        &["--all-tenants", "compliance", "posture", "nis2"][..],
+        &["--all-tenants", "vendors", "list", "--page", "2"][..],
+    ] {
+        let output = env.cmd().args(args).output().expect("run");
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {output:?}");
+    }
+}

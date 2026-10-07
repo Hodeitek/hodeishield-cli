@@ -178,10 +178,24 @@ pub fn from_api(error: hodeishield_api::Error, context: &ApiContext<'_>) -> Fail
                         format!("Rate limit exhausted{scope}.{wait}"),
                     )
                 }
-                400 => Failure::general(format!(
-                    "The API rejected the request: {}.",
-                    server_message.unwrap_or_else(|| "invalid request".to_owned())
-                )),
+                400 => {
+                    let failure = Failure::general(format!(
+                        "The API rejected the request: {}.",
+                        server_message.unwrap_or_else(|| "invalid request".to_owned())
+                    ));
+                    match detail(&api, "code") {
+                        Some("TENANT_REQUIRED") => failure.hint(
+                            "This credential covers several client tenants: pick one with \
+                             --tenant <slug|id>, or every one with --all-tenants on a list. \
+                             `hodeishield tenants list` shows them.",
+                        ),
+                        Some("TENANT_SELECTOR_NOT_SUPPORTED") => failure.hint(
+                            "This credential reads one tenant only; leave out --tenant and \
+                             --all-tenants.",
+                        ),
+                        _ => failure,
+                    }
+                }
                 status if status >= 500 => Failure::new(
                     Kind::Unavailable,
                     format!(
@@ -202,6 +216,11 @@ pub fn from_api(error: hodeishield_api::Error, context: &ApiContext<'_>) -> Fail
             "The answer to {operation} does not match the API description this CLI was built from: {source}."
         ))
         .hint("Your CLI may be older than the API. Check for a newer release."),
+        other @ hodeishield_api::Error::TenantMismatch { .. } => Failure::general(other.to_string())
+            .hint(
+                "Nothing was shown, so that no client's data appears under another's name. Check \
+                 the API URL and try again; if it persists, contact support.",
+            ),
         other => Failure::general(other.to_string()),
     }
 }
