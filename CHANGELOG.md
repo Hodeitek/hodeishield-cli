@@ -8,6 +8,9 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ### Added
 
+- `.deb` and `.rpm` packages for x86_64 and arm64, with the man pages and the bash, zsh and fish
+  completions, signed with Sigstore and listed in `SHA256SUMS`.
+  ([#35](https://github.com/Hodeitek/hodeishield-cli/issues/35))
 - `install.sh` for Linux and macOS, published and signed with each release: it checks the archive
   against `SHA256SUMS` and its Sigstore signature before installing the binary and its man pages.
 

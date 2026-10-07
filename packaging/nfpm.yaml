@@ -1,0 +1,70 @@
+# nfpm configuration for the .deb and .rpm packages of the hodeishield CLI. The release workflow
+# sets ${VERSION} and ${ARCH} (amd64 or arm64) and runs nfpm in a directory that holds the binary,
+# the man pages and the completions, all taken from the same release archive; the paths below are
+# relative to that directory.
+name: hodeishield
+arch: ${ARCH}
+platform: linux
+version: ${VERSION}
+version_schema: semver
+release: "1"
+section: utils
+priority: optional
+maintainer: Hodeitek S.L. <info@hodeitek.com>
+vendor: Hodeitek S.L.
+homepage: https://hodeishield.com
+license: Apache-2.0
+description: |-
+  Read-only command-line client for HodeiShield.
+  Reads vendors, alerts, risks, compliance posture, evidence and endpoints from the HodeiShield
+  /v1 API, as tables or as the API's own JSON. Statically linked; no runtime dependencies.
+
+contents:
+  - src: ./hodeishield
+    dst: /usr/bin/hodeishield
+    file_info:
+      mode: 0755
+  - src: ./man/
+    dst: /usr/share/man/man1/
+    file_info:
+      mode: 0644
+  - src: ./completions/hodeishield.bash
+    dst: /usr/share/bash-completion/completions/hodeishield
+    file_info:
+      mode: 0644
+  - src: ./completions/_hodeishield
+    dst: /usr/share/zsh/vendor-completions/_hodeishield
+    packager: deb
+    file_info:
+      mode: 0644
+  - src: ./completions/_hodeishield
+    dst: /usr/share/zsh/site-functions/_hodeishield
+    packager: rpm
+    file_info:
+      mode: 0644
+  - src: ./completions/hodeishield.fish
+    dst: /usr/share/fish/vendor_completions.d/hodeishield.fish
+    file_info:
+      mode: 0644
+  - src: ./LICENSE
+    dst: /usr/share/doc/hodeishield/copyright
+    packager: deb
+    file_info:
+      mode: 0644
+  - src: ./LICENSE
+    dst: /usr/share/licenses/hodeishield/LICENSE
+    packager: rpm
+    type: license
+    file_info:
+      mode: 0644
+  - src: ./NOTICE
+    dst: /usr/share/doc/hodeishield/NOTICE
+    file_info:
+      mode: 0644
+
+rpm:
+  group: Applications/System
+  compression: zstd
+
+deb:
+  compression: xz
