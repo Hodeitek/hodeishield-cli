@@ -124,8 +124,7 @@ notarized `.pkg` installer, come in a later release
 
 ## Not yet
 
-The following distribution methods are planned but not part of this
-release:
+The following distribution methods are not part of the latest release:
 
-- **Homebrew tap** — not yet published.
-- **MSI installer for Windows** — not yet provided; use the `.zip` archive.
+- **winget package** — submitted, awaiting review by the winget community repository.
+- **MSI installer for Windows** — from the release after 0.2.0; until then use the `.zip` archive.

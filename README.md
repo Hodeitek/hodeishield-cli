@@ -50,8 +50,8 @@ section), and put `hodeishield` (`hodeishield.exe` on Windows) somewhere on your
 | Windows x86_64 | `hodeishield-<version>-x86_64-pc-windows-msvc.zip` |
 
 `<version>` has no leading `v`: release `v0.2.0` ships `hodeishield-0.2.0-…`. The Linux binaries are
-statically linked and run on any distribution. A Homebrew tap and a Windows installer (MSI) are
-planned but not available yet.
+statically linked and run on any distribution. Homebrew and Scoop packages are also available
+(next section).
 
 From source, with the Rust toolchain installed (pin the release tag you want):
 
@@ -59,7 +59,7 @@ From source, with the Rust toolchain installed (pin the release tag you want):
 cargo install --locked --git https://github.com/Hodeitek/hodeishield-cli --tag v0.2.0 hodeishield-cli
 ```
 
-### Homebrew, Scoop and winget
+### Homebrew and Scoop
 
 ```sh
 brew tap hodeitek/hodeishield && brew install hodeishield      # macOS and Linux
@@ -68,14 +68,13 @@ brew tap hodeitek/hodeishield && brew install hodeishield      # macOS and Linux
 ```powershell
 scoop bucket add hodeishield https://github.com/Hodeitek/scoop-hodeishield
 scoop install hodeishield                                       # Windows, per user
-winget install Hodeitek.HodeiShield                             # Windows
 ```
 
 The [Homebrew tap](https://github.com/Hodeitek/homebrew-hodeishield) and the
 [Scoop bucket](https://github.com/Hodeitek/scoop-hodeishield) are updated from each release's own
-files and `SHA256SUMS` when it is published, and both check those hashes when installing. The
-winget package is reviewed by the winget community repository before it appears, so a new version
-can take a few days to show up there. Homebrew also installs the man pages and shell completions.
+files and `SHA256SUMS` when it is published, and both check those hashes when installing. Homebrew
+also installs the man pages and shell completions. A winget package has been submitted and is
+waiting for review by the winget community repository; it is not available yet.
 
 ### Debian, Ubuntu, Fedora, RHEL and other Linux distributions
 
