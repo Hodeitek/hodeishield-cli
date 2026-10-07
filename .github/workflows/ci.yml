@@ -72,6 +72,14 @@ jobs:
       - name: Verify the generated API client is up to date
         run: cargo xtask codegen --check
 
+      - name: Generate man pages
+        run: cargo xtask man target/man
+
+      - name: Verify man pages exist
+        run: |
+          test -s target/man/hodeishield.1
+          test -s target/man/hodeishield-vendors-list.1
+
   test:
     name: test
     strategy:
