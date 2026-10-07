@@ -86,6 +86,21 @@ pub enum Error {
     /// An id or slug that would change which resource the path addresses.
     #[error("{0:?} is not a valid identifier")]
     InvalidPathArgument(String),
+    /// A client tenant identifier that is not a UUID.
+    #[error("{0:?} is not a valid client tenant identifier")]
+    InvalidTenant(String),
+    /// The API answered for another client tenant than the one asked for, or did not say which.
+    #[error(
+        "the API did not confirm the client tenant that was asked for (asked for {requested}, \
+         answer says {})",
+        answered.as_deref().unwrap_or("nothing")
+    )]
+    TenantMismatch {
+        /// The tenant the request named.
+        requested: String,
+        /// What the answer's header said, when it said anything.
+        answered: Option<String>,
+    },
 }
 
 impl Error {

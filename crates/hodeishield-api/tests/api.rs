@@ -662,3 +662,121 @@ fn retry_observer_receives_expected_events() {
     unavailable.assert();
     success.assert();
 }
+
+// The portfolio module is provisional: these tests pin its interface, not the published contract.
+
+const TENANT_A: &str = "11111111-1111-4111-8111-111111111111";
+const TENANT_B: &str = "22222222-2222-4222-8222-222222222222";
+const EMPTY_PAGE: &str =
+    r#"{"data":[],"pagination":{"page":1,"per_page":50,"total":0,"total_pages":0}}"#;
+
+fn tenant_client(server: &mockito::Server, tenant: &str) -> Client {
+    Client::builder(
+        server.url().parse().expect("url"),
+        SecretString::from("hsp_example"),
+    )
+    .tenant(tenant)
+    .expect("a UUID")
+    .build()
+    .expect("client")
+}
+
+#[test]
+fn list_tenants_decodes_the_listing_and_never_sends_a_tenant() {
+    use hodeishield_api::portfolio::ListTenantsParams;
+    let mut server = mockito::Server::new();
+    let mock = server
+        .mock("GET", "/v1/portfolio/tenants")
+        .match_header("authorization", "Bearer hsp_example")
+        .match_header("x-hs-tenant", mockito::Matcher::Missing)
+        .with_body(format!(
+            r#"{{"data":[{{"id":"{TENANT_A}","name":"Acme","slug":"acme","organization":{{"id":"o1","name":"Acme Group"}},"internal":false,"active":true,"licence_status":"in_force","later":1}}],"pagination":{{"page":1,"per_page":50,"total":1,"total_pages":1}}}}"#
+        ))
+        .create();
+    // Even a client built for one tenant lists the whole portfolio.
+    let response = tenant_client(&server, TENANT_B)
+        .list_tenants(&ListTenantsParams::default())
+        .expect("listing");
+    mock.assert();
+    assert_eq!(response.data.data[0].slug, "acme");
+    assert_eq!(
+        response.data.data[0].licence_status.as_deref(),
+        Some("in_force")
+    );
+    assert_eq!(response.raw["data"][0]["later"], 1);
+}
+
+#[test]
+fn a_selected_tenant_travels_on_data_calls_and_must_be_confirmed() {
+    let mut server = mockito::Server::new();
+    let ok = server
+        .mock("GET", "/v1/vendors")
+        .match_header("x-hs-tenant", TENANT_A)
+        .with_header("x-hs-tenant", &TENANT_A.to_ascii_uppercase())
+        .with_body(EMPTY_PAGE)
+        .create();
+    tenant_client(&server, TENANT_A)
+        .list_vendors(&ListVendorsParams::default())
+        .expect("confirmed answer");
+    ok.assert();
+}
+
+#[test]
+fn an_answer_for_another_tenant_or_for_none_is_refused() {
+    let mut server = mockito::Server::new();
+    let other = server
+        .mock("GET", "/v1/vendors")
+        .with_header("x-hs-tenant", TENANT_B)
+        .with_body(EMPTY_PAGE)
+        .create();
+    let err = tenant_client(&server, TENANT_A)
+        .list_vendors(&ListVendorsParams::default())
+        .expect_err("another tenant");
+    assert!(
+        matches!(&err, Error::TenantMismatch { answered: Some(a), .. } if a == TENANT_B),
+        "{err:?}"
+    );
+    other.remove();
+    server
+        .mock("GET", "/v1/vendors")
+        .with_body(EMPTY_PAGE)
+        .create();
+    let err = tenant_client(&server, TENANT_A)
+        .list_vendors(&ListVendorsParams::default())
+        .expect_err("no confirmation");
+    assert!(
+        matches!(err, Error::TenantMismatch { answered: None, .. }),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn a_client_without_a_tenant_sends_no_selection_and_checks_nothing() {
+    let mut server = mockito::Server::new();
+    let mock = server
+        .mock("GET", "/v1/vendors")
+        .match_header("x-hs-tenant", mockito::Matcher::Missing)
+        .with_body(EMPTY_PAGE)
+        .create();
+    client(&server)
+        .list_vendors(&ListVendorsParams::default())
+        .expect("plain call");
+    mock.assert();
+}
+
+#[test]
+fn a_tenant_that_is_not_a_uuid_is_refused_before_any_request() {
+    for bad in [
+        "acme",
+        "",
+        "11111111-1111-4111-8111-111111111111, 22222222-2222-4222-8222-222222222222",
+    ] {
+        let err = Client::builder(
+            "https://api.example.test".parse().expect("url"),
+            SecretString::from("k"),
+        )
+        .tenant(bad)
+        .expect_err("not a UUID");
+        assert!(matches!(err, Error::InvalidTenant(_)), "{bad:?}");
+    }
+}

@@ -134,12 +134,7 @@ fn tenant_header(headers: &HeaderMap) -> Option<String> {
     if values.next().is_some() {
         return None;
     }
-    let canonical = value.len() == 36
-        && value.bytes().enumerate().all(|(i, b)| match i {
-            8 | 13 | 18 | 23 => b == b'-',
-            _ => b.is_ascii_hexdigit(),
-        });
-    canonical.then(|| value.to_ascii_lowercase())
+    crate::portfolio::is_uuid(value).then(|| value.to_ascii_lowercase())
 }
 
 /// What the client reports about each request it sends, for `--verbose`. It carries no header and
@@ -175,6 +170,15 @@ pub struct RetryEvent<'a> {
 type Observer = Arc<dyn Fn(&RequestEvent<'_>) + Send + Sync>;
 type RetryObserver = Arc<dyn Fn(&RetryEvent<'_>) + Send + Sync>;
 type Renew = Arc<dyn Fn() -> Option<SecretString> + Send + Sync>;
+type AnswerCheck = Arc<dyn Fn(&HeaderMap) -> Result<(), Error> + Send + Sync>;
+
+/// Extra headers a client sends on data requests, and the check its successful answers must pass.
+/// The portfolio module fills it in; this file knows nothing about what the headers mean.
+#[derive(Clone, Default)]
+pub(crate) struct Scope {
+    pub(crate) headers: HeaderMap,
+    pub(crate) check: Option<AnswerCheck>,
+}
 
 /// Builds a [`Client`].
 pub struct ClientBuilder {
@@ -189,6 +193,7 @@ pub struct ClientBuilder {
     observer: Option<Observer>,
     retry_observer: Option<RetryObserver>,
     renew: Option<Renew>,
+    pub(crate) scope: Scope,
 }
 
 impl fmt::Debug for ClientBuilder {
@@ -308,6 +313,7 @@ impl ClientBuilder {
             observer: self.observer,
             retry_observer: self.retry_observer,
             renew: self.renew,
+            scope: self.scope,
         })
     }
 }
@@ -325,6 +331,7 @@ pub struct Client {
     observer: Option<Observer>,
     retry_observer: Option<RetryObserver>,
     renew: Option<Renew>,
+    scope: Scope,
 }
 
 impl fmt::Debug for Client {
@@ -361,6 +368,7 @@ impl Client {
             observer: None,
             retry_observer: None,
             renew: None,
+            scope: Scope::default(),
         }
     }
 
@@ -415,18 +423,32 @@ impl Client {
         path: String,
         query: Vec<(&'static str, String)>,
     ) -> Result<ApiResponse<T>, Error> {
+        self.get_with(operation, path, query, true)
+    }
+
+    /// Like [`Client::get`]; with `scoped` false the client's scope headers are neither sent nor
+    /// checked, for an operation that sits outside the scope.
+    pub(crate) fn get_with<T: DeserializeOwned>(
+        &self,
+        operation: &'static Operation,
+        path: String,
+        query: Vec<(&'static str, String)>,
+        scoped: bool,
+    ) -> Result<ApiResponse<T>, Error> {
         let url = self.url(&path, &query);
         let mut rate_limit_retries = 0;
         let mut transient_retries = 0;
         let mut renewed = false;
         loop {
             let started = Instant::now();
-            let response = match self
+            let mut request = self
                 .http
                 .get(url.clone())
-                .header(AUTHORIZATION, self.authorization()?)
-                .send()
-            {
+                .header(AUTHORIZATION, self.authorization()?);
+            if scoped {
+                request = request.headers(self.scope.headers.clone());
+            }
+            let response = match request.send() {
                 Ok(response) => response,
                 Err(e)
                     if (e.is_connect() || e.is_timeout())
@@ -455,8 +477,14 @@ impl Client {
                     elapsed: started.elapsed(),
                 });
             }
+            // A scoped answer that does not carry the scope that was asked for is never decoded.
+            let verdict = match (&self.scope.check, scoped, status.is_success()) {
+                (Some(check), true, true) => check(response.headers()),
+                _ => Ok(()),
+            };
             let body = read_body(response, MAX_RESPONSE_BYTES).map_err(Error::Body)?;
             if status.is_success() {
+                verdict?;
                 let raw: serde_json::Value =
                     serde_json::from_slice(&body).map_err(|source| Error::Decode {
                         operation: operation.id,

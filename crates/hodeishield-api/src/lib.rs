@@ -24,6 +24,7 @@
 
 mod client;
 mod error;
+pub mod portfolio;
 #[allow(missing_docs)]
 #[path = "generated.rs"]
 pub mod v1;
