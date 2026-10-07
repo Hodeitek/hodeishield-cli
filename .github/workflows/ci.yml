@@ -184,6 +184,22 @@ jobs:
           fi
           grep -q -- "--no-verify" "$RUNNER_TEMP/err"
 
+  # The repository freshness monitor must go red: its control builds small repositories with a
+  # throwaway key, serves them from localhost and checks that every stale, altered, unsigned or
+  # missing case fails and the current one passes.
+  repo-freshness:
+    name: repo-freshness
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run the control cases
+        run: sh packaging/repo/freshness-test.sh
+
   # A pull request into main is a release: the version in Cargo.toml must have its notes.
   changelog:
     name: changelog

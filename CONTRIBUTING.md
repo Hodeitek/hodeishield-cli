@@ -118,6 +118,16 @@ the `packaging` environment has no `PACKAGES_S3_ENDPOINT`. It needs the variable
 ASCII-armored secret signing subkey only), and the matching public key committed as
 `packaging/gpg.key`.
 
+The APT and DNF indexes carry no `Valid-Until`, so an older index that was once validly signed and is
+served again from a compromised bucket would still verify: the weekly `repo-freshness` workflow detects
+this (once `packaging/gpg.key` is committed), it does not prevent it. It checks that both repositories
+are signed by that key and that the newest `hodeishield` version in each index is the latest published
+release's (`packaging/repo/freshness.sh`, with `packaging/repo/freshness-test.sh` as its control in CI).
+A failure opens an issue labelled `repo-freshness` with what was expected, what is served and the run,
+and it is closed when the check passes again; a release less than 48 hours old that is not served yet
+only raises a warning, since the `repos` job waits for an approval. On such an issue, first check who
+can write to the bucket, then re-run the `repos` job for the latest release to publish current indexes.
+
 winget is submitted by hand, and only with the maintainers' approval, because it is a public
 submission to another project:
 

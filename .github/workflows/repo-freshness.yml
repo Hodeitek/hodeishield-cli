@@ -1,0 +1,187 @@
+name: Repository freshness
+
+# Once a week (and on demand) checks that the APT and DNF repositories at packages.hodeishield.com
+# serve the latest published release, and that what they serve is signed by the repository key. The
+# indexes carry no Valid-Until, so an old index that was once validly signed would still verify: this
+# detects one being served (see packaging/repo/freshness.sh and CONTRIBUTING.md). It reads public
+# files only, uses no secret and no environment, and writes nothing but an issue labelled
+# `repo-freshness`: opened (or commented on) while the check fails, and closed when it passes again.
+#
+# Until packaging/gpg.key is committed (the repositories are not live before that) it does nothing.
+# From then on it fails closed: a download that fails, an unreadable release or a signature that does
+# not verify is a failure, never a pass.
+on:
+  schedule:
+    - cron: "43 6 * * 1" # Mondays, 06:43 UTC
+  workflow_dispatch:
+    inputs:
+      grace_hours:
+        description: "Hours a new release may take to appear in the repositories before it counts as a failure"
+        required: false
+        default: "48"
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: repo-freshness
+  cancel-in-progress: false
+
+env:
+  BASE_URL: https://packages.hodeishield.com
+  LABEL: repo-freshness
+
+jobs:
+  check:
+    name: check the repositories
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read # the checkout, and the release
+      issues: write # the issue and its label
+      actions: read # the time of this workflow's previous run
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check the repositories are live
+        id: gate
+        run: |
+          if [ ! -s packaging/gpg.key ]; then
+            echo "::notice::packaging/gpg.key is not committed yet, so the repositories are not live; nothing to check."
+            exit 0
+          fi
+          echo "active=true" >> "$GITHUB_OUTPUT"
+
+      # GitHub disables scheduled workflows of a repository without activity for 60 days. A long gap
+      # since the previous run is reported with the result, because a monitor that did not run
+      # cannot have noticed anything.
+      - name: Look for a gap since the previous run
+        if: steps.gate.outputs.active == 'true'
+        id: gap
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          last=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/repo-freshness.yml/runs?status=completed&per_page=30" \
+            --jq '[.workflow_runs[] | select(.conclusion == "success" or .conclusion == "failure")] | sort_by(.created_at) | last | .created_at // empty')
+          [ -n "$last" ] || exit 0
+          now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          days=$(( ($(date +%s) - $(date -d "$last" +%s)) / 86400 ))
+          if [ "$days" -gt 9 ]; then
+            note="The monitor did not run between $last and $now ($days days). Scheduled workflows are disabled after 60 days without activity in the repository, so the repositories may have gone unchecked."
+            echo "::warning::$note"
+            echo "note=$note" >> "$GITHUB_OUTPUT"
+          fi
+
+      # The latest published release (not a draft, not a prerelease) decides what must be served.
+      # Anything that cannot be read is a failure. The report is what the issue shows.
+      - name: Check the repositories serve the latest release
+        if: steps.gate.outputs.active == 'true'
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GRACE_HOURS: ${{ inputs.grace_hours || '48' }}
+        run: |
+          set -uo pipefail
+          report="$RUNNER_TEMP/report.txt"
+          (
+            set -euo pipefail
+            [[ "$GRACE_HOURS" =~ ^[0-9]+$ ]] || { echo "The grace period is not a number of hours."; exit 1; }
+            release=$(gh release view -R "$GITHUB_REPOSITORY" --json tagName,isDraft,isPrerelease,publishedAt,assets) ||
+              { echo "The latest release cannot be read."; exit 1; }
+            tag=$(jq -r .tagName <<< "$release")
+            [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "The tag of the latest release is not a stable version."; exit 1; }
+            jq -e '.isDraft == false and .isPrerelease == false' <<< "$release" > /dev/null ||
+              { echo "The latest release is a draft or a prerelease."; exit 1; }
+            version=${tag#v}
+            echo "expected=$version" >> "$GITHUB_OUTPUT"
+            # The packages the repositories are built from (the repos job of package-managers.yml).
+            for name in "hodeishield_${version}-1_amd64.deb" "hodeishield_${version}-1_arm64.deb" \
+              "hodeishield-${version}-1.x86_64.rpm" "hodeishield-${version}-1.aarch64.rpm"; do
+              jq -e --arg name "$name" '.assets | any(.name == $name)' <<< "$release" > /dev/null ||
+                { echo "The latest release (v$version) has no $name."; exit 1; }
+            done
+            age=$(( $(date +%s) - $(date -d "$(jq -r .publishedAt <<< "$release")" +%s) ))
+            echo "Latest release: v$version, published $((age / 3600)) hours ago."
+            rc=0
+            sh packaging/repo/freshness.sh "$BASE_URL" "$version" packaging/gpg.key || rc=$?
+            # Stale, but the release is recent: the repositories are published after an approval.
+            if [ "$rc" = 3 ] && [ "$age" -lt $((GRACE_HOURS * 3600)) ]; then
+              exit 4
+            fi
+            exit "$rc"
+          ) > "$report" 2>&1
+          status=$?
+          cat "$report"
+          case $status in
+            0) result=pass ;;
+            4)
+              result=grace
+              echo "::warning::The latest release is less than $GRACE_HOURS hours old and the repositories do not serve it yet; not treated as a failure."
+              ;;
+            *) result=fail ;;
+          esac
+          echo "result=$result" >> "$GITHUB_OUTPUT"
+
+      - name: Report the result
+        if: "!cancelled() && steps.gate.outputs.active == 'true'"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESULT: ${{ steps.check.outputs.result }}
+          EXPECTED: ${{ steps.check.outputs.expected }}
+          GAP: ${{ steps.gap.outputs.note }}
+        run: |
+          set -euo pipefail
+          report="$RUNNER_TEMP/report.txt"
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          {
+            echo "### Repository freshness: ${RESULT:-fail}"
+            echo
+            echo '```'
+            head -c 4000 "$report"
+            echo '```'
+            [ -z "$GAP" ] || { echo; echo "$GAP"; }
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          issue=$(gh issue list -R "$GITHUB_REPOSITORY" --label "$LABEL" --state open --json number --jq '.[0].number // empty')
+          case ${RESULT:-fail} in
+            pass)
+              if [ -n "$issue" ]; then
+                gh issue close "$issue" -R "$GITHUB_REPOSITORY" --reason completed \
+                  --comment "The APT and DNF repositories serve the latest release again ($run_url)."
+              fi
+              ;;
+            fail)
+              {
+                echo "The APT and DNF repositories at $BASE_URL did not pass the weekly freshness check."
+                echo
+                echo "Expected version: ${EXPECTED:-unknown (the latest release could not be read)}"
+                echo
+                echo '```'
+                head -c 4000 "$report"
+                echo '```'
+                [ -z "$GAP" ] || { echo; echo "$GAP"; }
+                echo
+                echo "Run: $run_url"
+              } > "$RUNNER_TEMP/issue.md"
+              if [ -n "$issue" ]; then
+                gh issue comment "$issue" -R "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/issue.md"
+              else
+                gh label list -R "$GITHUB_REPOSITORY" --search "$LABEL" --json name --jq '.[].name' | grep -qx "$LABEL" ||
+                  gh label create "$LABEL" -R "$GITHUB_REPOSITORY" --color D93F0B \
+                    --description "The APT or DNF repository is not serving the latest release"
+                gh issue create -R "$GITHUB_REPOSITORY" --label "$LABEL" \
+                  --title "The APT and DNF repositories are not serving the latest release" \
+                  --body-file "$RUNNER_TEMP/issue.md"
+              fi
+              ;;
+          esac
+
+      - name: Fail if the check failed
+        if: "!cancelled() && steps.gate.outputs.active == 'true' && steps.check.outputs.result != 'pass' && steps.check.outputs.result != 'grace'"
+        run: |
+          echo "::error::The APT and DNF repositories did not pass the freshness check; see the issue labelled repo-freshness."
+          exit 1
