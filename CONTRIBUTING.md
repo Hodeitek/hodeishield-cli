@@ -63,7 +63,8 @@ dependency: it changes only by a deliberate decision.
 
 `crates/hodeishield-api/src/generated.rs` is generated from the vendored OpenAPI document
 `openapi/v1.json` by `cargo xtask codegen`. Do not edit it by hand. To follow a new version of `/v1`,
-see [openapi/README.md](openapi/README.md).
+see [openapi/README.md](openapi/README.md). A weekly workflow reports, in an issue, when the
+published document no longer matches that copy; it does not change the repository.
 
 ### Trying the CLI against your organisation
 
