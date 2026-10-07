@@ -46,10 +46,11 @@ them all green.
 Dependabot (`.github/dependabot.yml`) proposes cargo and GitHub Actions updates once a week, against
 `dev`, for versions published at least seven days earlier. Major versions are left to a person.
 
-Three pins are not covered by Dependabot and are reviewed by hand in the periodic dependency review:
+Four pins are not covered by Dependabot and are reviewed by hand in the periodic dependency review:
 
 - the Rust toolchain in `rust-toolchain.toml` (latest stable, at least seven days old);
-- `cargo-deny` and `cargo-audit`, installed with `--version` in `.github/workflows/ci.yml`.
+- `cargo-deny` and `cargo-audit`, installed with `--version` in `.github/workflows/ci.yml`, and
+  `cargo-cyclonedx` in `.github/workflows/release.yml`.
 
 The same review runs `cargo audit` and `cargo outdated`, and checks that every action is pinned by
 full commit SHA. The MSRV (`rust-version` in `Cargo.toml`) is a compatibility promise, not a

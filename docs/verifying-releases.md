@@ -7,6 +7,9 @@ Every release of `hodeishield-cli` publishes, for each platform archive:
   "bundle" files produced by **keyless** `cosign sign-blob` (no private key:
   the workflow signs using its GitHub Actions OIDC identity, and the
   signature is recorded in the public Rekor transparency log).
+- `<archive-name>.cdx.json` — a [CycloneDX](https://cyclonedx.org) SBOM for each archive (from
+  0.2.0): every crate compiled into that binary, with its version, licence and package URL. It has
+  its own `.sigstore.json`, and is listed in `SHA256SUMS`.
 - `hodeishield.intoto.jsonl` — [SLSA](https://slsa.dev) build provenance for the
   release, produced by the
   [`slsa-framework/slsa-github-generator`](https://github.com/slsa-framework/slsa-github-generator)
@@ -64,6 +67,17 @@ A successful verification confirms the file was signed by the
 push of **exactly the tag you expect** — not by an arbitrary contributor, a
 fork, a manual run, or an older release renamed to look like this one. Use the
 exact identity with your version, not a pattern that any `v*` tag would match.
+
+The SBOM is verified the same way, with its own bundle:
+
+```sh
+cosign verify-blob \
+  --bundle hodeishield-0.2.0-x86_64-unknown-linux-musl.cdx.json.sigstore.json \
+  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.2.0 \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-github-workflow-trigger push \
+  hodeishield-0.2.0-x86_64-unknown-linux-musl.cdx.json
+```
 
 ## 4. Verify SLSA build provenance
 
