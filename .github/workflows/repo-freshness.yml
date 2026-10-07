@@ -65,11 +65,21 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          last=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/repo-freshness.yml/runs?status=completed&per_page=30" \
-            --jq '[.workflow_runs[] | select(.conclusion == "success" or .conclusion == "failure")] | sort_by(.created_at) | last | .created_at // empty')
+          unreadable="The time of the monitor's previous run could not be read."
+          if ! last=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/repo-freshness.yml/runs?status=completed&per_page=30" \
+            --jq '[.workflow_runs[] | select(.conclusion == "success" or .conclusion == "failure")] | sort_by(.created_at) | last | .created_at // empty'); then
+            echo "::warning::$unreadable"
+            echo "note=$unreadable" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           [ -n "$last" ] || exit 0
           now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          days=$(( ($(date +%s) - $(date -d "$last" +%s)) / 86400 ))
+          if ! last_epoch=$(date -d "$last" +%s); then
+            echo "::warning::$unreadable"
+            echo "note=$unreadable" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          days=$(( ($(date +%s) - last_epoch) / 86400 ))
           if [ "$days" -gt 9 ]; then
             note="The monitor did not run between $last and $now ($days days). Scheduled workflows are disabled after 60 days without activity in the repository, so the repositories may have gone unchecked."
             echo "::warning::$note"
@@ -136,12 +146,20 @@ jobs:
         run: |
           set -euo pipefail
           report="$RUNNER_TEMP/report.txt"
+          # An earlier step may have failed before the check wrote its report.
+          print_report() {
+            if [ -f "$report" ]; then
+              head -c 4000 "$report"
+            else
+              echo "No report: an earlier step failed before the check ran (see the run)."
+            fi
+          }
           run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           {
             echo "### Repository freshness: ${RESULT:-fail}"
             echo
             echo '```'
-            head -c 4000 "$report"
+            print_report
             echo '```'
             [ -z "$GAP" ] || { echo; echo "$GAP"; }
           } >> "$GITHUB_STEP_SUMMARY"
@@ -161,7 +179,7 @@ jobs:
                 echo "Expected version: ${EXPECTED:-unknown (the latest release could not be read)}"
                 echo
                 echo '```'
-                head -c 4000 "$report"
+                print_report
                 echo '```'
                 [ -z "$GAP" ] || { echo; echo "$GAP"; }
                 echo
