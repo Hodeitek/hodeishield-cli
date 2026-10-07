@@ -59,6 +59,21 @@ From source, with the Rust toolchain installed (pin the release tag you want):
 cargo install --locked --git https://github.com/Hodeitek/hodeishield-cli --tag v0.2.0 hodeishield-cli
 ```
 
+### Debian, Ubuntu, Fedora, RHEL and other Linux distributions
+
+From the next release on, each release also publishes `.deb` and `.rpm` packages for x86_64 and
+arm64. They install `/usr/bin/hodeishield`, the man pages and the bash, zsh and fish completions.
+Verify the package as in the next section (it has its own `.sigstore.json` and is listed in
+`SHA256SUMS`), then:
+
+```sh
+sudo apt install ./hodeishield_<version>-1_amd64.deb      # Debian, Ubuntu (arm64: _arm64.deb)
+sudo dnf install ./hodeishield-<version>-1.x86_64.rpm     # Fedora, RHEL (arm64: .aarch64.rpm)
+```
+
+Upgrading is the same command with the newer package; `sudo apt remove hodeishield` or
+`sudo dnf remove hodeishield` uninstalls it.
+
 ### Install script (Linux and macOS)
 
 Each release from the next one on also publishes `install.sh`, signed like the archives. It

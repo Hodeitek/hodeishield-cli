@@ -7,6 +7,9 @@ Every release of `hodeishield-cli` publishes, for each platform archive:
   "bundle" files produced by **keyless** `cosign sign-blob` (no private key:
   the workflow signs using its GitHub Actions OIDC identity, and the
   signature is recorded in the public Rekor transparency log).
+- `.deb` and `.rpm` packages (from the release after 0.2.0), each with its own `.sigstore.json` and
+  listed in `SHA256SUMS`. They contain the binary and man pages of the Linux archive for the same
+  architecture, so that archive's SBOM describes them; verify them the same way as the archives.
 - `<archive-name>.cdx.json` — a [CycloneDX](https://cyclonedx.org) SBOM for each archive (from
   0.2.0): every crate compiled into that binary, with its version, licence and package URL. It has
   its own `.sigstore.json`, and is listed in `SHA256SUMS`.
