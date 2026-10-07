@@ -1,0 +1,4 @@
+# The image packaging/repo/build.sh runs in, pinned by digest, and the exact packages it installs.
+# Bumped by hand in the periodic dependency review (CONTRIBUTING.md).
+IMAGE=debian:trixie-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f
+PACKAGES="apt-utils=3.0.3 createrepo-c=1.2.0-2+b1 gnupg=2.4.7-21+deb13u1 gpgv=2.4.7-21+deb13u1+b5 rclone=1.60.1+dfsg-4 rpm=4.20.1+dfsg-3 xz-utils=5.8.1-1+deb13u1"

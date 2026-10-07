@@ -1,0 +1,7 @@
+[hodeishield]
+name=HodeiShield CLI
+baseurl=https://packages.hodeishield.com/rpm/$basearch
+enabled=1
+gpgcheck=1
+repo_gpgcheck=1
+gpgkey=https://packages.hodeishield.com/gpg.key
