@@ -59,6 +59,28 @@ From source, with the Rust toolchain installed (pin the release tag you want):
 cargo install --locked --git https://github.com/Hodeitek/hodeishield-cli --tag v0.2.0 hodeishield-cli
 ```
 
+### Install script (Linux and macOS)
+
+Each release from the next one on also publishes `install.sh`, signed like the archives. It
+downloads the archive for your platform, checks it against `SHA256SUMS` and its Sigstore signature,
+and installs `hodeishield` (and its man pages) in `/usr/local/bin` when writable, otherwise
+`~/.local/bin`. Do not pipe it into a shell: download it, verify it, read it, then run it.
+
+```sh
+v=<version>   # e.g. the latest release, without the leading v
+curl -fsSLO https://github.com/Hodeitek/hodeishield-cli/releases/download/v$v/install.sh
+curl -fsSLO https://github.com/Hodeitek/hodeishield-cli/releases/download/v$v/install.sh.sigstore.json
+cosign verify-blob --bundle install.sh.sigstore.json \
+  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v$v \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-github-workflow-trigger push install.sh
+less install.sh
+sh install.sh --version $v
+```
+
+It needs `cosign` to check the archive's signature and stops if it is missing; `--no-verify` skips
+that check (the checksum still runs). `sh install.sh --help` lists the options (`--dir`, `--no-man`).
+
 ### Man pages
 
 From 0.2.0, the Linux and macOS archives include a man page for every command in `man/`. To read
