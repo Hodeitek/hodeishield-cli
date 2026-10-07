@@ -11,6 +11,9 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 - Each release publishes a CycloneDX SBOM per archive (`<archive>.cdx.json`): the crates compiled
   into that binary, signed with Sigstore and listed in `SHA256SUMS`.
   ([#34](https://github.com/Hodeitek/hodeishield-cli/issues/34))
+- A man page for every command (`man hodeishield`, `man hodeishield-vendors-list`, …), generated
+  from the command-line definition and shipped in the Linux and macOS archives under `man/`.
+  ([#28](https://github.com/Hodeitek/hodeishield-cli/issues/28))
 - `--csv` on every `list` command and on `compliance controls` prints the items as CSV (RFC 4180,
   UTF-8, the same fields as `--json`), also with `--all`. Text cells that a spreadsheet would run
   as a formula are prefixed with `'`.

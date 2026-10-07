@@ -9,6 +9,9 @@ license.workspace = true
 publish = false
 
 [dependencies]
+clap = { version = "4.6.7", features = ["derive"] }
+clap_mangen = "0.3.3"
+hodeishield-cli = { path = "../crates/hodeishield-cli" }
 serde_json = { version = "1.0.151", features = ["preserve_order"] }
 sha2 = "0.11.0"
 

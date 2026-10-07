@@ -35,6 +35,7 @@ cargo test --workspace            # unit and end-to-end tests (no network, no ke
 cargo fmt --all
 cargo clippy --workspace --all-targets -- -D warnings
 cargo xtask codegen --check       # the API client matches openapi/v1.json
+cargo xtask man target/man        # generate man pages
 cargo deny check && cargo audit   # dependency policy and advisories
 ```
 

@@ -59,6 +59,17 @@ From source, with the Rust toolchain installed (pin the release tag you want):
 cargo install --locked --git https://github.com/Hodeitek/hodeishield-cli --tag v0.1.1 hodeishield-cli
 ```
 
+### Man pages
+
+From 0.2.0, the Linux and macOS archives include a man page for every command in `man/`. To read
+them with `man`, copy them into a directory on your man path, for example:
+
+```sh
+sudo mkdir -p /usr/local/share/man/man1
+sudo cp hodeishield-<version>-<target>/man/*.1 /usr/local/share/man/man1/
+man hodeishield-vendors-list
+```
+
 ## Verify a download
 
 Each release has a `SHA256SUMS` file, a Sigstore bundle (`*.sigstore.json`) for every archive and for

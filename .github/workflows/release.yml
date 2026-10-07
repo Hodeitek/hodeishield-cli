@@ -124,6 +124,9 @@ jobs:
       - name: Build
         run: cargo build --release --locked --target ${{ matrix.target }} -p hodeishield-cli
 
+      - name: Generate man pages
+        run: cargo xtask man target/man
+
       - name: Package archive
         env:
           VERSION: ${{ needs.version.outputs.version }}
@@ -134,6 +137,8 @@ jobs:
           mkdir -p "$stage"
           cp "target/${TARGET}/release/${BIN_NAME}" "$stage/"
           cp LICENSE NOTICE README.md "$stage/"
+          mkdir -p "$stage/man"
+          cp target/man/*.1 "$stage/man/"
           tar -C "$(dirname "$stage")" -czf "hodeishield-${VERSION}-${TARGET}.tar.gz" "$(basename "$stage")"
 
       - name: Upload archive
@@ -177,11 +182,15 @@ jobs:
             "target/aarch64-apple-darwin/release/${BIN_NAME}"
           lipo -info "target/universal-apple-darwin/release/${BIN_NAME}"
 
+      - name: Generate man pages
+        run: cargo xtask man target/man
+
       - name: Stage the unsigned binary for the signing job
         run: |
           set -euo pipefail
-          mkdir stage
+          mkdir -p stage/man
           cp "target/universal-apple-darwin/release/${BIN_NAME}" LICENSE NOTICE README.md stage/
+          cp target/man/*.1 stage/man/
 
       - name: Upload the unsigned binary
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -232,12 +241,25 @@ jobs:
       - name: Refuse anything but the expected files
         run: |
           set -euo pipefail
-          found="$(cd stage && find . -mindepth 1 | sed 's|^\./||' | LC_ALL=C sort | tr '\n' ' ')"
-          if [ "$found" != "LICENSE NOTICE README.md hodeishield " ]; then
-            echo "::error::Unexpected hand-off contents: $found"
+          # Top level: exactly the binary, the licence files and the README, plus `man/`. In `man/`:
+          # only regular `hodeishield*.1` files, at least one. Nothing else, of any type.
+          top="$(cd stage && find . -mindepth 1 -maxdepth 1 | sed 's|^\./||' | LC_ALL=C sort | tr '\n' ' ')"
+          if [ "$top" != "LICENSE NOTICE README.md hodeishield man " ]; then
+            echo "::error::Unexpected hand-off contents: $top"
+            exit 1
+          fi
+          if [ -n "$(find stage -mindepth 1 -maxdepth 1 ! -type f ! -name man)" ] || [ ! -d stage/man ] || [ -L stage/man ]; then
+            echo "::error::The hand-off holds something that is not a regular file."
+            exit 1
+          fi
+          odd="$(find stage/man -mindepth 1 \( ! -type f -o ! -name 'hodeishield*.1' \))"
+          pages="$(find stage/man -mindepth 1 -type f -name 'hodeishield*.1' | wc -l)"
+          if [ -n "$odd" ] || [ "$pages" -lt 1 ]; then
+            echo "::error::man/ must hold only hodeishield*.1 files (found $pages pages; unexpected: $odd)"
             exit 1
           fi
           chmod 0755 "stage/${BIN_NAME}"
+          find stage/man -type f -exec chmod 0644 {} \;
 
       - name: Check the signing inputs are present
         if: env.SIGN == 'true'
@@ -358,7 +380,7 @@ jobs:
           mkdir -p dist
           dir="$RUNNER_TEMP/hodeishield-${VERSION}-${TARGET}"
           mkdir -p "$dir"
-          cp -p stage/* "$dir/"
+          cp -Rp stage/* "$dir/"
           tar -C "$RUNNER_TEMP" -czf "dist/hodeishield-${VERSION}-${TARGET}.tar.gz" "$(basename "$dir")"
           ls -l dist
 
