@@ -661,7 +661,7 @@ jobs:
   # checks nothing out and runs no repository or WiX code. The MSI is published only when signed.
   sign-msi:
     name: msi (sign)
-    needs: [version, windows-msi]
+    needs: [version, sign-windows, windows-msi]
     runs-on: windows-latest
     timeout-minutes: 20
     environment: ${{ needs.version.outputs.sign_windows == 'true' && 'release-signing' || '' }}
@@ -687,6 +687,50 @@ jobs:
             Write-Host "::error::Unexpected hand-off contents: $($found -join ', ')"
             exit 1
           }
+
+      # The MSI was built by a job that ran WiX, third-party code: do not sign it on trust. Using
+      # only Windows' own Installer API, check that it carries no custom actions or embedded
+      # binaries (so nothing runs at install time but standard actions), then extract it with an
+      # administrative install and check its payload is exactly the exe sign-windows signed, plus
+      # LICENSE and NOTICE.
+      - name: Check the MSI before signing it
+        shell: powershell
+        env:
+          EXE_SHA256: ${{ needs.sign-windows.outputs.exe_sha256 }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $msi = (Resolve-Path "msi\hodeishield-$env:VERSION-x86_64-pc-windows-msvc.msi").Path
+          $installer = New-Object -ComObject WindowsInstaller.Installer
+          $db = $installer.OpenDatabase($msi, 0)
+          function Count-Rows([string]$table) {
+            try { $view = $db.OpenView("SELECT * FROM ``$table``") } catch { return 0 }
+            $view.Execute(); $n = 0
+            while ($view.Fetch()) { $n++ }
+            $view.Close(); return $n
+          }
+          $bad = @()
+          foreach ($table in @("CustomAction", "Binary", "MsiEmbeddedUI", "MsiEmbeddedChainer")) {
+            $n = Count-Rows $table
+            Write-Host "$table rows: $n"
+            if ($n -ne 0) { $bad += $table }
+          }
+          $files = Count-Rows "File"
+          Write-Host "File rows: $files"
+          if ($files -ne 3) { $bad += "File ($files rows, expected 3)" }
+          [System.Runtime.InteropServices.Marshal]::ReleaseComObject($db) | Out-Null
+          if ($bad.Count -gt 0) { Write-Host "::error::the MSI has unexpected content: $($bad -join ', ')"; exit 1 }
+
+          $target = Join-Path $env:RUNNER_TEMP "msi-admin"
+          $p = Start-Process msiexec.exe -ArgumentList "/a `"$msi`" /qn TARGETDIR=`"$target`"" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "administrative extraction exited with $($p.ExitCode)" }
+          $payload = @(Get-ChildItem -LiteralPath $target -Recurse -File | Where-Object { $_.Extension -ne ".msi" })
+          $names = @($payload | ForEach-Object { $_.Name } | Sort-Object)
+          if (($names -join ",") -ne "hodeishield.exe,LICENSE,NOTICE") { Write-Host "::error::MSI payload: $($names -join ', ')"; exit 1 }
+          $exe = $payload | Where-Object { $_.Name -eq "hodeishield.exe" }
+          $hash = (Get-FileHash -LiteralPath $exe.FullName -Algorithm SHA256).Hash.ToLower()
+          if ($hash -ne $env:EXE_SHA256) { Write-Host "::error::the exe in the MSI is $hash, not the signed $env:EXE_SHA256"; exit 1 }
+          Remove-Item -Recurse -Force $target
+          Write-Host "MSI content: OK (no custom actions or binaries; payload is the signed exe, LICENSE, NOTICE)"
 
       - name: Azure login (OIDC)
         if: env.SIGN == 'true'
@@ -895,15 +939,55 @@ jobs:
         id: tag
         run: echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
 
-      - name: Download all archives
+      # Each artifact lands in its own directory (no merging, so one cannot overwrite another), and
+      # only the exact set of artifacts and file names this release produces is taken. Several jobs
+      # run third-party code (build scripts, cargo-cyclonedx, nfpm, WiX); an extra `archive-*`
+      # artifact from any of them makes this step fail instead of being published and signed.
+      - name: Download the release artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: archive-*
-          path: dist
-          merge-multiple: true
+          path: artifacts
+          merge-multiple: false
 
-      - name: List downloaded archives
-        run: ls -l dist
+      - name: Take exactly the expected files
+        env:
+          V: ${{ needs.version.outputs.version }}
+          SIGN_MACOS: ${{ needs.version.outputs.sign_macos }}
+          SIGN_WINDOWS: ${{ needs.version.outputs.sign_windows }}
+        run: |
+          set -euo pipefail
+          pv="${V//-/\~}" # how deb and rpm write a pre-release version
+          {
+            echo "archive-x86_64-unknown-linux-musl hodeishield-$V-x86_64-unknown-linux-musl.tar.gz"
+            echo "archive-aarch64-unknown-linux-musl hodeishield-$V-aarch64-unknown-linux-musl.tar.gz"
+            echo "archive-universal-apple-darwin hodeishield-$V-universal-apple-darwin.tar.gz"
+            [ "$SIGN_MACOS" = true ] && echo "archive-universal-apple-darwin hodeishield-$V-universal-apple-darwin.pkg"
+            echo "archive-x86_64-pc-windows-msvc hodeishield-$V-x86_64-pc-windows-msvc.zip"
+            [ "$SIGN_WINDOWS" = true ] && echo "archive-msi hodeishield-$V-x86_64-pc-windows-msvc.msi"
+            for t in x86_64-unknown-linux-musl aarch64-unknown-linux-musl universal-apple-darwin x86_64-pc-windows-msvc; do
+              echo "archive-sbom hodeishield-$V-$t.cdx.json"
+            done
+            echo "archive-packages hodeishield_${pv}-1_amd64.deb"
+            echo "archive-packages hodeishield_${pv}-1_arm64.deb"
+            echo "archive-packages hodeishield-${pv}-1.x86_64.rpm"
+            echo "archive-packages hodeishield-${pv}-1.aarch64.rpm"
+          } | LC_ALL=C sort > "$RUNNER_TEMP/expected"
+          (cd artifacts && find . -mindepth 1 | sed 's|^\./||' | while read -r entry; do
+            case "$entry" in
+              */*) [ -f "$entry" ] && [ ! -L "$entry" ] && echo "${entry%%/*} ${entry#*/}" || echo "NOT-A-FILE $entry" ;;
+              *) [ -d "$entry" ] || echo "NOT-A-DIRECTORY $entry" ;;
+            esac
+          done) | LC_ALL=C sort > "$RUNNER_TEMP/found"
+          if ! diff -u "$RUNNER_TEMP/expected" "$RUNNER_TEMP/found"; then
+            echo "::error::The release artifacts are not exactly the expected set (diff above)."
+            exit 1
+          fi
+          mkdir dist
+          while read -r artifact file; do
+            cp "artifacts/$artifact/$file" dist/
+          done < "$RUNNER_TEMP/expected"
+          ls -l dist
 
       # The installer is published with the release, so it is checksummed and signed like the
       # archives: a user can verify it before running it.
