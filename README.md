@@ -49,14 +49,14 @@ section), and put `hodeishield` (`hodeishield.exe` on Windows) somewhere on your
 | macOS (Apple silicon and Intel) | `hodeishield-<version>-universal-apple-darwin.tar.gz` |
 | Windows x86_64 | `hodeishield-<version>-x86_64-pc-windows-msvc.zip` |
 
-`<version>` has no leading `v`: release `v0.1.1` ships `hodeishield-0.1.1-…`. The Linux binaries are
+`<version>` has no leading `v`: release `v0.2.0` ships `hodeishield-0.2.0-…`. The Linux binaries are
 statically linked and run on any distribution. A Homebrew tap and a Windows installer (MSI) are
 planned but not available yet.
 
 From source, with the Rust toolchain installed (pin the release tag you want):
 
 ```sh
-cargo install --locked --git https://github.com/Hodeitek/hodeishield-cli --tag v0.1.1 hodeishield-cli
+cargo install --locked --git https://github.com/Hodeitek/hodeishield-cli --tag v0.2.0 hodeishield-cli
 ```
 
 ### Man pages
@@ -78,9 +78,9 @@ Each release has a `SHA256SUMS` file, a Sigstore bundle (`*.sigstore.json`) for 
 ```sh
 sha256sum --ignore-missing -c SHA256SUMS
 
-cosign verify-blob hodeishield-0.1.1-x86_64-unknown-linux-musl.tar.gz \
-  --bundle hodeishield-0.1.1-x86_64-unknown-linux-musl.tar.gz.sigstore.json \
-  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.1.1 \
+cosign verify-blob hodeishield-0.2.0-x86_64-unknown-linux-musl.tar.gz \
+  --bundle hodeishield-0.2.0-x86_64-unknown-linux-musl.tar.gz.sigstore.json \
+  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.2.0 \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --certificate-github-workflow-trigger push
 ```
@@ -91,9 +91,12 @@ tag, with no long-lived key involved; put your version in the identity rather th
 
 ### If macOS or Windows blocks the binary
 
-The binaries are not yet signed with an Apple Developer ID or a Windows Authenticode certificate
-([#50](https://github.com/Hodeitek/hodeishield-cli/issues/50)), so a file downloaded with a browser can be blocked or flagged. The cosign check above is the
-proof that the file is genuine; once it passes, unblock the binary as follows.
+From 0.2.0, `hodeishield.exe` is signed with Authenticode, so Windows accepts it;
+[docs/verifying-releases.md](docs/verifying-releases.md) shows how to check the signature. The macOS
+binary is not yet signed with an Apple Developer ID or notarized; that comes in a later release
+([#50](https://github.com/Hodeitek/hodeishield-cli/issues/50)). Until then, and for Windows versions
+before 0.2.0, a copy downloaded with a browser can be blocked or flagged. The cosign check above is
+the proof that the file is genuine; once it passes, unblock the binary as follows.
 
 **macOS.** Gatekeeper may refuse to open `hodeishield` ("Apple could not verify… is free of
 malware"). Remove the quarantine attribute from the unpacked binary:
@@ -105,20 +108,21 @@ xattr -d com.apple.quarantine ./hodeishield   # "No such xattr" means there was 
 Or download with `curl`, which does not set that attribute in the first place:
 
 ```sh
-curl -LO https://github.com/Hodeitek/hodeishield-cli/releases/download/v0.1.1/hodeishield-0.1.1-universal-apple-darwin.tar.gz
+curl -LO https://github.com/Hodeitek/hodeishield-cli/releases/download/v0.2.0/hodeishield-0.2.0-universal-apple-darwin.tar.gz
 ```
 
-**Windows.** Unblock the archive before unpacking it, so the executable does not inherit the
-download mark:
+**Windows, before 0.2.0.** Unblock the archive before unpacking it, so the executable does not
+inherit the download mark:
 
 ```powershell
 Unblock-File .\hodeishield-0.1.1-x86_64-pc-windows-msvc.zip
 Expand-Archive .\hodeishield-0.1.1-x86_64-pc-windows-msvc.zip
 ```
 
-If you already unpacked it, run `Unblock-File` on `hodeishield.exe` instead. If SmartScreen still
-shows "Windows protected your PC", choose **More info → Run anyway** («Más información → Ejecutar de
-todos modos» on a Spanish system).
+If you already unpacked it, run `Unblock-File` on `hodeishield.exe` instead. SmartScreen can also
+warn about a signed file that is still new to it; in either case, if it shows "Windows protected
+your PC", choose **More info → Run anyway** («Más información → Ejecutar de todos modos» on a
+Spanish system).
 
 ## Authenticate
 

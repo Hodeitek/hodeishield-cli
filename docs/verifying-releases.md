@@ -15,14 +15,14 @@ Every release of `hodeishield-cli` publishes, for each platform archive:
   [`slsa-framework/slsa-github-generator`](https://github.com/slsa-framework/slsa-github-generator)
   generic generator.
 
-The steps below use `v0.1.1` and `hodeishield-0.1.1-x86_64-unknown-linux-musl.tar.gz`
+The steps below use `v0.2.0` and `hodeishield-0.2.0-x86_64-unknown-linux-musl.tar.gz`
 as examples — substitute the actual version and archive you downloaded.
 
 ## 1. Download the files
 
 From the release page, download:
 
-- the archive you want (e.g. `hodeishield-0.1.1-x86_64-unknown-linux-musl.tar.gz`)
+- the archive you want (e.g. `hodeishield-0.2.0-x86_64-unknown-linux-musl.tar.gz`)
 - `SHA256SUMS`
 - the matching `<archive>.sigstore.json`
 - `SHA256SUMS.sigstore.json`
@@ -45,7 +45,7 @@ Requires [`cosign`](https://github.com/sigstore/cosign) (v2 or newer).
 ```sh
 cosign verify-blob \
   --bundle SHA256SUMS.sigstore.json \
-  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.1.1 \
+  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.2.0 \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --certificate-github-workflow-trigger push \
   SHA256SUMS
@@ -55,11 +55,11 @@ Repeat for the archive itself, using its own `.sigstore.json`:
 
 ```sh
 cosign verify-blob \
-  --bundle hodeishield-0.1.1-x86_64-unknown-linux-musl.tar.gz.sigstore.json \
-  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.1.1 \
+  --bundle hodeishield-0.2.0-x86_64-unknown-linux-musl.tar.gz.sigstore.json \
+  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.2.0 \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --certificate-github-workflow-trigger push \
-  hodeishield-0.1.1-x86_64-unknown-linux-musl.tar.gz
+  hodeishield-0.2.0-x86_64-unknown-linux-musl.tar.gz
 ```
 
 A successful verification confirms the file was signed by the
@@ -85,10 +85,10 @@ Requires [`slsa-verifier`](https://github.com/slsa-framework/slsa-verifier).
 
 ```sh
 slsa-verifier verify-artifact \
-  hodeishield-0.1.1-x86_64-unknown-linux-musl.tar.gz \
+  hodeishield-0.2.0-x86_64-unknown-linux-musl.tar.gz \
   --provenance-path hodeishield.intoto.jsonl \
   --source-uri github.com/Hodeitek/hodeishield-cli \
-  --source-tag v0.1.1
+  --source-tag v0.2.0
 ```
 
 `hodeishield.intoto.jsonl` is attached to the release and covers every
@@ -98,34 +98,11 @@ This confirms the archive was built by the `release.yml` GitHub Actions
 workflow, from the `Hodeitek/hodeishield-cli` source repository, at the tag
 you expect — not from a modified build or a malicious fork.
 
-## 5. Platform signatures (macOS and Windows)
+## 5. Platform signatures (Windows; macOS in a later release)
 
-Releases built with platform signing also carry the signatures the operating systems check by
-themselves. They do not replace the steps above: they say the file comes from Hodeitek, not which
+From 0.2.0, `hodeishield.exe` also carries an Authenticode signature, which Windows checks by
+itself. It does not replace the steps above: it says the file comes from Hodeitek, not which
 workflow run built it.
-
-**macOS.** The `hodeishield` binary in `hodeishield-<version>-universal-apple-darwin.tar.gz` is
-signed with a Developer ID Application certificate, with the hardened runtime, and notarized by
-Apple. A bare executable cannot carry a stapled ticket, so Gatekeeper confirms the notarization
-online the first time it runs. The release also includes
-`hodeishield-<version>-universal-apple-darwin.pkg`, which installs `/usr/local/bin/hodeishield`. It
-is signed with a Developer ID Installer certificate, notarized and stapled, so it also passes
-Gatekeeper offline and suits deployment with an MDM.
-
-```sh
-codesign --verify --strict --verbose=2 ./hodeishield
-codesign --display --verbose=2 ./hodeishield 2>&1 | grep -E '^(Authority|TeamIdentifier|Timestamp)'
-spctl --assess --type execute --verbose=2 ./hodeishield   # "source=Notarized Developer ID"
-
-pkgutil --check-signature hodeishield-<version>-universal-apple-darwin.pkg
-spctl --assess --type install --verbose=2 hodeishield-<version>-universal-apple-darwin.pkg
-xcrun stapler validate hodeishield-<version>-universal-apple-darwin.pkg
-```
-
-The first `Authority` line must read `Developer ID Application: Hodeitek S.L.` and the package's
-`Developer ID Installer: Hodeitek S.L.`, both followed by the same team identifier.
-
-**Windows.** `hodeishield.exe` is signed with Authenticode and timestamped.
 
 ```powershell
 Get-AuthenticodeSignature .\hodeishield.exe | Format-List Status, SignerCertificate, TimeStamperCertificate
@@ -133,6 +110,10 @@ Get-AuthenticodeSignature .\hodeishield.exe | Format-List Status, SignerCertific
 
 `Status` must be `Valid` and the signer's subject must name Hodeitek S.L. In Explorer the same
 information is under Properties → Digital Signatures.
+
+The macOS binary is not yet signed with a Developer ID or notarized; that, and a signed and
+notarized `.pkg` installer, come in a later release
+([#50](https://github.com/Hodeitek/hodeishield-cli/issues/50)).
 
 ## Not yet
 
