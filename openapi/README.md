@@ -12,6 +12,13 @@ from it; nothing in that client is written by hand from memory.
 
 ## Updating it
 
+The **OpenAPI sync** workflow (`.github/workflows/openapi-sync.yml`) does this every Monday, and on
+demand: it compares this copy with the published document by content (key order and whitespace do
+not count) and, when they differ, opens or updates one pull request against `dev`. That pull request
+contains the published bytes, the steps below and a summary, with the label `breaking-change` when
+[oasdiff](https://github.com/oasdiff/oasdiff) finds one. A maintainer reviews and merges it; nothing
+is merged automatically. By hand:
+
 1. Replace `v1.json` with the new document, unchanged.
 2. Update the version and SHA-256 above and in `xtask/src/main.rs` (`EXPECTED_SHA256`).
 3. `cargo xtask codegen` rewrites `crates/hodeishield-api/src/generated.rs`.
