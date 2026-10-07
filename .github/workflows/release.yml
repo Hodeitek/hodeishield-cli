@@ -29,6 +29,11 @@ jobs:
       sign_macos: ${{ steps.signing.outputs.sign_macos }}
       sign_windows: ${{ steps.signing.outputs.sign_windows }}
     steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
       - name: Determine version and mode
         id: version
         env:
@@ -45,6 +50,13 @@ jobs:
             echo "version=${REF_NAME#v}" >> "$GITHUB_OUTPUT"
             echo "dry_run=false" >> "$GITHUB_OUTPUT"
           fi
+
+      # A tag cannot be released without its notes: fail before building anything.
+      - name: Check the changelog has an entry for this version
+        if: github.event_name == 'push'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: sh .github/scripts/changelog-section.sh "$VERSION" > /dev/null
 
       # Platform signing happens only for a pushed release tag, and only once the maintainers have
       # provisioned it and set the variable to exactly "true". A manual run never signs. GitHub's
@@ -578,6 +590,20 @@ jobs:
             cosign sign-blob --yes --bundle "${f}.sigstore.json" "$f"
           done
 
+      # The notes are the version's CHANGELOG section, then how to verify the download, then
+      # GitHub's list of merged pull requests (--generate-notes appends it after the notes file).
+      - name: Write the release notes
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          {
+            sh .github/scripts/changelog-section.sh "${TAG#v}"
+            echo
+            echo "Verify the download as described in [Verifying releases](https://github.com/${GITHUB_REPOSITORY}/blob/${TAG}/docs/verifying-releases.md)."
+          } > "$RUNNER_TEMP/notes.md"
+          cat "$RUNNER_TEMP/notes.md"
+
       - name: Create draft GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -588,6 +614,7 @@ jobs:
             --draft \
             --verify-tag \
             --title "$TAG" \
+            --notes-file "$RUNNER_TEMP/notes.md" \
             --generate-notes \
             dist/*
 
