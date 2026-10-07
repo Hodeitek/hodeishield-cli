@@ -48,6 +48,20 @@ def check(document, url):
         raise SystemExit(f"error: {url} has no paths")
 
 
+def local_refs_only(node, url, where="#"):
+    """Refuses any `$ref` that is not a pointer into the document itself. oasdiff, which compares
+    the old and new documents, would otherwise read the file or fetch the URL a `$ref` names and
+    could copy it into the public pull request."""
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key == "$ref" and not (isinstance(value, str) and value.startswith("#/")):
+                raise SystemExit(f"error: {url} has a non-local $ref at {where}: {str(value)[:80]!r}")
+            local_refs_only(value, url, f"{where}/{key}")
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            local_refs_only(value, url, f"{where}/{index}")
+
+
 def canonical(document):
     return json.dumps(document, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
@@ -70,6 +84,7 @@ def main():
     except ValueError as e:
         raise SystemExit(f"error: {url} is not JSON: {e}")
     check(new, url)
+    local_refs_only(new, url)
     current = SPEC.read_bytes()
     old = json.loads(current)
     if canonical(new) == canonical(old):
