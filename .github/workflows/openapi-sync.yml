@@ -1,0 +1,176 @@
+name: OpenAPI sync
+
+# Keeps openapi/v1.json in step with the document the API publishes. Once a week (and on demand)
+# it compares the two by content; if they differ, it opens or updates ONE pull request against dev
+# with the new document, the regenerated client and a summary, labelled `breaking-change` when
+# oasdiff finds one. It never pushes to main and never merges anything.
+on:
+  schedule:
+    - cron: "17 5 * * 1" # Mondays, 05:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openapi-sync
+  cancel-in-progress: false
+
+env:
+  SPEC_URL: https://api.hodeishield.com/v1/openapi.json
+  BRANCH: chore/openapi-sync
+  OASDIFF_VERSION: "1.32.1"
+  OASDIFF_SHA256: 7c8939fc49b75ee11fec66a5b83b37a2fca6aee109fed85013b1ba2ac2a1ee7f
+
+jobs:
+  sync:
+    name: sync
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write # the sync branch and its commit
+      pull-requests: write # the pull request and its labels
+    steps:
+      - name: Checkout dev
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: dev
+          persist-credentials: false
+
+      - name: Compare with the published document
+        id: compare
+        run: python3 .github/scripts/openapi-sync.py "$SPEC_URL" "$RUNNER_TEMP/sync" | tee -a "$GITHUB_OUTPUT"
+
+      - name: Install pinned toolchain
+        if: steps.compare.outputs.changed == 'true'
+        run: rustup show
+
+      - name: Regenerate the client
+        if: steps.compare.outputs.changed == 'true'
+        id: codegen
+        run: |
+          if cargo xtask codegen > "$RUNNER_TEMP/codegen.log" 2>&1; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          fi
+          cat "$RUNNER_TEMP/codegen.log"
+
+      # Pinned and checked against the checksum recorded above; bumped by hand in the periodic
+      # dependency review (CONTRIBUTING.md).
+      - name: Install oasdiff
+        if: steps.compare.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          archive="oasdiff_${OASDIFF_VERSION}_linux_amd64.tar.gz"
+          curl -sSfL -o "$RUNNER_TEMP/$archive" \
+            "https://github.com/oasdiff/oasdiff/releases/download/v${OASDIFF_VERSION}/${archive}"
+          echo "${OASDIFF_SHA256}  $RUNNER_TEMP/$archive" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" oasdiff
+
+      - name: Write the pull request description
+        if: steps.compare.outputs.changed == 'true'
+        id: body
+        env:
+          CODEGEN_OK: ${{ steps.codegen.outputs.ok }}
+        run: |
+          set -euo pipefail
+          old="$RUNNER_TEMP/sync/old.json"
+          oasdiff="$RUNNER_TEMP/oasdiff"
+          breaking=false
+          if ! "$oasdiff" breaking "$old" openapi/v1.json --fail-on ERR > "$RUNNER_TEMP/breaking.txt" 2>&1; then
+            breaking=true
+          fi
+          "$oasdiff" changelog "$old" openapi/v1.json -f markdown > "$RUNNER_TEMP/changelog.md" 2>&1 || true
+          {
+            echo "The document published at \`$SPEC_URL\` differs in content from \`openapi/v1.json\`. This pull request takes the published bytes unchanged, updates the recorded version and SHA-256, and regenerates the client."
+            echo
+            cat "$RUNNER_TEMP/sync/summary.md"
+            echo
+            if [ "$breaking" = true ]; then
+              echo "**⚠ Breaking changes found by oasdiff** (label \`breaking-change\`): an older CLI may fail against the new contract. Review before merging."
+            else
+              echo "No breaking changes found by oasdiff."
+            fi
+            echo
+            echo '```'
+            head -c 20000 "$RUNNER_TEMP/breaking.txt"
+            echo '```'
+            if [ "$CODEGEN_OK" != true ]; then
+              echo
+              echo "**⚠ \`cargo xtask codegen\` failed**; the client is not regenerated. Output:"
+              echo '```'
+              tail -c 5000 "$RUNNER_TEMP/codegen.log"
+              echo '```'
+            fi
+            echo
+            echo "<details><summary>oasdiff changelog</summary>"
+            echo
+            head -c 30000 "$RUNNER_TEMP/changelog.md"
+            echo
+            echo "</details>"
+            echo
+            echo "Opened by the weekly OpenAPI sync workflow. Pull requests it opens do not start CI on their own: close and reopen this one to run the checks. Never merged automatically."
+          } > "$RUNNER_TEMP/body.md"
+          echo "breaking=$breaking" >> "$GITHUB_OUTPUT"
+          echo "version=$(cat "$RUNNER_TEMP/sync/version.txt")" >> "$GITHUB_OUTPUT"
+
+      # The commit is made through the GraphQL API so GitHub signs it: dev only accepts signed
+      # commits. The branch is reset to dev first, so it always holds exactly one sync commit.
+      - name: Commit to the sync branch
+        if: steps.compare.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.body.outputs.version }}
+        run: |
+          set -euo pipefail
+          base=$(git rev-parse HEAD)
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$BRANCH" > /dev/null 2>&1; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/heads/$BRANCH" -f sha="$base" -F force=true > /dev/null
+          else
+            gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/heads/$BRANCH" -f sha="$base" > /dev/null
+          fi
+          python3 - "$base" > "$RUNNER_TEMP/commit.json" <<'EOF'
+          import base64, json, os, subprocess, sys
+          files = subprocess.run(["git", "diff", "--name-only"], check=True, capture_output=True, text=True).stdout.split()
+          message = {
+              "headline": f"Sync the /v1 OpenAPI document from the API ({os.environ['VERSION']})",
+              "body": "Takes the document the API publishes, unchanged, updates its recorded version and\n"
+                      "SHA-256, and regenerates the client.\n\n"
+                      "Signed-off-by: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>",
+          }
+          additions = [{"path": f, "contents": base64.b64encode(open(f, "rb").read()).decode()} for f in files]
+          query = """mutation($input: CreateCommitOnBranchInput!) {
+            createCommitOnBranch(input: $input) { commit { oid url } } }"""
+          print(json.dumps({"query": query, "variables": {"input": {
+              "branch": {"repositoryNameWithOwner": os.environ["GITHUB_REPOSITORY"], "branchName": os.environ["BRANCH"]},
+              "expectedHeadOid": sys.argv[1],
+              "message": message,
+              "fileChanges": {"additions": additions},
+          }}}))
+          EOF
+          gh api graphql --input "$RUNNER_TEMP/commit.json" --jq '.data.createCommitOnBranch.commit.url'
+
+      - name: Open or update the pull request
+        if: steps.compare.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.body.outputs.version }}
+          BREAKING: ${{ steps.body.outputs.breaking }}
+        run: |
+          set -euo pipefail
+          title="chore(api): sync openapi v1 from platform $VERSION"
+          number=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --base dev --state open --json number --jq '.[0].number // empty')
+          if [ -z "$number" ]; then
+            url=$(gh pr create --repo "$GITHUB_REPOSITORY" --base dev --head "$BRANCH" --title "$title" --body-file "$RUNNER_TEMP/body.md")
+            number=${url##*/}
+          else
+            gh pr edit "$number" --repo "$GITHUB_REPOSITORY" --title "$title" --body-file "$RUNNER_TEMP/body.md" > /dev/null
+          fi
+          gh pr edit "$number" --repo "$GITHUB_REPOSITORY" --add-label api-sync > /dev/null
+          if [ "$BREAKING" = true ]; then
+            gh pr edit "$number" --repo "$GITHUB_REPOSITORY" --add-label breaking-change > /dev/null
+          else
+            gh pr edit "$number" --repo "$GITHUB_REPOSITORY" --remove-label breaking-change > /dev/null 2>&1 || true
+          fi
+          echo "Pull request #$number"

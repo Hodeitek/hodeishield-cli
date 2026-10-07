@@ -47,11 +47,12 @@ them all green.
 Dependabot (`.github/dependabot.yml`) proposes cargo and GitHub Actions updates once a week, against
 `dev`, for versions published at least seven days earlier. Major versions are left to a person.
 
-Four pins are not covered by Dependabot and are reviewed by hand in the periodic dependency review:
+Five pins are not covered by Dependabot and are reviewed by hand in the periodic dependency review:
 
 - the Rust toolchain in `rust-toolchain.toml` (latest stable, at least seven days old);
-- `cargo-deny` and `cargo-audit`, installed with `--version` in `.github/workflows/ci.yml`, and
-  `cargo-cyclonedx` in `.github/workflows/release.yml`.
+- `cargo-deny` and `cargo-audit`, installed with `--version` in `.github/workflows/ci.yml`,
+  `cargo-cyclonedx` in `.github/workflows/release.yml`, and `oasdiff` (version and SHA-256) in
+  `.github/workflows/openapi-sync.yml`.
 
 The same review runs `cargo audit` and `cargo outdated`, and checks that every action is pinned by
 full commit SHA. The MSRV (`rust-version` in `Cargo.toml`) is a compatibility promise, not a
@@ -90,6 +91,18 @@ cargo run -- vendors list
   `git commit --amend -s` for the last commit or `git rebase --signoff <base>` for several. CI
   checks every pull request; sign-off is never added automatically.
 - By contributing you agree that your contribution is licensed under the Apache License 2.0.
+
+## Closing issues
+
+An issue is closed as soon as the fix reaches `main`, never left open once fixed:
+
+- The commit that fixes an issue says `Closes #N` in its message (not only in the pull request), so
+  GitHub closes it when the commit reaches `main`.
+- After every release or other merge into `main`, the open issues are reviewed against what landed:
+  an issue that is fully fixed is closed with a comment citing the commit and the file or test that
+  proves it; one that is partly fixed gets a comment saying what remains; an obsolete one is closed
+  with the reason. A security issue is closed only with evidence that it is fixed or not exploitable.
+- After a merge into `dev`, the issues the pull request mentions get the same review.
 
 ## Security issues
 
