@@ -444,6 +444,10 @@ jobs:
     env:
       VERSION: ${{ needs.version.outputs.version }}
       SIGN: ${{ needs.version.outputs.sign_windows }}
+    # The digest of the exe this job hands to the MSI build. A job output cannot be rewritten by
+    # another job, so `windows-msi` checks what it downloads against this, not against a name.
+    outputs:
+      exe_sha256: ${{ steps.handoff.outputs.exe_sha256 }}
     steps:
       - name: Download the unsigned executable
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -531,6 +535,22 @@ jobs:
             exit 1
           }
 
+      - name: Record the digest of the executable handed off
+        id: handoff
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash -LiteralPath stage\hodeishield.exe -Algorithm SHA256).Hash.ToLower()
+          "exe_sha256=$hash" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
+          Write-Host "hodeishield.exe $hash"
+
+      - name: Upload the signed executable for the MSI build
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-msi-input
+          path: stage/*
+          if-no-files-found: error
+          retention-days: 1
+
       - name: Package archive
         shell: pwsh
         run: |
@@ -546,6 +566,174 @@ jobs:
         with:
           name: archive-x86_64-pc-windows-msvc
           path: dist/*.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  # The Windows Installer package, built with WiX from the exe `sign-windows` signed. This job can
+  # NOT sign: it has no id-token permission and no environment, because `dotnet tool install` and
+  # the WiX build run third-party code. It installs the package silently, checks it, and removes it.
+  windows-msi:
+    name: msi (build and test)
+    needs: [version, sign-windows]
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      EXE_SHA256: ${{ needs.sign-windows.outputs.exe_sha256 }}
+      # Pinned to 5.x: later WiX releases add maintenance-fee terms to their licence, to be reviewed
+      # before moving. Bumped by hand in the periodic dependency review (CONTRIBUTING.md).
+      WIX_VERSION: "5.0.2"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download the signed executable
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: windows-msi-input
+          path: msi-input
+
+      - name: Check it is the executable sign-windows handed off
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $hash = (Get-FileHash -LiteralPath msi-input\hodeishield.exe -Algorithm SHA256).Hash.ToLower()
+          if ($hash -ne $env:EXE_SHA256) {
+            Write-Host "::error::hodeishield.exe is $hash, but sign-windows handed off $env:EXE_SHA256"
+            exit 1
+          }
+
+      - name: Install WiX
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          dotnet tool install --global wix --version $env:WIX_VERSION
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          "$env:USERPROFILE\.dotnet\tools" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+
+      - name: Build the MSI
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          # Windows Installer versions are numeric: 0.3.0-rc.1 becomes 0.3.0.
+          $msiVersion = ($env:VERSION -split '-')[0]
+          New-Item -ItemType Directory -Path msi-out | Out-Null
+          wix build -arch x64 -d "Version=$msiVersion" -d "SourceDir=$PWD\msi-input" `
+            -o "msi-out\hodeishield-$env:VERSION-x86_64-pc-windows-msvc.msi" packaging\windows\hodeishield.wxs
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Get-ChildItem msi-out
+
+      - name: Install, check and uninstall the MSI silently
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $msi = (Resolve-Path "msi-out\hodeishield-$env:VERSION-x86_64-pc-windows-msvc.msi").Path
+          $dir = Join-Path $env:ProgramFiles "HodeiShield CLI"
+          $envKey = "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment"
+          $p = Start-Process msiexec.exe -ArgumentList "/i `"$msi`" /qn /norestart /l*v install.log" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Get-Content install.log -Tail 50; throw "install exited with $($p.ExitCode)" }
+          $exe = Join-Path $dir "hodeishield.exe"
+          if (-not (Test-Path $exe)) { throw "$exe is missing after install" }
+          if ((Get-FileHash $exe -Algorithm SHA256).Hash.ToLower() -ne $env:EXE_SHA256) { throw "installed exe differs" }
+          $path = (Get-ItemProperty $envKey).Path
+          if (($path -split ';') -notcontains "$dir\") { throw "PATH does not contain $dir\ : $path" }
+          & $exe --version
+          $p = Start-Process msiexec.exe -ArgumentList "/x `"$msi`" /qn /norestart /l*v uninstall.log" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Get-Content uninstall.log -Tail 50; throw "uninstall exited with $($p.ExitCode)" }
+          if (Test-Path $exe) { throw "$exe is still there after uninstall" }
+          $path = (Get-ItemProperty $envKey).Path
+          if (($path -split ';') -contains "$dir\") { throw "PATH still contains $dir\ after uninstall" }
+          Write-Host "Install, PATH entry and uninstall: OK"
+
+      - name: Upload the unsigned MSI
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-msi-unsigned
+          path: msi-out/*.msi
+          if-no-files-found: error
+          retention-days: 1
+
+  # Signs the MSI with the same Azure Artifact Signing profile as the exe. Like `sign-windows`, it
+  # checks nothing out and runs no repository or WiX code. The MSI is published only when signed.
+  sign-msi:
+    name: msi (sign)
+    needs: [version, windows-msi]
+    runs-on: windows-latest
+    timeout-minutes: 20
+    environment: ${{ needs.version.outputs.sign_windows == 'true' && 'release-signing' || '' }}
+    permissions:
+      contents: read
+      id-token: write # OIDC federation to Azure; used only when this run signs
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      SIGN: ${{ needs.version.outputs.sign_windows }}
+    steps:
+      - name: Download the MSI
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: windows-msi-unsigned
+          path: msi
+
+      - name: Refuse anything but the expected file
+        shell: pwsh
+        run: |
+          $found = @(Get-ChildItem -LiteralPath msi -Recurse -Force | ForEach-Object { $_.Name })
+          $expected = "hodeishield-$env:VERSION-x86_64-pc-windows-msvc.msi"
+          if ($found.Count -ne 1 -or $found[0] -ne $expected) {
+            Write-Host "::error::Unexpected hand-off contents: $($found -join ', ')"
+            exit 1
+          }
+
+      - name: Azure login (OIDC)
+        if: env.SIGN == 'true'
+        uses: Azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign the MSI (Azure Artifact Signing)
+        if: env.SIGN == 'true'
+        uses: Azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ vars.AZURE_CERTIFICATE_PROFILE_NAME }}
+          files: ${{ github.workspace }}\msi\hodeishield-${{ needs.version.outputs.version }}-x86_64-pc-windows-msvc.msi
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Azure logout
+        if: always() && env.SIGN == 'true'
+        shell: pwsh
+        run: |
+          az logout 2>$null
+          exit 0
+
+      - name: Verify the Authenticode signature
+        if: env.SIGN == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $signature = Get-AuthenticodeSignature -LiteralPath "msi\hodeishield-$env:VERSION-x86_64-pc-windows-msvc.msi"
+          $signature | Format-List Status, StatusMessage, SignerCertificate, TimeStamperCertificate
+          if ($signature.Status -ne "Valid" -or -not $signature.TimeStamperCertificate) {
+            Write-Host "::error::the MSI is not validly signed and timestamped."
+            exit 1
+          }
+
+      - name: Upload the signed MSI
+        if: env.SIGN == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          # `archive-` so `publish` picks it up with the archives.
+          name: archive-msi
+          path: msi/*.msi
           if-no-files-found: error
           retention-days: 7
 
@@ -687,7 +875,7 @@ jobs:
   # release.
   publish:
     name: publish (draft release)
-    needs: [version, build-linux, sign-macos, sign-windows, sbom, packages]
+    needs: [version, build-linux, sign-macos, sign-windows, sign-msi, sbom, packages]
     # Only a pushed tag publishes; a manual run is always a dry run, whatever the ref is called.
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && needs.version.outputs.dry_run != 'true'
     runs-on: ubuntu-latest
@@ -744,7 +932,7 @@ jobs:
         working-directory: dist
         run: |
           set -euo pipefail
-          for f in hodeishield-*.tar.gz hodeishield-*.zip hodeishield-*.pkg hodeishield[-_]*.deb hodeishield-*.rpm hodeishield-*.cdx.json install.sh SHA256SUMS; do
+          for f in hodeishield-*.tar.gz hodeishield-*.zip hodeishield-*.msi hodeishield-*.pkg hodeishield[-_]*.deb hodeishield-*.rpm hodeishield-*.cdx.json install.sh SHA256SUMS; do
             [ -e "$f" ] || continue
             cosign sign-blob --yes --bundle "${f}.sigstore.json" "$f"
           done

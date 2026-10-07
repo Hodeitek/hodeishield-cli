@@ -7,6 +7,9 @@ Every release of `hodeishield-cli` publishes, for each platform archive:
   "bundle" files produced by **keyless** `cosign sign-blob` (no private key:
   the workflow signs using its GitHub Actions OIDC identity, and the
   signature is recorded in the public Rekor transparency log).
+- `hodeishield-<version>-x86_64-pc-windows-msvc.msi` (from the release after 0.2.0), with its own
+  `.sigstore.json` and listed in `SHA256SUMS`. The MSI and the `hodeishield.exe` inside it are both
+  signed with Authenticode (section 5); the exe is the same as in the `.zip`, whose SBOM describes it.
 - `.deb` and `.rpm` packages (from the release after 0.2.0), each with its own `.sigstore.json` and
   listed in `SHA256SUMS`. They contain the binary and man pages of the Linux archive for the same
   architecture, so that archive's SBOM describes them; verify them the same way as the archives.
@@ -112,7 +115,8 @@ Get-AuthenticodeSignature .\hodeishield.exe | Format-List Status, SignerCertific
 ```
 
 `Status` must be `Valid` and the signer's subject must name Hodeitek S.L. In Explorer the same
-information is under Properties → Digital Signatures.
+information is under Properties → Digital Signatures. The same check applies to the `.msi`
+(`Get-AuthenticodeSignature .\hodeishield-<version>-x86_64-pc-windows-msvc.msi`).
 
 The macOS binary is not yet signed with a Developer ID or notarized; that, and a signed and
 notarized `.pkg` installer, come in a later release

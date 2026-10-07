@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Windows Installer package for the hodeishield CLI (WiX v5).
+
+  Built by the release workflow (job `windows-msi`) with:
+
+      wix build -arch x64 -d Version=<X.Y.Z> -d SourceDir=<dir with hodeishield.exe, LICENSE, NOTICE>
+                -o hodeishield-<version>-x86_64-pc-windows-msvc.msi packaging/windows/hodeishield.wxs
+
+  It installs, for all users (per machine):
+    %ProgramFiles%\HodeiShield CLI\hodeishield.exe   (the same signed exe as the release .zip)
+    %ProgramFiles%\HodeiShield CLI\LICENSE, NOTICE
+  and appends that folder to the system PATH. Uninstalling removes the files and the PATH entry.
+
+  The UpgradeCode below is PERMANENT: every version shares it, so a newer MSI replaces an older one
+  (MajorUpgrade) and deployment tools can find the product across versions. Never change it.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+      Name="HodeiShield CLI"
+      Manufacturer="Hodeitek S.L."
+      Version="$(var.Version)"
+      UpgradeCode="32B34E35-7A3F-422A-AC44-59204CD0D59D"
+      Scope="perMachine"
+      Compressed="yes"
+      InstallerVersion="500">
+
+    <SummaryInformation Description="HodeiShield CLI $(var.Version)" Manufacturer="Hodeitek S.L." />
+
+    <MajorUpgrade
+        DowngradeErrorMessage="A newer version of HodeiShield CLI is already installed."
+        Schedule="afterInstallInitialize" />
+
+    <MediaTemplate EmbedCab="yes" />
+
+    <Property Id="ARPURLINFOABOUT" Value="https://hodeishield.com" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/Hodeitek/hodeishield-cli" />
+    <Property Id="ARPURLUPDATEINFO" Value="https://github.com/Hodeitek/hodeishield-cli/releases" />
+    <Property Id="ARPCOMMENTS" Value="Read-only command-line client for HodeiShield" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="HodeiShield CLI" />
+    </StandardDirectory>
+
+    <ComponentGroup Id="Files" Directory="INSTALLFOLDER">
+      <Component Id="Exe" Guid="*">
+        <File Id="HodeishieldExe" Source="$(var.SourceDir)\hodeishield.exe" KeyPath="yes" />
+      </Component>
+      <Component Id="License" Guid="*">
+        <File Id="LicenseFile" Source="$(var.SourceDir)\LICENSE" KeyPath="yes" />
+      </Component>
+      <Component Id="Notice" Guid="*">
+        <File Id="NoticeFile" Source="$(var.SourceDir)\NOTICE" KeyPath="yes" />
+      </Component>
+      <!-- The PATH entry is its own component, so it is added on install and removed on uninstall. -->
+      <Component Id="SystemPath" Guid="0239B9B1-FD70-43AD-BEB6-825747B6D6C9">
+        <Environment
+            Id="PathEntry"
+            Name="PATH"
+            Value="[INSTALLFOLDER]"
+            Part="last"
+            Action="set"
+            System="yes"
+            Permanent="no" />
+        <RegistryValue Root="HKLM" Key="Software\Hodeitek\HodeiShield CLI" Name="InstallDir"
+                       Type="string" Value="[INSTALLFOLDER]" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <Feature Id="Main" Title="HodeiShield CLI" Level="1">
+      <ComponentGroupRef Id="Files" />
+    </Feature>
+  </Package>
+</Wix>

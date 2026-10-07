@@ -8,6 +8,9 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ### Added
 
+- A Windows installer (`.msi`), signed with Authenticode: installs for all users in
+  `%ProgramFiles%\HodeiShield CLI`, adds it to `PATH`, upgrades in place, and supports silent
+  installation for Intune and Group Policy.
 - `.deb` and `.rpm` packages for x86_64 and arm64, with the man pages and the bash, zsh and fish
   completions, signed with Sigstore and listed in `SHA256SUMS`.
   ([#35](https://github.com/Hodeitek/hodeishield-cli/issues/35))

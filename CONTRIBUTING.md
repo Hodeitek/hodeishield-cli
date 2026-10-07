@@ -47,11 +47,12 @@ them all green.
 Dependabot (`.github/dependabot.yml`) proposes cargo and GitHub Actions updates once a week, against
 `dev`, for versions published at least seven days earlier. Major versions are left to a person.
 
-Six pins are not covered by Dependabot and are reviewed by hand in the periodic dependency review:
+Seven pins are not covered by Dependabot and are reviewed by hand in the periodic dependency review:
 
 - the Rust toolchain in `rust-toolchain.toml` (latest stable, at least seven days old);
 - `cargo-deny` and `cargo-audit`, installed with `--version` in `.github/workflows/ci.yml`,
-  `cargo-cyclonedx` and `nfpm` (version and SHA-256) in `.github/workflows/release.yml`, and
+  `cargo-cyclonedx`, `nfpm` (version and SHA-256) and WiX (`WIX_VERSION`; stay on 5.x until the
+  licence terms of later versions have been reviewed) in `.github/workflows/release.yml`, and
   `oasdiff` (version and SHA-256) in `.github/workflows/openapi-sync.yml`.
 
 The same review runs `cargo audit` and `cargo outdated`, and checks that every action is pinned by
