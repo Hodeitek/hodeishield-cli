@@ -145,6 +145,24 @@ jobs:
       - name: cargo audit
         run: cargo audit
 
+  # A pull request into main is a release: the version in Cargo.toml must have its notes.
+  changelog:
+    name: changelog
+    if: github.event_name == 'pull_request' && github.base_ref == 'main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check the changelog has an entry for the version being released
+        run: |
+          set -euo pipefail
+          version=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
+          echo "Version: $version"
+          sh .github/scripts/changelog-section.sh "$version"
+
   commit-messages:
     name: commit-messages
     if: github.event_name == 'pull_request'
