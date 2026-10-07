@@ -6,7 +6,7 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ## [Unreleased]
 
-## [0.2.0] - YYYY-MM-DD
+## [0.2.0] - 2026-10-07
 
 ### Added
 
