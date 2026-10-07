@@ -6,6 +6,11 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ## [Unreleased]
 
+### Added
+
+- `install.sh` for Linux and macOS, published and signed with each release: it checks the archive
+  against `SHA256SUMS` and its Sigstore signature before installing the binary and its man pages.
+
 ## [0.2.0] - 2026-10-07
 
 ### Added

@@ -642,6 +642,11 @@ jobs:
       - name: List downloaded archives
         run: ls -l dist
 
+      # The installer is published with the release, so it is checksummed and signed like the
+      # archives: a user can verify it before running it.
+      - name: Add the install script
+        run: cp install.sh dist/install.sh
+
       - name: Write SHA256SUMS
         working-directory: dist
         run: sha256sum * > SHA256SUMS
@@ -664,7 +669,7 @@ jobs:
         working-directory: dist
         run: |
           set -euo pipefail
-          for f in hodeishield-*.tar.gz hodeishield-*.zip hodeishield-*.pkg hodeishield-*.cdx.json SHA256SUMS; do
+          for f in hodeishield-*.tar.gz hodeishield-*.zip hodeishield-*.pkg hodeishield-*.cdx.json install.sh SHA256SUMS; do
             [ -e "$f" ] || continue
             cosign sign-blob --yes --bundle "${f}.sigstore.json" "$f"
           done
