@@ -7,6 +7,9 @@ Notable changes to the `hodeishield` CLI. Releases up to 0.1.1 are described on 
 
 ### Added
 
+- Each release publishes a CycloneDX SBOM per archive (`<archive>.cdx.json`): the crates compiled
+  into that binary, signed with Sigstore and listed in `SHA256SUMS`.
+  ([#34](https://github.com/Hodeitek/hodeishield-cli/issues/34))
 - `--csv` on every `list` command and on `compliance controls` prints the items as CSV (RFC 4180,
   UTF-8, the same fields as `--json`), also with `--all`. Text cells that a spreadsheet would run
   as a formula are prefixed with `'`.

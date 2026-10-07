@@ -515,13 +515,70 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  # A CycloneDX SBOM of the binary for each archive: the crates compiled into it for that target,
+  # without build-time or development dependencies. Separate from `publish` so the tool, a
+  # cargo-installed third-party crate, never runs in a job that can sign or write to the release.
+  # The two Linux architectures have the same dependency set, as do the two halves of the macOS
+  # universal binary; each archive still gets its own SBOM, named after it.
+  sbom:
+    name: sbom
+    needs: version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned toolchain
+        run: rustup show
+
+      # Pinned; bumped by hand in the periodic dependency review (CONTRIBUTING.md).
+      - name: Install cargo-cyclonedx
+        run: cargo install cargo-cyclonedx --locked --version 0.5.9
+
+      - name: Generate one SBOM per archive
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          # archive name suffix -> Rust target the dependency set is resolved for
+          for pair in \
+            x86_64-unknown-linux-musl:x86_64-unknown-linux-musl \
+            aarch64-unknown-linux-musl:aarch64-unknown-linux-musl \
+            universal-apple-darwin:aarch64-apple-darwin \
+            x86_64-pc-windows-msvc:x86_64-pc-windows-msvc; do
+            name="${pair%%:*}"
+            target="${pair##*:}"
+            cargo cyclonedx --manifest-path crates/hodeishield-cli/Cargo.toml --format json \
+              --spec-version 1.5 --describe binaries --no-build-deps --target "$target" \
+              --target-in-filename
+            mv "crates/hodeishield-cli/hodeishield_bin_${target}.cdx.json" \
+              "dist/hodeishield-${VERSION}-${name}.cdx.json"
+          done
+          for f in dist/*.cdx.json; do
+            python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(sys.argv[1], len(d['components']), 'components')" "$f"
+          done
+
+      - name: Upload the SBOMs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          # `archive-` so `publish` picks them up with the archives.
+          name: archive-sbom
+          path: dist/*.cdx.json
+          if-no-files-found: error
+          retention-days: 7
+
   # Downloads every archive, hashes and keylessly signs them with cosign, and
   # opens a DRAFT GitHub release with everything attached. The owner reviews
   # and publishes the draft by hand; this job never publishes a non-draft
   # release.
   publish:
     name: publish (draft release)
-    needs: [version, build-linux, sign-macos, sign-windows]
+    needs: [version, build-linux, sign-macos, sign-windows, sbom]
     # Only a pushed tag publishes; a manual run is always a dry run, whatever the ref is called.
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && needs.version.outputs.dry_run != 'true'
     runs-on: ubuntu-latest
@@ -573,7 +630,7 @@ jobs:
         working-directory: dist
         run: |
           set -euo pipefail
-          for f in hodeishield-*.tar.gz hodeishield-*.zip hodeishield-*.pkg SHA256SUMS; do
+          for f in hodeishield-*.tar.gz hodeishield-*.zip hodeishield-*.pkg hodeishield-*.cdx.json SHA256SUMS; do
             [ -e "$f" ] || continue
             cosign sign-blob --yes --bundle "${f}.sigstore.json" "$f"
           done
