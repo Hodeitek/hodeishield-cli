@@ -292,7 +292,7 @@ hodeishield logout           # revokes the token at the app and removes it from 
 
 You sign in to [app.hodeishield.com](https://app.hodeishield.com) as usual (2FA, passkey or SSO), and
 on the consent screen you choose **the one tenant** the CLI may read. A sign-in token never covers
-more than that tenant, and it only reads. To use another tenant, define another profile and sign in
+more than that tenant, and it only reads. To use an unrelated tenant, define another profile and sign in
 to it:
 
 ```sh
@@ -304,6 +304,9 @@ A profile that has not been defined is refused (`Profile ... is not defined`).
 
 `login` first checks that the system keychain is available and stops before opening the browser or
 showing a code if it is not; use a tenant API key on such a machine.
+
+An MSSP reads its clients with one credential instead: see
+[Several tenants (MSSP)](#several-tenants-mssp).
 
 With `--device`, open the address the CLI prints on any device and **type the code by hand**: the app
 does not accept a link with the code filled in, on purpose.
@@ -350,6 +353,92 @@ rest. `--all` stops with an error past 100,000 items (or 1,000 pages); narrow th
 or walk it with `--page`. Every list takes `--sort` and `--order`; `--help` on any command lists
 what it accepts.
 
+### Several tenants (MSSP)
+
+An MSSP reads all of its client tenants with **one** credential: a portfolio key, created in the
+app by an administrator of an active MSSP organisation, in the MSSP area (API keys). You do not need
+a profile, a key or a sign-in per client, and you should not set them up that way.
+
+A portfolio key reads only, always expires (90 days by default, 365 at most), and works on the
+HodeiShield API only. It can be limited when it is created to some of your clients and to source IP
+ranges; a request from another address is refused like an unknown key (exit code 3). Signing in
+with `hodeishield login` does not cover a whole portfolio: use the key.
+
+**1. Use the credential as any other key.**
+
+```sh
+export HODEISHIELD_API_KEY=hsp_3f2a9c0d1b4e_...   # the portfolio key; keep it in your CI's secret store
+```
+
+The key starts with `hsp_`, a 12-character identifier and `_`, then a long secret. The first 16
+characters identify the key in the app and in audit entries; the CLI never prints any part of the
+key. The same variable takes a tenant API key as before.
+
+**2. List the client tenants it may read.**
+
+```console
+$ hodeishield tenants list
+SLUG    NAME        ORGANIZATION  TYPE    STATUS  LICENCE   ID
+acme    Acme S.L.   -             client  active  in_force  11111111-1111-4111-8111-111111111111
+beta    Beta Corp   Beta Group    client  active  grace     22222222-2222-4222-8222-222222222222
+```
+
+It takes `--json`, `--csv`, `--page` and `--all` like any list, sorted by name. It includes your
+own organisation's tenants (`TYPE` `own` for the internal one) and clients that are inactive or have
+no licence in force, which the `STATUS` and `LICENCE` columns tell apart. The list is read from the API
+each time: a client added to or removed from your portfolio shows up on the next command.
+
+**3. Select the client a read command reads.** The selection goes with the command and is never
+remembered, so a later command cannot read another client by surprise.
+
+```sh
+hodeishield --tenant acme vendors list            # one client, by slug or id
+hodeishield --all-tenants alerts list --status open
+```
+
+- `--tenant <slug|id>` works on every read command (`list`, `get`, `compliance posture`). The CLI
+  prints `Client tenant: acme (<id>)` on standard error, so a log shows which client was read;
+  standard output is exactly what it is without a selection.
+- `--all-tenants` works on `list` commands and `compliance controls`. It fetches every page of each
+  client (`--per-page` applies, `--page` does not) and adds the tenant to each row: a `TENANT`
+  column in the table, and `tenant_id`, `tenant_slug` and `tenant_name` fields in `--json` and
+  `--csv`. Clients that are not readable are skipped, with a note on standard error: those that
+  are inactive, whose licence status is `inactive`, or whose licence status this CLI does not
+  know. A client in its grace period is read. Clients are asked one after the other.
+- The tenant on a row is the one whose own request returned it. The CLI asks the API about one
+  client at a time, and refuses an answer that does not confirm that client.
+
+```sh
+hodeishield --all-tenants alerts list --status open --json \
+  | jq -r '.[] | [.tenant_slug, .severity, .title] | @tsv'
+hodeishield --all-tenants vendors list --criticality critical --csv > critical-vendors.csv
+```
+
+**4. When something is not readable.**
+
+- A client that is not in your portfolio (or that you mistyped) fails with `No client tenant … in
+  this credential's portfolio.` and exit code 5, before anything is read.
+- With `--all-tenants`, a client that cannot be read on its own account (for example its licence is
+  not in force, exit code 8) is reported on standard error and skipped; the command prints the
+  others and still exits non-zero, so a script does not mistake a partial result for a complete
+  one.
+- Without `--tenant` or `--all-tenants`, a portfolio key is refused by the API, and the CLI tells
+  you to choose. A single-tenant key or sign-in behaves exactly as before; asking it for a client
+  fails with exit code 4 (it lacks the portfolio scope).
+- A client you named that is deactivated, or whose licence is not in force, fails with exit code 8.
+- A portfolio key is limited to 100 requests per minute, and all the portfolio keys of your
+  organisation together to 600 (the API may change these numbers). The CLI waits out a short
+  `Retry-After` and retries; if the wait is longer, or the limit is still exhausted, the command
+  stops with exit code 6 and says which limit it hit (`portfolio_key`, `portfolio_org`,
+  `portfolio_tenant` or `tenant`), instead of asking the next client. Use `--per-page 200` and
+  narrow with filters to need fewer requests.
+- Against an API that does not offer portfolio access yet, `tenants list`, `--tenant` and
+  `--all-tenants` fail with `This API does not offer portfolio access yet.` and exit code 7. Nothing
+  else changes.
+
+**5. Revoke access.** Revoke the portfolio key in the app, in the MSSP area; it stops working on its
+next request. A client leaving your portfolio is dropped from the list on the next command.
+
 ### JSON for scripts
 
 `--json` prints the body the API returned, unchanged, including fields newer than your CLI. With
@@ -389,7 +478,7 @@ hodeishield vendors list --all --csv > vendors.csv
 | 4 | The credential lacks the scope the command needs |
 | 5 | Not found (or not in your organisation) |
 | 6 | Rate limit exhausted (the CLI already retried short waits) |
-| 7 | The API could not be reached or failed |
+| 7 | The API could not be reached or failed, or does not offer portfolio access yet |
 | 8 | The tenant's licence is not in force: a tenant administrator must renew or reactivate it |
 
 Errors go to stderr with a hint and, when the API gave one, a **request id**: quote it when you
