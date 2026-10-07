@@ -12,12 +12,14 @@ from it; nothing in that client is written by hand from memory.
 
 ## Updating it
 
-The **OpenAPI sync** workflow (`.github/workflows/openapi-sync.yml`) does this every Monday, and on
-demand: it compares this copy with the published document by content (key order and whitespace do
-not count) and, when they differ, opens or updates one pull request against `dev`. That pull request
-contains the published bytes, the steps below and a summary, with the label `breaking-change` when
-[oasdiff](https://github.com/oasdiff/oasdiff) finds one. A maintainer reviews and merges it; nothing
-is merged automatically. By hand:
+The **OpenAPI sync** workflow (`.github/workflows/openapi-sync.yml`) checks this copy every Monday, and
+on demand: it compares it with the published document by content (key order and whitespace do not
+count). When they differ it opens, or comments on, one issue labelled `openapi-drift`, with both
+`info.version` values, whether [oasdiff](https://github.com/oasdiff/oasdiff) finds a breaking change
+(and in which direction) and a summary, and the run is red. When they match again it closes the issue.
+If the published document cannot be fetched or compared, an issue labelled `openapi-check-failed`
+reports that instead. The workflow never changes this copy or opens a pull request: a maintainer
+decides whether the API or this copy is behind. To take the published document, by hand:
 
 1. Replace `v1.json` with the new document, unchanged.
 2. Update the version and SHA-256 above and in `xtask/src/main.rs` (`EXPECTED_SHA256`).
