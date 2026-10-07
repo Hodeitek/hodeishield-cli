@@ -702,19 +702,22 @@ jobs:
           $msi = (Resolve-Path "msi\hodeishield-$env:VERSION-x86_64-pc-windows-msvc.msi").Path
           $installer = New-Object -ComObject WindowsInstaller.Installer
           $db = $installer.OpenDatabase($msi, 0)
+          # The COM calls return values PowerShell would add to the function's output: discard them.
           function Count-Rows([string]$table) {
-            try { $view = $db.OpenView("SELECT * FROM ``$table``") } catch { return 0 }
-            $view.Execute(); $n = 0
-            while ($view.Fetch()) { $n++ }
-            $view.Close(); return $n
+            try { $view = $db.OpenView("SELECT * FROM ``$table``") } catch { return [int]0 }
+            [void]$view.Execute()
+            $n = 0
+            while ($null -ne $view.Fetch()) { $n++ }
+            [void]$view.Close()
+            return [int]$n
           }
           $bad = @()
           foreach ($table in @("CustomAction", "Binary", "MsiEmbeddedUI", "MsiEmbeddedChainer")) {
-            $n = Count-Rows $table
+            $n = [int](Count-Rows $table)
             Write-Host "$table rows: $n"
             if ($n -ne 0) { $bad += $table }
           }
-          $files = Count-Rows "File"
+          $files = [int](Count-Rows "File")
           Write-Host "File rows: $files"
           if ($files -ne 3) { $bad += "File ($files rows, expected 3)" }
           [System.Runtime.InteropServices.Marshal]::ReleaseComObject($db) | Out-Null
