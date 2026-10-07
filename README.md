@@ -49,14 +49,25 @@ section), and put `hodeishield` (`hodeishield.exe` on Windows) somewhere on your
 | macOS (Apple silicon and Intel) | `hodeishield-<version>-universal-apple-darwin.tar.gz` |
 | Windows x86_64 | `hodeishield-<version>-x86_64-pc-windows-msvc.zip` |
 
-`<version>` has no leading `v`: release `v0.1.1` ships `hodeishield-0.1.1-…`. The Linux binaries are
+`<version>` has no leading `v`: release `v0.2.0` ships `hodeishield-0.2.0-…`. The Linux binaries are
 statically linked and run on any distribution. A Homebrew tap and a Windows installer (MSI) are
 planned but not available yet.
 
 From source, with the Rust toolchain installed (pin the release tag you want):
 
 ```sh
-cargo install --locked --git https://github.com/Hodeitek/hodeishield-cli --tag v0.1.1 hodeishield-cli
+cargo install --locked --git https://github.com/Hodeitek/hodeishield-cli --tag v0.2.0 hodeishield-cli
+```
+
+### Man pages
+
+From 0.2.0, the Linux and macOS archives include a man page for every command in `man/`. To read
+them with `man`, copy them into a directory on your man path, for example:
+
+```sh
+sudo mkdir -p /usr/local/share/man/man1
+sudo cp hodeishield-<version>-<target>/man/*.1 /usr/local/share/man/man1/
+man hodeishield-vendors-list
 ```
 
 ## Verify a download
@@ -67,9 +78,9 @@ Each release has a `SHA256SUMS` file, a Sigstore bundle (`*.sigstore.json`) for 
 ```sh
 sha256sum --ignore-missing -c SHA256SUMS
 
-cosign verify-blob hodeishield-0.1.1-x86_64-unknown-linux-musl.tar.gz \
-  --bundle hodeishield-0.1.1-x86_64-unknown-linux-musl.tar.gz.sigstore.json \
-  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.1.1 \
+cosign verify-blob hodeishield-0.2.0-x86_64-unknown-linux-musl.tar.gz \
+  --bundle hodeishield-0.2.0-x86_64-unknown-linux-musl.tar.gz.sigstore.json \
+  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.2.0 \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --certificate-github-workflow-trigger push
 ```
@@ -77,6 +88,41 @@ cosign verify-blob hodeishield-0.1.1-x86_64-unknown-linux-musl.tar.gz \
 A valid signature proves the file was built by this repository's release workflow from exactly that
 tag, with no long-lived key involved; put your version in the identity rather than matching any tag. The full steps, including the provenance check with `slsa-verifier`, are in
 [docs/verifying-releases.md](docs/verifying-releases.md).
+
+### If macOS or Windows blocks the binary
+
+From 0.2.0, `hodeishield.exe` is signed with Authenticode, so Windows accepts it;
+[docs/verifying-releases.md](docs/verifying-releases.md) shows how to check the signature. The macOS
+binary is not yet signed with an Apple Developer ID or notarized; that comes in a later release
+([#50](https://github.com/Hodeitek/hodeishield-cli/issues/50)). Until then, and for Windows versions
+before 0.2.0, a copy downloaded with a browser can be blocked or flagged. The cosign check above is
+the proof that the file is genuine; once it passes, unblock the binary as follows.
+
+**macOS.** Gatekeeper may refuse to open `hodeishield` ("Apple could not verify… is free of
+malware"). Remove the quarantine attribute from the unpacked binary:
+
+```sh
+xattr -d com.apple.quarantine ./hodeishield   # "No such xattr" means there was nothing to remove
+```
+
+Or download with `curl`, which does not set that attribute in the first place:
+
+```sh
+curl -LO https://github.com/Hodeitek/hodeishield-cli/releases/download/v0.2.0/hodeishield-0.2.0-universal-apple-darwin.tar.gz
+```
+
+**Windows, before 0.2.0.** Unblock the archive before unpacking it, so the executable does not
+inherit the download mark:
+
+```powershell
+Unblock-File .\hodeishield-0.1.1-x86_64-pc-windows-msvc.zip
+Expand-Archive .\hodeishield-0.1.1-x86_64-pc-windows-msvc.zip
+```
+
+If you already unpacked it, run `Unblock-File` on `hodeishield.exe` instead. SmartScreen can also
+warn about a signed file that is still new to it; in either case, if it shows "Windows protected
+your PC", choose **More info → Run anyway** («Más información → Ejecutar de todos modos» on a
+Spanish system).
 
 ## Authenticate
 
@@ -155,6 +201,25 @@ what it accepts.
 hodeishield alerts list --status open --all --json | jq -r '.[] | [.severity, .title] | @tsv'
 ```
 
+### CSV output
+
+`--csv` prints the items of any `list` command, and of `compliance controls`, as CSV instead of a
+table. It works with `--all`, and not with `--json`:
+
+```sh
+hodeishield vendors list --all --csv > vendors.csv
+```
+
+- The columns are the fields `--json` shows for each item, in the API's order. A nested value (a
+  list or an object) is written as compact JSON.
+- The file follows RFC 4180: a header row, fields quoted when needed, CRLF line ends. It is UTF-8
+  without a byte order mark, which suits scripts; to open it in Excel, use Data → From Text/CSV and
+  choose the file origin "65001: Unicode (UTF-8)".
+- A text cell that starts with `=`, `+`, `-`, `@`, a tab or a carriage return gets a leading `'`,
+  so a spreadsheet shows it as text instead of running it as a formula. Numbers are left as they
+  are, so `-5` stays a number.
+- No items print nothing on standard output; the count and paging notes go to standard error.
+
 ### Exit codes
 
 | Code | Meaning |
@@ -167,6 +232,7 @@ hodeishield alerts list --status open --all --json | jq -r '.[] | [.severity, .t
 | 5 | Not found (or not in your organisation) |
 | 6 | Rate limit exhausted (the CLI already retried short waits) |
 | 7 | The API could not be reached or failed |
+| 8 | The tenant's licence is not in force: a tenant administrator must renew or reactivate it |
 
 Errors go to stderr with a hint and, when the API gave one, a **request id**: quote it when you
 contact support. `--verbose` logs each request's method, URL, status and request id to stderr, never

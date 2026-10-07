@@ -284,7 +284,7 @@ mod tests {
     use crate::auth::TokenStore;
     use crate::auth::store::MemoryStore;
     use crate::config::{ConfigFile, Overrides, resolve_with};
-    use secrecy::SecretString;
+    use secrecy::{ExposeSecret, SecretString};
 
     #[test]
     fn logout_revokes_at_the_issuer_not_at_the_app_configured_now() {
@@ -340,6 +340,70 @@ mod tests {
         never.assert();
         never_post.assert();
         assert!(store.load("default").expect("load").is_none());
+    }
+
+    #[test]
+    fn logout_revokes_only_the_profile_s_own_tokens() {
+        let mut issuer = mockito::Server::new();
+        issuer
+            .mock("GET", "/.well-known/oauth-authorization-server")
+            .with_body(
+                json!({
+                    "issuer": issuer.url(),
+                    "token_endpoint": format!("{}/token", issuer.url()),
+                    "revocation_endpoint": format!("{}/revoke", issuer.url()),
+                })
+                .to_string(),
+            )
+            .create();
+        let mut revocations = Vec::new();
+        for (hint, token) in [("access_token", "at-a"), ("refresh_token", "rt-a")] {
+            revocations.push(
+                issuer
+                    .mock("POST", "/revoke")
+                    .match_body(mockito::Matcher::AllOf(vec![
+                        mockito::Matcher::UrlEncoded("token_type_hint".into(), hint.into()),
+                        mockito::Matcher::UrlEncoded("token".into(), token.into()),
+                    ]))
+                    .expect(1)
+                    .create(),
+            );
+        }
+        // Anything else, such as the other profile's tokens, would land here.
+        let other = issuer
+            .mock("POST", "/revoke")
+            .with_status(500)
+            .expect(0)
+            .create();
+
+        let mut config = ConfigFile::default();
+        for name in ["client-a", "client-b"] {
+            config.profiles.insert(name.to_owned(), Default::default());
+        }
+        let overrides = Overrides {
+            profile: Some("client-a".to_owned()),
+            api_url: None,
+        };
+        let settings = resolve_with(&config, std::path::PathBuf::new(), &overrides, |_| None)
+            .expect("settings");
+        let store = MemoryStore::default();
+        for (profile, suffix) in [("client-a", "a"), ("client-b", "b")] {
+            let mut token = signed_in(&issuer, Some(&format!("rt-{suffix}")));
+            token.access_token = SecretString::from(format!("at-{suffix}"));
+            store.save(profile, &token).expect("save");
+        }
+
+        logout_with(&settings, &store).expect("logout");
+        for revocation in &revocations {
+            revocation.assert();
+        }
+        other.assert();
+        assert!(store.load("client-a").expect("load").is_none());
+        let kept = store
+            .load("client-b")
+            .expect("load")
+            .expect("still signed in");
+        assert_eq!(kept.access_token.expose_secret(), "at-b");
     }
 
     fn signed_in(issuer: &mockito::ServerGuard, refresh: Option<&str>) -> StoredToken {

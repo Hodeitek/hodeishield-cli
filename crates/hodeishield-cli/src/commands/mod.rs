@@ -49,6 +49,15 @@ impl Context {
                         .map_or_else(String::new, |id| format!(", request id {id}"))
                 );
             });
+            builder = builder.retry_observer(|event| {
+                eprintln!(
+                    "retrying GET {} in {} ms ({}, retry {})",
+                    event.url,
+                    event.wait.as_millis(),
+                    event.reason,
+                    event.attempt,
+                );
+            });
         }
         let client = builder.build().map_err(|e| {
             from_api(

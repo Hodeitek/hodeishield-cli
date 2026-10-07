@@ -11,6 +11,10 @@ homepage.workspace = true
 documentation.workspace = true
 publish.workspace = true
 
+[lib]
+name = "hodeishield_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "hodeishield"
 path = "src/main.rs"

@@ -19,6 +19,7 @@
 //! - Two schemas with the same shape become one type; two different shapes wanting the same name
 //!   abort generation instead of being silently renamed.
 
+use clap::CommandFactory;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -51,7 +52,11 @@ fn main() -> ExitCode {
             };
             check.and_then(codegen)
         }
-        _ => Err("usage: cargo xtask codegen [--check]".to_owned()),
+        Some("man") => match args.get(1) {
+            Some(out_dir) => man(out_dir),
+            None => Err("usage: cargo xtask man <out-dir>".to_owned()),
+        },
+        _ => Err("usage: cargo xtask codegen [--check] | cargo xtask man <out-dir>".to_owned()),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -96,6 +101,14 @@ fn codegen(check: bool) -> Result<()> {
         std::fs::write(&out, formatted).map_err(|e| format!("writing {OUT}: {e}"))?;
         eprintln!("xtask: wrote {OUT}");
     }
+    Ok(())
+}
+
+fn man(out_dir: &str) -> Result<()> {
+    std::fs::create_dir_all(out_dir).map_err(|e| format!("creating {out_dir}: {e}"))?;
+    let cmd = hodeishield_cli::cli::Cli::command();
+    clap_mangen::generate_to(cmd, out_dir).map_err(|e| format!("generating man pages: {e}"))?;
+    eprintln!("xtask: generated man pages in {out_dir}");
     Ok(())
 }
 

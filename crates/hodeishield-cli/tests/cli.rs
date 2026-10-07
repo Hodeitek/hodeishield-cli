@@ -184,6 +184,56 @@ fn a_missing_scope_exits_4_and_names_the_framework_scope() {
 }
 
 #[test]
+fn an_inactive_licence_exits_8_without_blaming_a_scope() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    server
+        .mock("GET", "/v1/vendors")
+        .match_query(mockito::Matcher::Any)
+        .with_status(403)
+        .with_header("x-request-id", "req_lic")
+        .with_body(
+            r#"{"error":{"code":"forbidden","message":"no licence","request_id":"req_lic","details":{"code":"LICENCE_INACTIVE","licence":"suspended"}}}"#,
+        )
+        .create();
+    let output = env
+        .api(&server)
+        .args(["vendors", "list"])
+        .output()
+        .expect("run");
+    assert_eq!(output.status.code(), Some(8), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("licence is not in force (licence: suspended)"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("tenant administrator"), "{stderr}");
+    assert!(stderr.contains("request id: req_lic"), "{stderr}");
+    assert!(!stderr.contains("scope"), "no scope is blamed: {stderr}");
+    assert_no_key(&output);
+}
+
+#[test]
+fn an_unexpected_licence_state_is_not_echoed() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    server
+        .mock("GET", "/v1/vendors")
+        .match_query(mockito::Matcher::Any)
+        .with_status(403)
+        .with_body(
+            r#"{"error":{"code":"forbidden","message":"no","request_id":"r","details":{"code":"LICENCE_INACTIVE","licence":"\u001b[31mred"}}}"#,
+        )
+        .create();
+    env.api(&server)
+        .args(["vendors", "list"])
+        .assert()
+        .code(8)
+        .stderr(predicate::str::contains("licence is not in force."))
+        .stderr(predicate::str::contains("red").not());
+}
+
+#[test]
 fn a_rejected_key_exits_3_without_printing_it() {
     let env = Env::new();
     let mut server = mockito::Server::new();
@@ -507,4 +557,155 @@ fn a_proxy_from_the_environment_is_not_used_for_loopback() {
         .assert()
         .success();
     never.assert();
+}
+
+#[test]
+fn vendors_list_csv_single_page() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    server
+        .mock("GET", "/v1/vendors")
+        .with_body(page(
+            &[
+                vendor("v1", "Example Hosting"),
+                vendor("v2", "Second Vendor"),
+            ],
+            1,
+            60,
+            2,
+        ))
+        .create();
+    let output = env
+        .api(&server)
+        .args(["vendors", "list", "--csv"])
+        .output()
+        .expect("run");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "Command failed: status={:?}, stdout={}, stderr={}",
+        output.status,
+        stdout,
+        stderr
+    );
+    // Header should be present
+    assert!(stdout.contains("id"), "Missing 'id' in stdout: {}", stdout);
+    assert!(
+        stdout.contains("name"),
+        "Missing 'name' in stdout: {}",
+        stdout
+    );
+    // Rows should be present
+    assert!(
+        stdout.contains("Example Hosting"),
+        "Missing 'Example Hosting' in stdout: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("Second Vendor"),
+        "Missing 'Second Vendor' in stdout: {}",
+        stdout
+    );
+    // Should have CRLF line endings (RFC 4180)
+    assert!(stdout.contains("\r\n"), "CSV should use CRLF: {}", stdout);
+    // Stderr should have paging info, not mixed into stdout (we set total_pages=2)
+    assert!(
+        stderr.contains("Page 1 of 2 (60 vendors)") && stderr.contains("Next: --page 2, or --all."),
+        "Missing paging info in stderr: {}",
+        stderr
+    );
+    assert_no_key(&output);
+}
+
+#[test]
+fn csv_with_all_prints_one_header_and_every_page() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    for (n, title) in [(1, "=cmd()"), (2, "Second, with a comma")] {
+        server
+            .mock("GET", "/v1/alerts")
+            .match_query(mockito::Matcher::UrlEncoded("page".into(), n.to_string()))
+            .with_body(format!(
+                r#"{{"data":[{{"id":"a{n}","vendor_id":"v","type":"cve","severity":null,"title":"{title}","description":null,"source_url":null,"economic_impact":-5,"status":"open","acknowledged_at":null,"resolved_at":null,"resolution_reason":null,"created_at":"2026-01-01T00:00:00Z"}}],"pagination":{{"page":{n},"per_page":1,"total":2,"total_pages":2}}}}"#
+            ))
+            .expect(1)
+            .create();
+    }
+    let output = env
+        .api(&server)
+        .args(["alerts", "list", "--all", "--csv"])
+        .output()
+        .expect("run");
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "id,vendor_id,type,severity,title,description,source_url,economic_impact,status,\
+         acknowledged_at,resolved_at,resolution_reason,created_at\r\n\
+         a1,v,cve,,'=cmd(),,,-5,open,,,,2026-01-01T00:00:00Z\r\n\
+         a2,v,cve,,\"Second, with a comma\",,,-5,open,,,,2026-01-01T00:00:00Z\r\n"
+    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("2 alerts."));
+}
+
+#[test]
+fn csv_empty_list_prints_nothing_to_stdout() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    server
+        .mock("GET", "/v1/vendors")
+        .with_body(page(&[], 1, 0, 1))
+        .create();
+    let output = env
+        .api(&server)
+        .args(["vendors", "list", "--csv"])
+        .output()
+        .expect("run");
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.is_empty(),
+        "stdout should be empty for empty list: {stdout:?}"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("No vendors found."), "{stderr}");
+}
+
+#[test]
+fn json_and_csv_conflict() {
+    let env = Env::new();
+    for args in [
+        ["vendors", "list", "--json", "--csv"],
+        ["vendors", "list", "--csv", "--json"],
+        ["--json", "vendors", "list", "--csv"],
+    ] {
+        let output = env.cmd().args(args).output().expect("run");
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {output:?}");
+    }
+}
+
+#[test]
+fn compliance_controls_csv() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    server
+        .mock("GET", "/v1/compliance/controls")
+        .match_query(mockito::Matcher::UrlEncoded("framework".into(), "nis2".into()))
+        .with_body(
+            r#"{"data":[{"id":"c1","control_code":"1.1","control_id":"1.1","framework":"nis2","description":"First","status":"passing","evidence_count":5},{"id":"c2","control_code":"1.2","control_id":"1.2","framework":"nis2","description":"Second","status":"failing","evidence_count":0}],"pagination":{"page":1,"per_page":50,"total":2,"total_pages":1}}"#,
+        )
+        .create();
+    let output = env
+        .api(&server)
+        .args(["compliance", "controls", "-f", "nis2", "--csv"])
+        .output()
+        .expect("run");
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("id"), "{stdout}");
+    assert!(stdout.contains("c1"), "{stdout}");
+    assert!(stdout.contains("c2"), "{stdout}");
+    assert!(stdout.contains("passing"), "{stdout}");
+    assert!(stdout.contains("failing"), "{stdout}");
+    assert_no_key(&output);
 }
