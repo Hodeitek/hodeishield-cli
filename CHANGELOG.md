@@ -10,10 +10,9 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ### Added
 
-- **Platform-signed binaries.** The macOS binary is signed with Hodeitek's Developer ID and
-  notarized, a new `.pkg` installer is signed, notarized and stapled, and `hodeishield.exe` is
-  signed with Authenticode, so Gatekeeper and Windows accept them without manual unblocking.
-  Sigstore signatures and SLSA provenance continue as before.
+- **Signed Windows binary.** `hodeishield.exe` is signed with Authenticode, so Windows accepts it
+  without manual unblocking. macOS signing and notarization come in a later release. Sigstore
+  signatures and SLSA provenance continue as before for every archive.
   ([#50](https://github.com/Hodeitek/hodeishield-cli/issues/50))
 - Each release publishes a CycloneDX SBOM per archive (`<archive>.cdx.json`): the crates compiled
   into that binary, signed with Sigstore and listed in `SHA256SUMS`.

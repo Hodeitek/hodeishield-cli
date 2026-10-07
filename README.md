@@ -46,7 +46,7 @@ section), and put `hodeishield` (`hodeishield.exe` on Windows) somewhere on your
 |---|---|
 | Linux x86_64 | `hodeishield-<version>-x86_64-unknown-linux-musl.tar.gz` |
 | Linux arm64 | `hodeishield-<version>-aarch64-unknown-linux-musl.tar.gz` |
-| macOS (Apple silicon and Intel) | `hodeishield-<version>-universal-apple-darwin.tar.gz`, or the installer `hodeishield-<version>-universal-apple-darwin.pkg` (puts `hodeishield` in `/usr/local/bin`) |
+| macOS (Apple silicon and Intel) | `hodeishield-<version>-universal-apple-darwin.tar.gz` |
 | Windows x86_64 | `hodeishield-<version>-x86_64-pc-windows-msvc.zip` |
 
 `<version>` has no leading `v`: release `v0.2.0` ships `hodeishield-0.2.0-…`. The Linux binaries are
@@ -91,15 +91,12 @@ tag, with no long-lived key involved; put your version in the identity rather th
 
 ### If macOS or Windows blocks the binary
 
-From 0.2.0 the macOS binary is signed with Hodeitek's Developer ID and notarized by Apple (the
-`.pkg` is also stapled), and `hodeishield.exe` is signed with Authenticode, so Gatekeeper and
-Windows accept them; [docs/verifying-releases.md](docs/verifying-releases.md) shows how to check
-those signatures. SmartScreen can still warn about a recently signed file until it builds a
-reputation; **More info → Run anyway** is safe once the checks above pass.
-
-Versions before 0.2.0 are not platform-signed, so a copy downloaded with a browser can be blocked or
-flagged. The cosign check above is the proof that the file is genuine; once it passes, unblock the
-binary as follows (the examples use 0.1.1).
+From 0.2.0, `hodeishield.exe` is signed with Authenticode, so Windows accepts it;
+[docs/verifying-releases.md](docs/verifying-releases.md) shows how to check the signature. The macOS
+binary is not yet signed with an Apple Developer ID or notarized; that comes in a later release
+([#50](https://github.com/Hodeitek/hodeishield-cli/issues/50)). Until then, and for Windows versions
+before 0.2.0, a copy downloaded with a browser can be blocked or flagged. The cosign check above is
+the proof that the file is genuine; once it passes, unblock the binary as follows.
 
 **macOS.** Gatekeeper may refuse to open `hodeishield` ("Apple could not verify… is free of
 malware"). Remove the quarantine attribute from the unpacked binary:
@@ -111,20 +108,21 @@ xattr -d com.apple.quarantine ./hodeishield   # "No such xattr" means there was 
 Or download with `curl`, which does not set that attribute in the first place:
 
 ```sh
-curl -LO https://github.com/Hodeitek/hodeishield-cli/releases/download/v0.1.1/hodeishield-0.1.1-universal-apple-darwin.tar.gz
+curl -LO https://github.com/Hodeitek/hodeishield-cli/releases/download/v0.2.0/hodeishield-0.2.0-universal-apple-darwin.tar.gz
 ```
 
-**Windows.** Unblock the archive before unpacking it, so the executable does not inherit the
-download mark:
+**Windows, before 0.2.0.** Unblock the archive before unpacking it, so the executable does not
+inherit the download mark:
 
 ```powershell
 Unblock-File .\hodeishield-0.1.1-x86_64-pc-windows-msvc.zip
 Expand-Archive .\hodeishield-0.1.1-x86_64-pc-windows-msvc.zip
 ```
 
-If you already unpacked it, run `Unblock-File` on `hodeishield.exe` instead. If SmartScreen still
-shows "Windows protected your PC", choose **More info → Run anyway** («Más información → Ejecutar de
-todos modos» on a Spanish system).
+If you already unpacked it, run `Unblock-File` on `hodeishield.exe` instead. SmartScreen can also
+warn about a signed file that is still new to it; in either case, if it shows "Windows protected
+your PC", choose **More info → Run anyway** («Más información → Ejecutar de todos modos» on a
+Spanish system).
 
 ## Authenticate
 
