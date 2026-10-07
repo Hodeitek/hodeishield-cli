@@ -74,6 +74,28 @@ sudo dnf install ./hodeishield-<version>-1.x86_64.rpm     # Fedora, RHEL (arm64:
 Upgrading is the same command with the newer package; `sudo apt remove hodeishield` or
 `sudo dnf remove hodeishield` uninstalls it.
 
+### Windows installer (MSI)
+
+From the next release on, each release also publishes
+`hodeishield-<version>-x86_64-pc-windows-msvc.msi`, signed with Authenticode like `hodeishield.exe`.
+It installs for all users in `%ProgramFiles%\HodeiShield CLI` and adds that folder to the system
+`PATH` (open a new terminal afterwards). A newer MSI upgrades an older one in place; uninstall from
+**Settings → Apps** or with `msiexec /x`.
+
+Silent installation, for Intune, Group Policy or any other deployment tool:
+
+```powershell
+msiexec /i hodeishield-<version>-x86_64-pc-windows-msvc.msi /qn /norestart /l*v hodeishield-install.log
+msiexec /x hodeishield-<version>-x86_64-pc-windows-msvc.msi /qn /norestart     # uninstall
+```
+
+- **Intune:** add it as a *Line-of-business app* (MSI), or as a *Windows app (Win32)* with the
+  commands above. Intune reads the product code from the MSI for detection.
+- **Group Policy:** *Computer Configuration → Policies → Software Settings → Software installation*,
+  assign the MSI from a network share that the computers can read.
+- Every version shares the upgrade code `{32B34E35-7A3F-422A-AC44-59204CD0D59D}`, which detection
+  rules and inventory tools can use to find any installed version.
+
 ### Install script (Linux and macOS)
 
 Each release from the next one on also publishes `install.sh`, signed like the archives. It
