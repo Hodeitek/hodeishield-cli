@@ -102,6 +102,22 @@ first two to [homebrew-hodeishield](https://github.com/Hodeitek/homebrew-hodeish
 [scoop-hodeishield](https://github.com/Hodeitek/scoop-hodeishield) with a short-lived token of a
 GitHub App installed only on those two repositories.
 
+The same workflow's `repos` job publishes the release's `.deb` and `.rpm` packages to an APT and
+a DNF repository kept in an S3-compatible bucket (`packaging/repo`). It verifies `SHA256SUMS` and the
+packages, rebuilds and signs the indexes in the image pinned in `packaging/repo/image`, and uploads
+the packages first and the index files last (the entry points, which are `Cache-Control: no-cache`,
+after everything they list; packages and by-hash indexes are immutable, so a client holding an older
+index can still finish its update). Only `hodeishield` packages vouched for by the previously signed
+index (an RPM, by the repository key's signature) or by the release's verified `SHA256SUMS` are
+published, and anything else found in the bucket stops the job, so write access to the bucket alone
+cannot get a package signed. The bucket user needs list, read and write permissions
+only: nothing is ever deleted or overwritten. It runs after the same approval and is skipped while
+the `packaging` environment has no `PACKAGES_S3_ENDPOINT`. It needs the variables
+`PACKAGES_S3_ENDPOINT`, `PACKAGES_S3_REGION` and `PACKAGES_S3_BUCKET`, the secrets
+`PACKAGES_S3_ACCESS_KEY_ID`, `PACKAGES_S3_SECRET_ACCESS_KEY` and `PACKAGES_GPG_SIGNING_KEY` (the
+ASCII-armored secret signing subkey only), and the matching public key committed as
+`packaging/gpg.key`.
+
 winget is submitted by hand, and only with the maintainers' approval, because it is a public
 submission to another project:
 
