@@ -49,14 +49,14 @@ section), and put `hodeishield` (`hodeishield.exe` on Windows) somewhere on your
 | macOS (Apple silicon and Intel) | `hodeishield-<version>-universal-apple-darwin.tar.gz` |
 | Windows x86_64 | `hodeishield-<version>-x86_64-pc-windows-msvc.zip` |
 
-`<version>` has no leading `v`: release `v0.2.0` ships `hodeishield-0.2.0-…`. The Linux binaries are
+`<version>` has no leading `v`: release `v0.3.0` ships `hodeishield-0.3.0-…`. The Linux binaries are
 statically linked and run on any distribution. Homebrew and Scoop packages are also available
 (next section).
 
 From source, with the Rust toolchain installed (pin the release tag you want):
 
 ```sh
-cargo install --locked --git https://github.com/Hodeitek/hodeishield-cli --tag v0.2.0 hodeishield-cli
+cargo install --locked --git https://github.com/Hodeitek/hodeishield-cli --tag v0.3.0 hodeishield-cli
 ```
 
 ### Homebrew and Scoop
@@ -78,8 +78,7 @@ waiting for review by the winget community repository; it is not available yet.
 
 ### Debian, Ubuntu, Fedora, RHEL and other Linux distributions
 
-From the next release on, each release also publishes `.deb` and `.rpm` packages for x86_64 and
-arm64. They install `/usr/bin/hodeishield`, the man pages and the bash, zsh and fish completions.
+From 0.3.0, each release also publishes `.deb` and `.rpm` packages for x86_64 and arm64. They install `/usr/bin/hodeishield`, the man pages and the bash, zsh and fish completions.
 Verify the package as in the next section (it has its own `.sigstore.json` and is listed in
 `SHA256SUMS`), then:
 
@@ -93,7 +92,7 @@ Upgrading is the same command with the newer package; `sudo apt remove hodeishie
 
 ### Windows installer (MSI)
 
-From the next release on, each release also publishes
+From 0.3.0, each release also publishes
 `hodeishield-<version>-x86_64-pc-windows-msvc.msi`, signed with Authenticode like `hodeishield.exe`.
 It installs for all users in `%ProgramFiles%\HodeiShield CLI` and adds that folder to the system
 `PATH` (open a new terminal afterwards). A newer MSI upgrades an older one in place; uninstall from
@@ -115,7 +114,7 @@ msiexec /x hodeishield-<version>-x86_64-pc-windows-msvc.msi /qn /norestart     #
 
 ### Install script (Linux and macOS)
 
-Each release from the next one on also publishes `install.sh`, signed like the archives. It
+From 0.3.0, each release also publishes `install.sh`, signed like the archives. It
 downloads the archive for your platform, checks it against `SHA256SUMS` and its Sigstore signature,
 and installs `hodeishield` (and its man pages) in `/usr/local/bin` when writable, otherwise
 `~/.local/bin`. Do not pipe it into a shell: download it, verify it, read it, then run it.
@@ -154,9 +153,9 @@ Each release has a `SHA256SUMS` file, a Sigstore bundle (`*.sigstore.json`) for 
 ```sh
 sha256sum --ignore-missing -c SHA256SUMS
 
-cosign verify-blob hodeishield-0.2.0-x86_64-unknown-linux-musl.tar.gz \
-  --bundle hodeishield-0.2.0-x86_64-unknown-linux-musl.tar.gz.sigstore.json \
-  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.2.0 \
+cosign verify-blob hodeishield-0.3.0-x86_64-unknown-linux-musl.tar.gz \
+  --bundle hodeishield-0.3.0-x86_64-unknown-linux-musl.tar.gz.sigstore.json \
+  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.3.0 \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --certificate-github-workflow-trigger push
 ```
@@ -184,7 +183,7 @@ xattr -d com.apple.quarantine ./hodeishield   # "No such xattr" means there was 
 Or download with `curl`, which does not set that attribute in the first place:
 
 ```sh
-curl -LO https://github.com/Hodeitek/hodeishield-cli/releases/download/v0.2.0/hodeishield-0.2.0-universal-apple-darwin.tar.gz
+curl -LO https://github.com/Hodeitek/hodeishield-cli/releases/download/v0.3.0/hodeishield-0.3.0-universal-apple-darwin.tar.gz
 ```
 
 **Windows, before 0.2.0.** Unblock the archive before unpacking it, so the executable does not
