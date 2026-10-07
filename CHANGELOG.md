@@ -8,6 +8,10 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ### Added
 
+- Homebrew (`brew tap hodeitek/hodeishield`), Scoop (`scoop bucket add hodeishield …`) and winget
+  (`Hodeitek.HodeiShield`) packages, written from each published release's verified `SHA256SUMS`.
+  ([#21](https://github.com/Hodeitek/hodeishield-cli/issues/21),
+  [#22](https://github.com/Hodeitek/hodeishield-cli/issues/22))
 - A Windows installer (`.msi`), signed with Authenticode: installs for all users in
   `%ProgramFiles%\HodeiShield CLI`, adds it to `PATH`, upgrades in place, and supports silent
   installation for Intune and Group Policy.
