@@ -101,9 +101,15 @@ It installs for all users in `%ProgramFiles%\HodeiShield CLI` and adds that fold
 Silent installation, for Intune, Group Policy or any other deployment tool:
 
 ```powershell
-msiexec /i hodeishield-<version>-x86_64-pc-windows-msvc.msi /qn /norestart /l*v hodeishield-install.log
-msiexec /x hodeishield-<version>-x86_64-pc-windows-msvc.msi /qn /norestart     # uninstall
+$p = Start-Process msiexec -Wait -PassThru -ArgumentList '/i hodeishield-<version>-x86_64-pc-windows-msvc.msi /qn /norestart /l*v hodeishield-install.log'
+$p.ExitCode      # 0 = installed, 3010 = installed and a restart is pending
+# uninstall
+Start-Process msiexec -Wait -PassThru -ArgumentList '/x hodeishield-<version>-x86_64-pc-windows-msvc.msi /qn /norestart'
 ```
+
+Run `msiexec` through `Start-Process -Wait`: PowerShell does not wait for it when it is called
+directly, so `$LASTEXITCODE` would be set before the install finishes. From `cmd.exe`, use
+`start /wait msiexec /i ...`.
 
 - **Intune:** add it as a *Line-of-business app* (MSI), or as a *Windows app (Win32)* with the
   commands above. Intune reads the product code from the MSI for detection.
@@ -225,7 +231,15 @@ hodeishield logout           # revokes the token at the app and removes it from 
 
 You sign in to [app.hodeishield.com](https://app.hodeishield.com) as usual (2FA, passkey or SSO), and
 on the consent screen you choose **the one tenant** the CLI may read. A sign-in token never covers
-more than that tenant, and it only reads. To use another tenant, sign in again with another profile (`--profile`).
+more than that tenant, and it only reads. To use another tenant, define another profile and sign in
+to it:
+
+```sh
+hodeishield config set --profile client-b api_url https://api.hodeishield.com
+hodeishield login --profile client-b
+```
+
+A profile that has not been defined is refused (`Profile ... is not defined`).
 
 With `--device`, open the address the CLI prints on any device and **type the code by hand**: the app
 does not accept a link with the code filled in, on purpose.
