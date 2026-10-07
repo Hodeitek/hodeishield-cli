@@ -74,6 +74,31 @@ export HODEISHIELD_API_KEY=...   # never commit or paste it anywhere
 cargo run -- vendors list
 ```
 
+## Design
+
+A short vocabulary for designing or refactoring a module, adapted from
+[aihero.dev/codebase-design](https://www.aihero.dev/skills-codebase-design). A **module** is anything
+with an interface and an implementation, at any scale: a function, a file, a crate. Its **interface**
+is everything a caller must know to use it: signature, invariants, errors and ordering. A **seam** is
+a place where behaviour can change without editing that place, and an **adapter** is a concrete
+implementation plugged into one. **Depth** is the behaviour available per unit of interface, and
+**locality** means that what changes together lives together.
+
+- **Depth lives in the interface.** Judge a module by how little a caller must learn, not by how
+  much code it hides. `hodeishield-api` is the model: the CLI calls `client.list_vendors(&params)`
+  and gets typed results, while URL building, authentication, retries, rate limits and the response
+  size cap stay behind it.
+- **Deletion test.** Imagine deleting the module and inlining it into its callers. If the
+  complexity vanishes, it was a pass-through and should not exist; if it spreads to every caller, it
+  is earning its place.
+- **The interface is the test surface.** Test through the interface. A test that reaches past it
+  pins the implementation and breaks on every refactor.
+- **One adapter is a hypothetical seam; two make it real.** Add a trait only when a second
+  implementation exists today, a test double included. `TokenStore` qualifies: the OS keychain and
+  the in-memory store used by tests both implement it.
+- **Locality.** Table, JSON and CSV rendering, including the sanitising of terminal control
+  characters, lives in `output.rs`, so a change to it touches one module, not every command.
+
 ## Pull requests
 
 - Branch from `dev` and open the pull request against `dev`. `main` only receives releases.
