@@ -6,6 +6,25 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-07
+
+### Added
+
+- Homebrew (`brew tap hodeitek/hodeishield`) and Scoop (`scoop bucket add hodeishield …`) packages,
+  written from each published release's verified `SHA256SUMS`. The manifests for winget
+  (`Hodeitek.HodeiShield`) are written by each release too; the package is submitted to the winget
+  community repository and is not available yet.
+  ([#21](https://github.com/Hodeitek/hodeishield-cli/issues/21),
+  [#22](https://github.com/Hodeitek/hodeishield-cli/issues/22))
+- A Windows installer (`.msi`), signed with Authenticode: installs for all users in
+  `%ProgramFiles%\HodeiShield CLI`, adds it to `PATH`, upgrades in place, and supports silent
+  installation for Intune and Group Policy.
+- `.deb` and `.rpm` packages for x86_64 and arm64, with the man pages and the bash, zsh and fish
+  completions, signed with Sigstore and listed in `SHA256SUMS`.
+  ([#35](https://github.com/Hodeitek/hodeishield-cli/issues/35))
+- `install.sh` for Linux and macOS, published and signed with each release: it checks the archive
+  against `SHA256SUMS` and its Sigstore signature before installing the binary and its man pages.
+
 ## [0.2.0] - 2026-10-07
 
 ### Added
@@ -65,7 +84,8 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 - Profiles (`config`), shell completions, and release archives for Linux, macOS and Windows signed
   with Sigstore and with SLSA provenance.
 
-[Unreleased]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Hodeitek/hodeishield-cli/releases/tag/v0.1.0

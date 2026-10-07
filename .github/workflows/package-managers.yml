@@ -1,0 +1,329 @@
+name: Package managers
+
+# When a release is published (not while it is a draft, whose assets are not public yet), writes
+# the Homebrew formula, the Scoop manifest and the winget manifests from that release's own
+# SHA256SUMS, and publishes the first two to Hodeitek/homebrew-hodeishield and
+# Hodeitek/scoop-hodeishield. The winget manifests are kept as an artifact: they are submitted to
+# microsoft/winget-pkgs by hand (see CONTRIBUTING.md). It also publishes the release's .deb and .rpm
+# packages to the APT and DNF repositories.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: package-managers
+  cancel-in-progress: false
+
+jobs:
+  manifests:
+    name: write the manifests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Read the release version
+        id: version
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+          PRERELEASE: ${{ github.event.release.prerelease }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || [ "$PRERELEASE" = true ]; then
+            echo "::notice::$TAG is not a stable release; package managers are left as they are."
+            exit 0
+          fi
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Install cosign
+        if: steps.version.outputs.version != ''
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: "v3.1.3"
+
+      # The manifests carry the hashes in SHA256SUMS, so check that file is the release workflow's.
+      - name: Download and verify SHA256SUMS
+        if: steps.version.outputs.version != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir rel
+          gh release download "v$VERSION" -R "$GITHUB_REPOSITORY" -D rel -p SHA256SUMS -p SHA256SUMS.sigstore.json
+          cosign verify-blob --bundle rel/SHA256SUMS.sigstore.json \
+            --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/tags/v${VERSION}" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-github-workflow-trigger push rel/SHA256SUMS
+
+      # winget needs the MSI's product code, which changes with every version.
+      - name: Read the MSI product code
+        if: steps.version.outputs.version != ''
+        id: msi
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          msi="hodeishield-${VERSION}-x86_64-pc-windows-msvc.msi"
+          if ! grep -q "  ${msi}$" rel/SHA256SUMS; then
+            echo "No MSI in this release; winget will use the zip."
+            exit 0
+          fi
+          gh release download "v$VERSION" -R "$GITHUB_REPOSITORY" -D rel -p "$msi"
+          (cd rel && grep "  ${msi}$" SHA256SUMS | sha256sum -c -)
+          sudo apt-get update -qq && sudo apt-get install -y -qq msitools > /dev/null
+          code=$(msiinfo export "rel/$msi" Property | awk -F'\t' '$1 == "ProductCode" { print $2 }' | tr -d '\r')
+          [[ "$code" =~ ^\{[0-9A-F-]{36}\}$ ]] || { echo "::error::unexpected ProductCode: $code"; exit 1; }
+          echo "product_code=$code" >> "$GITHUB_OUTPUT"
+
+      - name: Write the manifests
+        if: steps.version.outputs.version != ''
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          PRODUCT_CODE: ${{ steps.msi.outputs.product_code }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/package-manifests.py "$VERSION" rel/SHA256SUMS out ${PRODUCT_CODE:+"$PRODUCT_CODE"}
+          find out -type f | sort
+
+      - name: Upload the manifests
+        if: steps.version.outputs.version != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: package-manifests
+          path: out/
+          if-no-files-found: error
+          retention-days: 90
+
+  # Publishes to the tap and the bucket with a short-lived token of the "HodeiShield packaging"
+  # GitHub App, which is installed only on those two repositories with contents write. Its private
+  # key lives in the `packaging` environment, whose reviewer approves this job. Skipped until the
+  # App is set up (environment variable PACKAGING_APP_CLIENT_ID).
+  publish:
+    name: publish to Homebrew and Scoop
+    needs: manifests
+    if: needs.manifests.outputs.version != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: packaging
+    permissions:
+      contents: read
+    steps:
+      - name: Check the App is set up
+        id: app
+        env:
+          CLIENT_ID: ${{ vars.PACKAGING_APP_CLIENT_ID }}
+        run: |
+          if [ -z "$CLIENT_ID" ]; then
+            echo "::notice::PACKAGING_APP_CLIENT_ID is not set in the packaging environment; nothing published."
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download the manifests
+        if: steps.app.outputs.ready == 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: package-manifests
+          path: out
+
+      - name: Mint a token for the tap and the bucket
+        if: steps.app.outputs.ready == 'true'
+        id: token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.PACKAGING_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PACKAGING_APP_PRIVATE_KEY }}
+          owner: Hodeitek
+          repositories: homebrew-hodeishield,scoop-hodeishield
+          permission-contents: write
+
+      # One commit per repository, made through the GraphQL API so GitHub signs it.
+      - name: Commit the formula and the manifest
+        if: steps.app.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          VERSION: ${{ needs.manifests.outputs.version }}
+        run: |
+          set -euo pipefail
+          commit() {
+            repo="$1" src="$2" dest="$3"
+            head=$(gh api "repos/Hodeitek/$repo/git/ref/heads/main" --jq .object.sha)
+            python3 - "$repo" "$head" "$src" "$dest" > "$RUNNER_TEMP/commit.json" <<'EOF'
+          import base64, json, os, sys
+          repo, head, src, dest = sys.argv[1:]
+          q = "mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { url } } }"
+          print(json.dumps({"query": q, "variables": {"input": {
+              "branch": {"repositoryNameWithOwner": f"Hodeitek/{repo}", "branchName": "main"},
+              "expectedHeadOid": head,
+              "message": {"headline": f"hodeishield {os.environ['VERSION']}"},
+              "fileChanges": {"additions": [{"path": dest, "contents": base64.b64encode(open(src, "rb").read()).decode()}]},
+          }}}))
+          EOF
+            gh api graphql --input "$RUNNER_TEMP/commit.json" --jq '.data.createCommitOnBranch.commit.url'
+          }
+          commit homebrew-hodeishield out/homebrew/Formula/hodeishield.rb Formula/hodeishield.rb
+          commit scoop-hodeishield out/scoop/bucket/hodeishield.json bucket/hodeishield.json
+
+  # Publishes the release's .deb and .rpm packages to the APT and DNF repositories kept in an
+  # S3-compatible bucket (see packaging/repo). The bucket user can list, read and write but not
+  # delete. Approved by the `packaging` environment's reviewer, like `publish`. Skipped until the
+  # environment is configured: variables PACKAGES_S3_ENDPOINT, PACKAGES_S3_REGION and
+  # PACKAGES_S3_BUCKET, and secrets PACKAGES_S3_ACCESS_KEY_ID, PACKAGES_S3_SECRET_ACCESS_KEY and
+  # PACKAGES_GPG_SIGNING_KEY (the ASCII-armored secret signing subkey only; the public key is
+  # packaging/gpg.key).
+  repos:
+    name: publish the APT and DNF repositories
+    needs: manifests
+    if: needs.manifests.outputs.version != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: packaging
+    permissions:
+      contents: read
+    steps:
+      - name: Check the repositories are set up
+        id: config
+        env:
+          ENDPOINT: ${{ vars.PACKAGES_S3_ENDPOINT }}
+          REGION: ${{ vars.PACKAGES_S3_REGION }}
+          BUCKET: ${{ vars.PACKAGES_S3_BUCKET }}
+          ACCESS_KEY_ID: ${{ secrets.PACKAGES_S3_ACCESS_KEY_ID }}
+          SECRET_ACCESS_KEY: ${{ secrets.PACKAGES_S3_SECRET_ACCESS_KEY }}
+          SIGNING_KEY: ${{ secrets.PACKAGES_GPG_SIGNING_KEY }}
+        run: |
+          if [ -z "$ENDPOINT" ]; then
+            echo "::notice::PACKAGES_S3_ENDPOINT is not set in the packaging environment; no repository published."
+            exit 0
+          fi
+          missing=""
+          [ -n "$REGION" ] || missing="$missing PACKAGES_S3_REGION"
+          [ -n "$BUCKET" ] || missing="$missing PACKAGES_S3_BUCKET"
+          [ -n "$ACCESS_KEY_ID" ] || missing="$missing PACKAGES_S3_ACCESS_KEY_ID"
+          [ -n "$SECRET_ACCESS_KEY" ] || missing="$missing PACKAGES_S3_SECRET_ACCESS_KEY"
+          [ -n "$SIGNING_KEY" ] || missing="$missing PACKAGES_GPG_SIGNING_KEY"
+          if [ -n "$missing" ]; then
+            echo "::error::The packaging environment has PACKAGES_S3_ENDPOINT but lacks:$missing"
+            exit 1
+          fi
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        if: steps.config.outputs.ready == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check the public key is committed
+        if: steps.config.outputs.ready == 'true'
+        run: |
+          if [ ! -s packaging/gpg.key ]; then
+            echo "::error::packaging/gpg.key (the public key of the signing subkey) is not in this release; the repositories cannot be published."
+            exit 1
+          fi
+
+      - name: Install cosign
+        if: steps.config.outputs.ready == 'true'
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: "v3.1.3"
+
+      # Only the packages and the file that vouches for them are downloaded; a missing package is an error.
+      - name: Download and verify the packages
+        if: steps.config.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.manifests.outputs.version }}
+        run: |
+          set -euo pipefail
+          packages=(
+            "hodeishield_${VERSION}-1_amd64.deb"
+            "hodeishield_${VERSION}-1_arm64.deb"
+            "hodeishield-${VERSION}-1.x86_64.rpm"
+            "hodeishield-${VERSION}-1.aarch64.rpm"
+          )
+          mkdir rel
+          args=(-p SHA256SUMS -p SHA256SUMS.sigstore.json)
+          for p in "${packages[@]}"; do args+=(-p "$p"); done
+          gh release download "v$VERSION" -R "$GITHUB_REPOSITORY" -D rel "${args[@]}"
+          cosign verify-blob --bundle rel/SHA256SUMS.sigstore.json \
+            --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/tags/v${VERSION}" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-github-workflow-trigger push rel/SHA256SUMS
+          for p in "${packages[@]}"; do grep "  ${p}\$" rel/SHA256SUMS; done > rel/packages.sums
+          (cd rel && sha256sum -c packages.sums)
+          [ "$(find rel -name '*.deb' -o -name '*.rpm' | wc -l)" = 4 ]
+
+      # The repository is built and uploaded only inside this image, with exactly these packages.
+      - name: Build the repository image
+        if: steps.config.outputs.ready == 'true'
+        run: |
+          set -euo pipefail
+          . packaging/repo/image
+          docker build --quiet --tag hodeishield-repo - <<EOF
+          FROM $IMAGE
+          RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends $PACKAGES \
+            && rm -rf /var/lib/apt/lists/*
+          EOF
+          read -ra packages <<< "$PACKAGES"
+          docker run --rm hodeishield-repo dpkg-query -W -f '${Package} ${Version}\n' "${packages[@]%%=*}"
+
+      # A throwaway keyring holding only the signing subkey, removed at the end of the job.
+      - name: Import the signing subkey
+        if: steps.config.outputs.ready == 'true'
+        id: key
+        env:
+          GNUPGHOME: ${{ runner.temp }}/gnupg
+          SIGNING_KEY: ${{ secrets.PACKAGES_GPG_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -m 700 "$GNUPGHOME"
+          printf '%s\n' "$SIGNING_KEY" | gpg --batch --quiet --import
+          fingerprints=$(gpg --batch --with-colons --list-secret-keys |
+            awk -F: '$1 == "ssb" { sign = ($12 ~ /s/) } $1 == "fpr" && sign { print $10; sign = 0 }')
+          if [ "$(printf '%s\n' "$fingerprints" | grep -c .)" != 1 ]; then
+            echo "::error::PACKAGES_GPG_SIGNING_KEY must hold exactly one signing subkey."
+            exit 1
+          fi
+          echo "signing_key=${fingerprints}!" >> "$GITHUB_OUTPUT"
+
+      - name: Publish the repositories
+        if: steps.config.outputs.ready == 'true'
+        env:
+          GNUPGHOME: ${{ runner.temp }}/gnupg
+          PACKAGES_S3_ENDPOINT: ${{ vars.PACKAGES_S3_ENDPOINT }}
+          PACKAGES_S3_REGION: ${{ vars.PACKAGES_S3_REGION }}
+          PACKAGES_S3_BUCKET: ${{ vars.PACKAGES_S3_BUCKET }}
+          PACKAGES_S3_ACCESS_KEY_ID: ${{ secrets.PACKAGES_S3_ACCESS_KEY_ID }}
+          PACKAGES_S3_SECRET_ACCESS_KEY: ${{ secrets.PACKAGES_S3_SECRET_ACCESS_KEY }}
+          SIGNING_KEY: ${{ steps.key.outputs.signing_key }}
+        run: |
+          set -euo pipefail
+          docker run --rm --user "$(id -u):$(id -g)" --env HOME=/tmp \
+            --env PACKAGES_S3_ENDPOINT --env PACKAGES_S3_REGION --env PACKAGES_S3_BUCKET \
+            --env PACKAGES_S3_ACCESS_KEY_ID --env PACKAGES_S3_SECRET_ACCESS_KEY \
+            --env SIGNING_KEY --env GNUPGHOME=/gnupg --env PUBLIC_KEY=/gpg.key \
+            --volume "$GNUPGHOME:/gnupg" \
+            --volume "$PWD/packaging/gpg.key:/gpg.key:ro" \
+            --volume "$PWD/packaging/repo:/repo:ro" \
+            --volume "$PWD/rel:/new:ro" \
+            hodeishield-repo sh /repo/publish.sh /new
+
+      - name: Remove the keyring
+        if: always()
+        env:
+          GNUPGHOME: ${{ runner.temp }}/gnupg
+        run: |
+          gpgconf --homedir "$GNUPGHOME" --kill all || true
+          rm -rf "$GNUPGHOME"

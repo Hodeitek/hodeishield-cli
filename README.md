@@ -49,15 +49,90 @@ section), and put `hodeishield` (`hodeishield.exe` on Windows) somewhere on your
 | macOS (Apple silicon and Intel) | `hodeishield-<version>-universal-apple-darwin.tar.gz` |
 | Windows x86_64 | `hodeishield-<version>-x86_64-pc-windows-msvc.zip` |
 
-`<version>` has no leading `v`: release `v0.2.0` ships `hodeishield-0.2.0-…`. The Linux binaries are
-statically linked and run on any distribution. A Homebrew tap and a Windows installer (MSI) are
-planned but not available yet.
+`<version>` has no leading `v`: release `v0.3.0` ships `hodeishield-0.3.0-…`. The Linux binaries are
+statically linked and run on any distribution. Homebrew and Scoop packages are also available
+(next section).
 
 From source, with the Rust toolchain installed (pin the release tag you want):
 
 ```sh
-cargo install --locked --git https://github.com/Hodeitek/hodeishield-cli --tag v0.2.0 hodeishield-cli
+cargo install --locked --git https://github.com/Hodeitek/hodeishield-cli --tag v0.3.0 hodeishield-cli
 ```
+
+### Homebrew and Scoop
+
+```sh
+brew tap hodeitek/hodeishield && brew install hodeishield      # macOS and Linux
+```
+
+```powershell
+scoop bucket add hodeishield https://github.com/Hodeitek/scoop-hodeishield
+scoop install hodeishield                                       # Windows, per user
+```
+
+The [Homebrew tap](https://github.com/Hodeitek/homebrew-hodeishield) and the
+[Scoop bucket](https://github.com/Hodeitek/scoop-hodeishield) are updated from each release's own
+files and `SHA256SUMS` when it is published, and both check those hashes when installing. Homebrew
+also installs the man pages and shell completions. A winget package has been submitted and is
+waiting for review by the winget community repository; it is not available yet.
+
+### Debian, Ubuntu, Fedora, RHEL and other Linux distributions
+
+From 0.3.0, each release also publishes `.deb` and `.rpm` packages for x86_64 and arm64. They install `/usr/bin/hodeishield`, the man pages and the bash, zsh and fish completions.
+Verify the package as in the next section (it has its own `.sigstore.json` and is listed in
+`SHA256SUMS`), then:
+
+```sh
+sudo apt install ./hodeishield_<version>-1_amd64.deb      # Debian, Ubuntu (arm64: _arm64.deb)
+sudo dnf install ./hodeishield-<version>-1.x86_64.rpm     # Fedora, RHEL (arm64: .aarch64.rpm)
+```
+
+Upgrading is the same command with the newer package; `sudo apt remove hodeishield` or
+`sudo dnf remove hodeishield` uninstalls it.
+
+### Windows installer (MSI)
+
+From 0.3.0, each release also publishes
+`hodeishield-<version>-x86_64-pc-windows-msvc.msi`, signed with Authenticode like `hodeishield.exe`.
+It installs for all users in `%ProgramFiles%\HodeiShield CLI` and adds that folder to the system
+`PATH` (open a new terminal afterwards). A newer MSI upgrades an older one in place; uninstall from
+**Settings → Apps** or with `msiexec /x`.
+
+Silent installation, for Intune, Group Policy or any other deployment tool:
+
+```powershell
+msiexec /i hodeishield-<version>-x86_64-pc-windows-msvc.msi /qn /norestart /l*v hodeishield-install.log
+msiexec /x hodeishield-<version>-x86_64-pc-windows-msvc.msi /qn /norestart     # uninstall
+```
+
+- **Intune:** add it as a *Line-of-business app* (MSI), or as a *Windows app (Win32)* with the
+  commands above. Intune reads the product code from the MSI for detection.
+- **Group Policy:** *Computer Configuration → Policies → Software Settings → Software installation*,
+  assign the MSI from a network share that the computers can read.
+- Every version shares the upgrade code `{32B34E35-7A3F-422A-AC44-59204CD0D59D}`, which detection
+  rules and inventory tools can use to find any installed version.
+
+### Install script (Linux and macOS)
+
+From 0.3.0, each release also publishes `install.sh`, signed like the archives. It
+downloads the archive for your platform, checks it against `SHA256SUMS` and its Sigstore signature,
+and installs `hodeishield` (and its man pages) in `/usr/local/bin` when writable, otherwise
+`~/.local/bin`. Do not pipe it into a shell: download it, verify it, read it, then run it.
+
+```sh
+v=<version>   # e.g. the latest release, without the leading v
+curl -fsSLO https://github.com/Hodeitek/hodeishield-cli/releases/download/v$v/install.sh
+curl -fsSLO https://github.com/Hodeitek/hodeishield-cli/releases/download/v$v/install.sh.sigstore.json
+cosign verify-blob --bundle install.sh.sigstore.json \
+  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v$v \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-github-workflow-trigger push install.sh
+less install.sh
+sh install.sh --version $v
+```
+
+It needs `cosign` to check the archive's signature and stops if it is missing; `--no-verify` skips
+that check (the checksum still runs). `sh install.sh --help` lists the options (`--dir`, `--no-man`).
 
 ### Man pages
 
@@ -78,9 +153,9 @@ Each release has a `SHA256SUMS` file, a Sigstore bundle (`*.sigstore.json`) for 
 ```sh
 sha256sum --ignore-missing -c SHA256SUMS
 
-cosign verify-blob hodeishield-0.2.0-x86_64-unknown-linux-musl.tar.gz \
-  --bundle hodeishield-0.2.0-x86_64-unknown-linux-musl.tar.gz.sigstore.json \
-  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.2.0 \
+cosign verify-blob hodeishield-0.3.0-x86_64-unknown-linux-musl.tar.gz \
+  --bundle hodeishield-0.3.0-x86_64-unknown-linux-musl.tar.gz.sigstore.json \
+  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.3.0 \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --certificate-github-workflow-trigger push
 ```
@@ -108,7 +183,7 @@ xattr -d com.apple.quarantine ./hodeishield   # "No such xattr" means there was 
 Or download with `curl`, which does not set that attribute in the first place:
 
 ```sh
-curl -LO https://github.com/Hodeitek/hodeishield-cli/releases/download/v0.2.0/hodeishield-0.2.0-universal-apple-darwin.tar.gz
+curl -LO https://github.com/Hodeitek/hodeishield-cli/releases/download/v0.3.0/hodeishield-0.3.0-universal-apple-darwin.tar.gz
 ```
 
 **Windows, before 0.2.0.** Unblock the archive before unpacking it, so the executable does not

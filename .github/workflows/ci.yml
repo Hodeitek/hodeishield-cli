@@ -153,6 +153,53 @@ jobs:
       - name: cargo audit
         run: cargo audit
 
+  # The install script: lint it, then install the latest published release with it, signature
+  # check included.
+  install-script:
+    name: install-script
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: shellcheck
+        run: shellcheck -s sh install.sh packaging/repo/*.sh
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: "v3.1.3"
+
+      - name: Install the latest release with the script
+        run: |
+          set -eu
+          sh install.sh --dir "$RUNNER_TEMP/bin"
+          test -x "$RUNNER_TEMP/bin/hodeishield"
+          test -s "$RUNNER_TEMP/share/man/man1/hodeishield.1" || echo "no man pages in that release"
+          if PATH=/usr/bin:/bin sh install.sh --dir "$RUNNER_TEMP/none" 2> "$RUNNER_TEMP/err"; then
+            echo "::error::install.sh ran without cosign and without --no-verify"
+            exit 1
+          fi
+          grep -q -- "--no-verify" "$RUNNER_TEMP/err"
+
+  # The repository freshness monitor must go red: its control builds small repositories with a
+  # throwaway key, serves them from localhost and checks that every stale, altered, unsigned or
+  # missing case fails and the current one passes.
+  repo-freshness:
+    name: repo-freshness
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run the control cases
+        run: sh packaging/repo/freshness-test.sh
+
   # A pull request into main is a release: the version in Cargo.toml must have its notes.
   changelog:
     name: changelog
