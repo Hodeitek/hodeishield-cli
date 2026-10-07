@@ -108,11 +108,14 @@ vouched=$check/vouched
 : > "$vouched"
 if [ -e "$published/InRelease" ]; then
   # A single clear-signed message and nothing around it, and only the signed text is read.
-  [ "$(head -n 1 "$published/InRelease")" = '-----BEGIN PGP SIGNED MESSAGE-----' ] &&
-    [ "$(tail -n 1 "$published/InRelease")" = '-----END PGP SIGNATURE-----' ] &&
-    [ "$(grep -c '^-----BEGIN PGP' "$published/InRelease")" = 2 ] &&
-    [ "$(grep -c '^-----END PGP' "$published/InRelease")" = 1 ] ||
+  if ! {
+    [ "$(head -n 1 "$published/InRelease")" = '-----BEGIN PGP SIGNED MESSAGE-----' ] &&
+      [ "$(tail -n 1 "$published/InRelease")" = '-----END PGP SIGNATURE-----' ] &&
+      [ "$(grep -c '^-----BEGIN PGP' "$published/InRelease")" = 2 ] &&
+      [ "$(grep -c '^-----END PGP' "$published/InRelease")" = 1 ]
+  }; then
     die "the published InRelease is not a single signed message"
+  fi
   gpgv --quiet --keyring "$check/key.gpg" --output "$check/Release" "$published/InRelease" 2> /dev/null ||
     die "the published InRelease does not verify"
   for arch in amd64 arm64; do
