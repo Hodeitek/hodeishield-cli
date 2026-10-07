@@ -6,8 +6,15 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ## [Unreleased]
 
+## [0.2.0] - YYYY-MM-DD
+
 ### Added
 
+- **Platform-signed binaries.** The macOS binary is signed with Hodeitek's Developer ID and
+  notarized, a new `.pkg` installer is signed, notarized and stapled, and `hodeishield.exe` is
+  signed with Authenticode, so Gatekeeper and Windows accept them without manual unblocking.
+  Sigstore signatures and SLSA provenance continue as before.
+  ([#50](https://github.com/Hodeitek/hodeishield-cli/issues/50))
 - Each release publishes a CycloneDX SBOM per archive (`<archive>.cdx.json`): the crates compiled
   into that binary, signed with Sigstore and listed in `SHA256SUMS`.
   ([#34](https://github.com/Hodeitek/hodeishield-cli/issues/34))
@@ -59,6 +66,7 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 - Profiles (`config`), shell completions, and release archives for Linux, macOS and Windows signed
   with Sigstore and with SLSA provenance.
 
-[Unreleased]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Hodeitek/hodeishield-cli/releases/tag/v0.1.0
