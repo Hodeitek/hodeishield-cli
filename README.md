@@ -59,6 +59,24 @@ From source, with the Rust toolchain installed (pin the release tag you want):
 cargo install --locked --git https://github.com/Hodeitek/hodeishield-cli --tag v0.2.0 hodeishield-cli
 ```
 
+### Homebrew, Scoop and winget
+
+```sh
+brew tap hodeitek/hodeishield && brew install hodeishield      # macOS and Linux
+```
+
+```powershell
+scoop bucket add hodeishield https://github.com/Hodeitek/scoop-hodeishield
+scoop install hodeishield                                       # Windows, per user
+winget install Hodeitek.HodeiShield                             # Windows
+```
+
+The [Homebrew tap](https://github.com/Hodeitek/homebrew-hodeishield) and the
+[Scoop bucket](https://github.com/Hodeitek/scoop-hodeishield) are updated from each release's own
+files and `SHA256SUMS` when it is published, and both check those hashes when installing. The
+winget package is reviewed by the winget community repository before it appears, so a new version
+can take a few days to show up there. Homebrew also installs the man pages and shell completions.
+
 ### Debian, Ubuntu, Fedora, RHEL and other Linux distributions
 
 From the next release on, each release also publishes `.deb` and `.rpm` packages for x86_64 and

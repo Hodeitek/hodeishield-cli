@@ -93,6 +93,27 @@ cargo run -- vendors list
   checks every pull request; sign-off is never added automatically.
 - By contributing you agree that your contribution is licensed under the Apache License 2.0.
 
+## Releases and package managers
+
+Publishing a release (not the draft) starts the **Package managers** workflow. It verifies the
+release's `SHA256SUMS` with cosign and writes the Homebrew formula, the Scoop manifest and the
+winget manifests from it. After the `packaging` environment's reviewer approves, it commits the
+first two to [homebrew-hodeishield](https://github.com/Hodeitek/homebrew-hodeishield) and
+[scoop-hodeishield](https://github.com/Hodeitek/scoop-hodeishield) with a short-lived token of a
+GitHub App installed only on those two repositories.
+
+winget is submitted by hand, and only with the maintainers' approval, because it is a public
+submission to another project:
+
+1. Download the `package-manifests` artifact of that workflow run and take
+   `winget/manifests/h/Hodeitek/HodeiShield/<version>/`.
+2. In a fork of [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs), branch from its
+   `master`, add those three files under the same path, and commit
+   `New version: Hodeitek.HodeiShield version <version>`.
+3. Open a pull request with that title and fill in its template; validate with
+   `winget validate --manifest <dir>` where a Windows machine is available.
+4. Answer the reviewers there. No long-lived token is stored for this.
+
 ## Closing issues
 
 An issue is closed as soon as the fix reaches `main`, never left open once fixed:
