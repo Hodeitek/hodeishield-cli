@@ -10,13 +10,11 @@
 #
 # Environment:
 #   NFPM          absolute path to the nfpm binary (the version pinned in the workflow)
-#   MINIO_IMAGE   the MinIO server image, pinned by digest
-#   MC_IMAGE      the MinIO client image, pinned by digest
 #
 # Everything is made here and thrown away: the signing keys (a certify-only RSA 4096 primary with a
 # signing subkey, like the real one, and a second key for the forgeries), synthetic hodeishield
 # packages built with nfpm from a one-line program, and a MinIO whose publishing user may list, read
-# and write but not delete. The real build.sh and publish.sh run in the image named in
+# and write but not delete (built from source: repo-test-minio.Dockerfile). The real build.sh and publish.sh run in the image named in
 # packaging/repo/image. The bucket is then served over HTTP to an apt and a dnf client.
 #
 # Every case has an expected outcome, and the run fails if any case ends otherwise:
@@ -31,7 +29,7 @@ set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)
-: "${NFPM:?}" "${MINIO_IMAGE:?}" "${MC_IMAGE:?}"
+: "${NFPM:?}"
 for need in docker jq curl gzip sha256sum; do
   command -v "$need" > /dev/null || {
     printf 'repo-test.sh: %s is required\n' "$need" >&2
@@ -334,11 +332,12 @@ endgroup
 
 # --- MinIO ------------------------------------------------------------------------------------------------
 group "MinIO"
+docker build --quiet --tag rt-minio-image --build-arg BASE="$IMAGE" - < "$here/repo-test-minio.Dockerfile" > /dev/null
 docker network create "$net" > /dev/null
 docker run -d --name "$minio" --network "$net" --env MINIO_ROOT_USER="$rootuser" \
-  --env MINIO_ROOT_PASSWORD="$rootpass" "$MINIO_IMAGE" server /data > /dev/null
+  --env MINIO_ROOT_PASSWORD="$rootpass" rt-minio-image minio server /data > /dev/null
 docker run -d --name "$mcbox" --network "$net" --user "$uid:$gid" --env MC_CONFIG_DIR=/tmp/mc \
-  --volume "$work:/w" --entrypoint sh "$MC_IMAGE" -c 'exec sleep 86400' > /dev/null
+  --volume "$work:/w" rt-minio-image sleep 86400 > /dev/null
 mcx() { docker exec "$mcbox" mc "$@"; }
 tries=0
 until mcx alias set r "$srv" "$rootuser" "$rootpass" > /dev/null 2>&1; do
