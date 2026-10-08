@@ -1,0 +1,74 @@
+name: Proxy and TLS inspection
+
+# Checks the README's "Networking: proxies and TLS inspection" claims on Linux against a real
+# TLS-inspecting proxy (mitmproxy) and a fake API, both on the runner, with throwaway certificates:
+# nothing secret is used and nothing leaves the machine except the download of mitmproxy. Case 1
+# is a deliberate certificate failure, so the script is only meant to run here (see
+# .github/scripts/proxy-tls-test.sh).
+on:
+  pull_request:
+    paths:
+      - "Cargo.lock"
+      - "crates/hodeishield-api/**"
+      - "crates/hodeishield-cli/**"
+      - ".github/scripts/proxy-tls-*"
+      - ".github/workflows/proxy-tls.yml"
+  push:
+    branches: [dev, main]
+    paths:
+      - "Cargo.lock"
+      - "crates/hodeishield-api/**"
+      - "crates/hodeishield-cli/**"
+      - ".github/scripts/proxy-tls-*"
+      - ".github/workflows/proxy-tls.yml"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: proxy-tls-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  proxy-tls:
+    name: proxy-tls
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      # Official Linux release of mitmproxy, pinned by version and checksum. Bumped by hand.
+      MITMPROXY_VERSION: "12.2.3"
+      MITMPROXY_SHA256: 2e95286b618fa6fd33e5e62a78c2e5112571d85f42ec2bac29b97ee242bdb5c5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned toolchain
+        run: rustup show
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: proxy-tls
+
+      - name: Build the CLI
+        run: cargo build --locked -p hodeishield-cli
+
+      - name: Install mitmproxy
+        run: |
+          set -euo pipefail
+          archive="mitmproxy-${MITMPROXY_VERSION}-linux-x86_64.tar.gz"
+          curl --proto '=https' --tlsv1.2 -fsSL -o "$RUNNER_TEMP/$archive" \
+            "https://downloads.mitmproxy.org/${MITMPROXY_VERSION}/${archive}"
+          echo "${MITMPROXY_SHA256}  $RUNNER_TEMP/$archive" | sha256sum -c -
+          mkdir "$RUNNER_TEMP/mitmproxy"
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP/mitmproxy"
+
+      - name: Run the proxy cases
+        run: bash .github/scripts/proxy-tls-test.sh target/debug/hodeishield "$RUNNER_TEMP/mitmproxy"
