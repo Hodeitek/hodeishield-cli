@@ -169,6 +169,16 @@ and it is closed when the check passes again; a release less than 48 hours old t
 only raises a warning, since the `repos` job waits for an approval. On such an issue, first check who
 can write to the bucket, then re-run the `repos` job for the latest release to publish current indexes.
 
+Publishing a release also starts the **Container image** workflow. After the same `packaging`
+environment approval, it downloads the release's two Linux musl archives and SBOMs, verifies
+`SHA256SUMS` with cosign (the same identity as above) and the files against it, and builds
+`ghcr.io/hodeitek/hodeishield-cli` for `linux/amd64` and `linux/arm64` from `packaging/container/Dockerfile`
+without compiling anything. It pushes the exact-version tag only (no `latest`) with the job's own
+`GITHUB_TOKEN` (`packages: write`, held by no other job), signs the image by digest with cosign,
+attaches the SBOM with `cosign attest --type cyclonedx`, then verifies both and runs the image. Stable
+releases only. The base image is pinned by digest and bumped by dependabot. The first time, the package
+is private: a maintainer makes it public in the package settings once the first image exists.
+
 winget is submitted by hand, and only with the maintainers' approval, because it is a public
 submission to another project:
 

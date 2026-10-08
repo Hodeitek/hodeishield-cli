@@ -141,6 +141,48 @@ sh install.sh --version $v
 It needs `cosign` to check the archive's signature and stops if it is missing; `--no-verify` skips
 that check (the checksum still runs). `sh install.sh --help` lists the options (`--dir`, `--no-man`).
 
+### Container image
+
+From the first release after 0.3.0, each stable release also publishes a multi-architecture
+(`linux/amd64`, `linux/arm64`) image at `ghcr.io/hodeitek/hodeishield-cli`, for CI jobs and container
+pipelines. It holds only the release's own `hodeishield` binary on a
+[distroless](https://github.com/GoogleContainerTools/distroless) static base (no shell, no package
+manager, CA certificates included) and runs as a non-root user. There is no `latest` tag: use the
+exact version, or better its digest.
+
+```sh
+v=0.4.0   # the version you want
+docker pull ghcr.io/hodeitek/hodeishield-cli:$v
+docker run --rm -e HODEISHIELD_API_KEY ghcr.io/hodeitek/hodeishield-cli:$v vendors list
+```
+
+`HODEISHIELD_API_KEY` is passed through from your environment (`-e NAME` without a value) so the key
+never appears on the command line. `hodeishield login` does not work in a container (there is no
+browser and no system keychain): use a tenant API key, see [Authenticate](#authenticate).
+
+The image is signed by digest with cosign (keyless) and carries the release's CycloneDX SBOM as a
+signed attestation. Verify both before you rely on the image:
+
+```sh
+v=0.4.0
+image=ghcr.io/hodeitek/hodeishield-cli:$v
+cosign verify $image \
+  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/container-image.yml@refs/tags/v$v \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-github-workflow-trigger release
+
+cosign verify-attestation --type cyclonedx $image \
+  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/container-image.yml@refs/tags/v$v \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-github-workflow-trigger release
+```
+
+Both commands print the digest they verified; pin that digest
+(`ghcr.io/hodeitek/hodeishield-cli@sha256:...`) in your pipeline, since a tag can be moved and a
+digest cannot. The binary in the image is the one in the release's Linux musl archives, checked
+against the release's signed `SHA256SUMS` before the image is built. The image's own base image is
+pinned by digest in [packaging/container/Dockerfile](packaging/container/Dockerfile).
+
 ### Man pages
 
 From 0.2.0, the Linux and macOS archives include a man page for every command in `man/`. To read
