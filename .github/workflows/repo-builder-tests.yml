@@ -1,0 +1,62 @@
+name: Repository builder tests
+
+# Runs the security tests of the APT and DNF repository builder (packaging/repo/build.sh and
+# publish.sh) against a throwaway MinIO, with throwaway keys and synthetic packages: nothing secret
+# is used, and nothing is published. The cases that must be refused plant forged packages and indexes
+# in the bucket on purpose, so they run here and are not meant to be run by hand
+# (packaging/repo/repo-test.sh, CONTRIBUTING.md).
+on:
+  pull_request:
+    paths:
+      - "packaging/repo/**"
+      - "packaging/nfpm.yaml"
+      - ".github/workflows/repo-builder-tests.yml"
+  push:
+    branches: [dev, main]
+    paths:
+      - "packaging/repo/**"
+      - "packaging/nfpm.yaml"
+      - ".github/workflows/repo-builder-tests.yml"
+  workflow_dispatch:
+  schedule:
+    - cron: "17 5 * * 1" # Mondays, 05:17 UTC: the clients and the pinned image move on their own
+
+permissions: {}
+
+concurrency:
+  group: repo-builder-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: repository builder security tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    env:
+      # Pinned by digest, bumped by hand in the periodic dependency review (CONTRIBUTING.md).
+      MINIO_IMAGE: minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+      MC_IMAGE: minio/mc:RELEASE.2025-08-13T08-35-41Z@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+      # The same nfpm as the release workflow's.
+      NFPM_VERSION: "2.47.0"
+      NFPM_SHA256: 0660ca602b2d2d2ae4781a06c692b3eeb9d437ffea05b831d76e41f4a3188783
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install nfpm
+        run: |
+          set -euo pipefail
+          archive="nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz"
+          curl -sSfL -o "$RUNNER_TEMP/$archive" \
+            "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}/${archive}"
+          echo "${NFPM_SHA256}  $RUNNER_TEMP/$archive" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" nfpm
+
+      - name: Run the tests
+        run: |
+          set -euo pipefail
+          NFPM="$RUNNER_TEMP/nfpm" sh packaging/repo/repo-test.sh
