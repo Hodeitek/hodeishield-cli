@@ -720,7 +720,7 @@ fi
 
 # --- Clients must refuse -----------------------------------------------------------------------------------
 # Tampered copies of the published repository (rt-v2), served as they are.
-sig='BADSIG|NO_PUBKEY|not signed|[Ss]ignature'
+sig='BADSIG|signature verification failed|is not signed'
 fresh c1
 sed 's/^Codename: stable$/Codename: stablf/' "$work/t/InRelease" > "$work/t/InRelease.c1"
 put rt-c1 "$IR" "$work/t/InRelease.c1"
@@ -740,7 +740,7 @@ cmp -s "$work/t/repomd.xml" "$work/t/repomd.xml.c3" && {
   exit 1
 }
 put rt-c3 rpm/x86_64/repodata/repomd.xml "$work/t/repomd.xml.c3"
-client dnf C3 "dnf: repomd.xml tampered" "metadata and install refused" refuse index "$srv/rt-c3" 'GPG|[Ss]ignature'
+client dnf C3 "dnf: repomd.xml tampered" "metadata and install refused" refuse index "$srv/rt-c3" 'Bad GPG signature'
 
 # flip <file>: the same file with one byte changed.
 flip() {
@@ -753,14 +753,14 @@ get rt-v2 "$H/hodeishield_0.2.1-1_amd64.deb" "$work/t/c4.deb"
 flip "$work/t/c4.deb" "$work/t/c4.bad.deb"
 cmp -s "$work/t/c4.deb" "$work/t/c4.bad.deb" && exit 1
 put rt-c4 "$H/hodeishield_0.2.1-1_amd64.deb" "$work/t/c4.bad.deb"
-client apt C4 "apt: corrupt deb (one byte changed)" "install refused" refuse package "$srv/rt-c4" 'Hash Sum mismatch|unexpected size|[Hh]ash'
+client apt C4 "apt: corrupt deb (one byte changed)" "install refused" refuse package "$srv/rt-c4" 'Hash Sum mismatch|unexpected size'
 
 fresh c5
 get rt-v2 rpm/x86_64/hodeishield-0.2.1-1.x86_64.rpm "$work/t/c5.rpm"
 flip "$work/t/c5.rpm" "$work/t/c5.bad.rpm"
 cmp -s "$work/t/c5.rpm" "$work/t/c5.bad.rpm" && exit 1
 put rt-c5 rpm/x86_64/hodeishield-0.2.1-1.x86_64.rpm "$work/t/c5.bad.rpm"
-client dnf C5 "dnf: corrupt rpm (one byte changed)" "install refused" refuse package "$srv/rt-c5" '.'
+client dnf C5 "dnf: corrupt rpm (one byte changed)" "install refused" refuse package "$srv/rt-c5" "checksum doesn't match|Cannot download"
 
 # A repository whose metadata is signed with the repository key but whose only package is not.
 for pair in c6:pk/v2 c7:other; do
@@ -773,6 +773,6 @@ for pair in c6:pk/v2 c7:other; do
   mcx mirror --quiet "/w/$id/x86_64" "r/rt-$id/rpm/x86_64" > /dev/null
 done
 client dnf C6 "dnf: unsigned rpm, gpgcheck=1" "install refused" refuse package "$srv/rt-c6" \
-  '[Ss]ignature|GPG|not signed|Public key'
+  'is not signed|GPG check FAILED'
 client dnf C7 "dnf: rpm signed by another key, gpgcheck=1" "install refused" refuse package "$srv/rt-c7" \
-  '[Ss]ignature|GPG|not signed|Public key'
+  'Public key for .* is not installed|GPG check FAILED'
