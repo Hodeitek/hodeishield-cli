@@ -29,6 +29,23 @@ pub struct Operation {
     /// Scopes the credential needs. A template such as `compliance.<framework>:read` stands for the
     /// scope of the framework being read.
     pub scopes: &'static [&'static str],
+    /// The vocabulary the document publishes for a query parameter (`x-hs-known-values`), as
+    /// `(parameter, values)` pairs, only for the parameters that have one. The vocabularies are
+    /// open: the server may accept a value that is not listed, so use this to help and to warn,
+    /// never to refuse. Read it through [`Operation::known_values`].
+    pub known_values: &'static [(&'static str, &'static [&'static str])],
+}
+
+impl Operation {
+    /// The values the document lists for the query parameter `param`, in document order, or `None`
+    /// when it publishes no vocabulary for it.
+    #[must_use]
+    pub fn known_values(&self, param: &str) -> Option<&'static [&'static str]> {
+        self.known_values
+            .iter()
+            .find(|(name, _)| *name == param)
+            .map(|(_, values)| *values)
+    }
 }
 
 /// A successful answer: the typed body, the body exactly as received (for `--json`, so fields this
@@ -587,6 +604,23 @@ pub fn encode_path_segment(segment: &str) -> Result<String, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn known_values_are_looked_up_by_parameter() {
+        let operation = Operation {
+            id: "listThings",
+            method: "GET",
+            path: "/v1/things",
+            summary: "List things",
+            scopes: &[],
+            known_values: &[("severity", &["critical", "high"])],
+        };
+        assert_eq!(
+            operation.known_values("severity"),
+            Some(&["critical", "high"][..])
+        );
+        assert_eq!(operation.known_values("page"), None);
+    }
 
     fn client(base: &str) -> Client {
         Client::new(base.parse().expect("url"), SecretString::from("hsk_test")).expect("client")

@@ -174,6 +174,8 @@ struct Param {
     ty: String,
     required: bool,
     is_enum: bool,
+    /// The values `x-hs-known-values` lists, in document order; empty without the extension.
+    known_values: Vec<String>,
     doc: Option<String>,
 }
 
@@ -411,6 +413,7 @@ impl<'a> Generator<'a> {
                 ty,
                 required,
                 is_enum,
+                known_values: known_values(&id, name, param)?,
                 doc: param
                     .get("description")
                     .and_then(Value::as_str)
@@ -743,16 +746,27 @@ impl<'a> Generator<'a> {
         out.push_str("/// Every `/v1` operation, as the OpenAPI document describes it.\npub mod operations {\n    use crate::Operation;\n\n");
         for op in &self.operations {
             let scopes: Vec<String> = op.scopes.iter().map(|s| format!("{s:?}")).collect();
+            let known: Vec<String> = op
+                .query_params
+                .iter()
+                .filter(|p| !p.known_values.is_empty())
+                .map(|p| {
+                    let values: Vec<String> =
+                        p.known_values.iter().map(|v| format!("{v:?}")).collect();
+                    format!("({:?}, &[{}])", p.json_name, values.join(", "))
+                })
+                .collect();
             let _ = writeln!(
                 out,
-                "    /// `GET {}`: {}.\n    pub const {}: Operation = Operation {{ id: {:?}, method: \"GET\", path: {:?}, summary: {:?}, scopes: &[{}] }};\n",
+                "    /// `GET {}`: {}.\n    pub const {}: Operation = Operation {{ id: {:?}, method: \"GET\", path: {:?}, summary: {:?}, scopes: &[{}], known_values: &[{}] }};\n",
                 op.path,
                 op.summary,
                 screaming(&op.id),
                 op.id,
                 op.path,
                 op.summary,
-                scopes.join(", ")
+                scopes.join(", "),
+                known.join(", ")
             );
         }
         let all: Vec<String> = self.operations.iter().map(|op| screaming(&op.id)).collect();
@@ -816,6 +830,22 @@ fn render_doc(out: &mut String, doc: Option<&str>, indent: &str) {
             let _ = writeln!(out, "{indent}/// {}", line.trim_end());
         }
     }
+}
+
+/// The vocabulary `x-hs-known-values` publishes for a query parameter, in document order. The
+/// extension is optional; when present it must be an array of strings, anything else is an error.
+fn known_values(operation: &str, name: &str, param: &Value) -> Result<Vec<String>> {
+    let Some(list) = param.get("x-hs-known-values") else {
+        return Ok(Vec::new());
+    };
+    list.as_array()
+        .and_then(|items| {
+            items
+                .iter()
+                .map(|v| v.as_str().map(str::to_owned))
+                .collect::<Option<Vec<_>>>()
+        })
+        .ok_or_else(|| format!("{operation}.{name}: x-hs-known-values must be an array of strings"))
 }
 
 fn operation_id(operation: &Value) -> Result<&str> {
@@ -957,5 +987,78 @@ mod tests {
         assert_eq!(resource_name("listEvidence"), "Evidence");
         assert_eq!(resource_name("getFrameworkPosture"), "FrameworkPosture");
         assert_eq!(resource_name("listComplianceControls"), "ComplianceControl");
+    }
+
+    /// A minimal document with one operation whose `severity` query parameter carries `extension`
+    /// (when given) and whose `page` parameter never does.
+    fn document(extension: Option<Value>) -> Value {
+        let mut severity = serde_json::json!({
+            "name": "severity", "in": "query", "schema": {"type": "string"}
+        });
+        if let Some(extension) = extension {
+            severity["x-hs-known-values"] = extension;
+        }
+        serde_json::json!({
+            "info": {"version": "test"},
+            "servers": [{"url": "https://api.example.test"}],
+            "components": {"schemas": {}},
+            "paths": {"/v1/things": {"get": {
+                "operationId": "listThings",
+                "summary": "List things",
+                "x-hs-scope": {"scopes": ["things:read"]},
+                "parameters": [severity, {"name": "page", "in": "query", "schema": {"type": "string"}}],
+                "responses": {"200": {"content": {"application/json": {"schema": {
+                    "type": "object",
+                    "properties": {"ok": {"type": "boolean"}},
+                    "required": ["ok"]
+                }}}}}
+            }}}
+        })
+    }
+
+    fn generate(extension: Option<Value>) -> Result<String> {
+        let spec = document(extension);
+        Generator::new(&spec)
+            .run()
+            .map(|out| out.split_whitespace().collect::<Vec<_>>().join(" "))
+    }
+
+    #[test]
+    fn known_values_are_emitted_in_document_order() {
+        let out =
+            generate(Some(serde_json::json!(["critical", "high", "info"]))).expect("generates");
+        assert!(
+            out.contains(r#"known_values: &[("severity", &["critical", "high", "info"])]"#),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn a_parameter_without_the_extension_has_no_known_values() {
+        let out = generate(None).expect("generates");
+        assert!(out.contains("known_values: &[]"), "{out}");
+        assert!(!out.contains("known_values: &[("), "{out}");
+    }
+
+    #[test]
+    fn an_empty_vocabulary_is_the_same_as_none() {
+        let out = generate(Some(serde_json::json!([]))).expect("generates");
+        assert!(out.contains("known_values: &[]"), "{out}");
+    }
+
+    #[test]
+    fn a_malformed_extension_is_a_generator_error() {
+        for bad in [
+            serde_json::json!("critical"),
+            serde_json::json!({"critical": true}),
+            serde_json::json!(["critical", 3]),
+            serde_json::json!(null),
+        ] {
+            let err = generate(Some(bad.clone())).expect_err("malformed");
+            assert_eq!(
+                err, "listThings.severity: x-hs-known-values must be an array of strings",
+                "{bad}"
+            );
+        }
     }
 }

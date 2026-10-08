@@ -1102,6 +1102,7 @@ pub mod operations {
         path: "/v1/vendors",
         summary: "List third parties",
         scopes: &["supply_risk:read"],
+        known_values: &[],
     };
 
     /// `GET /v1/vendors/{id}`: Fetch one third party.
@@ -1111,6 +1112,7 @@ pub mod operations {
         path: "/v1/vendors/{id}",
         summary: "Fetch one third party",
         scopes: &["supply_risk:read"],
+        known_values: &[],
     };
 
     /// `GET /v1/alerts`: List supply-chain alerts.
@@ -1120,6 +1122,7 @@ pub mod operations {
         path: "/v1/alerts",
         summary: "List supply-chain alerts",
         scopes: &["supply_risk:read"],
+        known_values: &[],
     };
 
     /// `GET /v1/alerts/{id}`: Fetch one alert.
@@ -1129,6 +1132,7 @@ pub mod operations {
         path: "/v1/alerts/{id}",
         summary: "Fetch one alert",
         scopes: &["supply_risk:read"],
+        known_values: &[],
     };
 
     /// `GET /v1/risks`: List risk-register entries.
@@ -1138,6 +1142,7 @@ pub mod operations {
         path: "/v1/risks",
         summary: "List risk-register entries",
         scopes: &["supply_risk:read"],
+        known_values: &[],
     };
 
     /// `GET /v1/risks/{id}`: Fetch one risk-register entry.
@@ -1147,6 +1152,7 @@ pub mod operations {
         path: "/v1/risks/{id}",
         summary: "Fetch one risk-register entry",
         scopes: &["supply_risk:read"],
+        known_values: &[],
     };
 
     /// `GET /v1/compliance/controls`: List control status for a framework.
@@ -1156,6 +1162,7 @@ pub mod operations {
         path: "/v1/compliance/controls",
         summary: "List control status for a framework",
         scopes: &["compliance.<framework>:read"],
+        known_values: &[],
     };
 
     /// `GET /v1/compliance/frameworks/{framework}`: Framework posture summary.
@@ -1165,6 +1172,7 @@ pub mod operations {
         path: "/v1/compliance/frameworks/{framework}",
         summary: "Framework posture summary",
         scopes: &["compliance.<framework>:read"],
+        known_values: &[],
     };
 
     /// `GET /v1/evidence`: List security evidence.
@@ -1174,6 +1182,7 @@ pub mod operations {
         path: "/v1/evidence",
         summary: "List security evidence",
         scopes: &["evidence:read"],
+        known_values: &[],
     };
 
     /// `GET /v1/evidence/{id}`: Fetch one evidence item.
@@ -1183,6 +1192,7 @@ pub mod operations {
         path: "/v1/evidence/{id}",
         summary: "Fetch one evidence item",
         scopes: &["evidence:read"],
+        known_values: &[],
     };
 
     /// `GET /v1/endpoints`: List enrolled endpoint agents.
@@ -1192,6 +1202,7 @@ pub mod operations {
         path: "/v1/endpoints",
         summary: "List enrolled endpoint agents",
         scopes: &["endpoints:read"],
+        known_values: &[],
     };
 
     /// All operations, in document order.
