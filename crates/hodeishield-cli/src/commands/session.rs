@@ -16,7 +16,17 @@ use std::time::{Duration, Instant};
 const BROWSER_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 pub fn login(ctx: &Context, args: &LoginArgs) -> Result<()> {
-    let settings = ctx.settings()?;
+    login_with(&ctx.settings()?, ctx.store.as_ref(), args)
+}
+
+fn login_with(
+    settings: &crate::config::Settings,
+    store: &dyn auth::TokenStore,
+    args: &LoginArgs,
+) -> Result<()> {
+    // Before anything is asked of the person or the app: a session that cannot be kept is not
+    // worth approving.
+    store.check_available(&settings.profile)?;
     let client_id = settings.oauth_client_id.clone();
     let issuer = oauth::authorization_server(
         &oauth::http_client(&settings.api_url)?,
@@ -97,7 +107,25 @@ pub fn login(ctx: &Context, args: &LoginArgs) -> Result<()> {
         api_url: settings.api_url.as_str().trim_end_matches('/').to_owned(),
         client_id,
     };
-    ctx.store.save(&settings.profile, &token)?;
+    if let Err(failure) = store.save(&settings.profile, &token) {
+        // The grant exists at the app although nothing holds it: end it before reporting.
+        let revoked = revoke_tokens(
+            &http,
+            &metadata,
+            &token.client_id,
+            &token.access_token,
+            token.refresh_token.as_ref(),
+        );
+        eprintln!("{}", unstored_notice(&revoked));
+        return Err(if failure.hint.is_some() {
+            failure
+        } else {
+            failure.hint(format!(
+                "Use a tenant API key instead: export {}=<key>.",
+                auth::API_KEY_ENV
+            ))
+        });
+    }
     let who = oauth::userinfo(&http, &metadata, &token.access_token)
         .ok()
         .flatten()
@@ -115,6 +143,21 @@ pub fn login(ctx: &Context, args: &LoginArgs) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// What to tell the person when the session could not be kept, given how revoking it went.
+fn unstored_notice(revoked: &Result<()>) -> String {
+    match revoked {
+        Ok(()) => "The session could not be stored on this machine; the tokens issued for it were \
+                   revoked."
+            .to_owned(),
+        Err(revocation) => format!(
+            "The session could not be stored on this machine, and the app did not confirm \
+             revoking the tokens issued for it ({}). Revoke the CLI's access in the app under \
+             \"Application access\".",
+            clean(&revocation.message)
+        ),
+    }
 }
 
 pub fn logout(ctx: &Context) -> Result<()> {
@@ -230,24 +273,34 @@ pub fn whoami(ctx: &Context, out: &mut dyn Write) -> Result<()> {
 /// Revokes a stored sign-in at the app that issued it, never at whatever the profile points to
 /// now: the tokens themselves travel in the requests.
 ///
-/// The access token first, then the refresh token, each whatever happened to the other. An access
+/// The refresh token first, then the access token, each whatever happened to the other. An access
 /// token the app no longer knows (one that already expired, say) is not a failure; a refresh token it
 /// does not know, or any other refusal, is reported.
 fn revoke_at_issuer(token: &StoredToken) -> Result<()> {
     let issuer = auth::issuer_url(token)?;
     let http = oauth::http_client(&issuer)?;
     let metadata = oauth::discover(&http, &issuer)?;
-    let access = oauth::revoke(
+    revoke_tokens(
         &http,
         &metadata,
         &token.client_id,
         &token.access_token,
-        "access_token",
-    );
-    let refresh = token
-        .refresh_token
-        .as_ref()
-        .map(|refresh| oauth::revoke(&http, &metadata, &token.client_id, refresh, "refresh_token"));
+        token.refresh_token.as_ref(),
+    )
+}
+
+/// The revocation requests themselves (RFC 7009), refresh token first so it cannot mint another
+/// access token while the first is being ended.
+fn revoke_tokens(
+    http: &reqwest::blocking::Client,
+    metadata: &oauth::Metadata,
+    client_id: &str,
+    access_token: &secrecy::SecretString,
+    refresh_token: Option<&secrecy::SecretString>,
+) -> Result<()> {
+    let refresh = refresh_token
+        .map(|refresh| oauth::revoke(http, metadata, client_id, refresh, "refresh_token"));
+    let access = oauth::revoke(http, metadata, client_id, access_token, "access_token");
     let mut problems = Vec::new();
     if let Err(failure) = access {
         problems.push(failure.message);
@@ -283,6 +336,7 @@ mod tests {
     use super::*;
     use crate::auth::TokenStore;
     use crate::auth::store::MemoryStore;
+    use crate::cli::LoginArgs;
     use crate::config::{ConfigFile, Overrides, resolve_with};
     use secrecy::{ExposeSecret, SecretString};
 
@@ -493,5 +547,309 @@ mod tests {
             .create();
         issuer.mock("POST", "/revoke").with_status(400).create();
         assert!(revoke_at_issuer(&signed_in(&issuer, None)).is_err());
+    }
+
+    /// A store for the sign-in tests: it can be unreachable from the start, or fail on save.
+    struct BrokenStore {
+        available: bool,
+    }
+
+    impl TokenStore for BrokenStore {
+        fn load(&self, _profile: &str) -> Result<Option<StoredToken>> {
+            Ok(None)
+        }
+
+        fn save(&self, _profile: &str, _token: &StoredToken) -> Result<()> {
+            Err(Failure::general("system keychain: cannot write"))
+        }
+
+        fn delete(&self, _profile: &str) -> Result<bool> {
+            Ok(false)
+        }
+
+        fn check_available(&self, _profile: &str) -> Result<()> {
+            if self.available {
+                Ok(())
+            } else {
+                Err(Failure::general(format!(
+                    "{}: no Secret Service",
+                    crate::auth::store::KEYCHAIN_UNAVAILABLE
+                ))
+                .hint("use HODEISHIELD_API_KEY"))
+            }
+        }
+    }
+
+    fn settings_for(
+        api: &mockito::ServerGuard,
+        app: &mockito::ServerGuard,
+    ) -> crate::config::Settings {
+        let app = app.url();
+        let env = |name: &str| (name == "HODEISHIELD_APP_URL").then(|| app.clone());
+        let overrides = Overrides {
+            profile: None,
+            api_url: Some(api.url()),
+        };
+        resolve_with(
+            &ConfigFile::default(),
+            std::path::PathBuf::new(),
+            &overrides,
+            env,
+        )
+        .expect("settings")
+    }
+
+    const DEVICE: LoginArgs = LoginArgs {
+        device: true,
+        no_browser: false,
+    };
+
+    /// An app that offers the device flow, issues `at-new` / `rt-new`, and revokes whatever it is
+    /// asked to; the hints of the revocation requests are recorded in the order they arrive.
+    fn device_app(
+        api: &mut mockito::ServerGuard,
+        app: &mut mockito::ServerGuard,
+    ) -> (
+        std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        Vec<mockito::Mock>,
+    ) {
+        let revoked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = std::sync::Arc::clone(&revoked);
+        let url = app.url();
+        let mocks = vec![
+            api.mock("GET", "/.well-known/oauth-protected-resource")
+                .with_status(404)
+                .create(),
+            app.mock("GET", "/.well-known/oauth-authorization-server")
+                .with_body(
+                    json!({
+                        "issuer": url,
+                        "token_endpoint": format!("{url}/token"),
+                        "device_authorization_endpoint": format!("{url}/device/code"),
+                        "revocation_endpoint": format!("{url}/revoke"),
+                        "scopes_supported": ["offline_access"],
+                    })
+                    .to_string(),
+                )
+                .create(),
+            app.mock("POST", "/device/code")
+                .with_body(
+                    json!({
+                        "device_code": "dc", "user_code": "ABCD-EFGH",
+                        "verification_uri": format!("{url}/device"),
+                        "expires_in": 600, "interval": 1,
+                    })
+                    .to_string(),
+                )
+                .expect(1)
+                .create(),
+            app.mock("POST", "/token")
+                .with_body(
+                    json!({
+                        "access_token": "at-new", "refresh_token": "rt-new",
+                        "token_type": "Bearer", "expires_in": 3600,
+                    })
+                    .to_string(),
+                )
+                .expect(1)
+                .create(),
+            app.mock("POST", "/revoke")
+                .with_body_from_request(move |request| {
+                    let form: Vec<(String, String)> =
+                        url::form_urlencoded::parse(request.body().expect("body"))
+                            .into_owned()
+                            .collect();
+                    let get = |key: &str| {
+                        form.iter()
+                            .find(|(k, _)| k == key)
+                            .map(|(_, v)| v.clone())
+                            .unwrap_or_default()
+                    };
+                    seen.lock().expect("lock").push(format!(
+                        "{}={}",
+                        get("token_type_hint"),
+                        get("token")
+                    ));
+                    Vec::new()
+                })
+                .expect(2)
+                .create(),
+        ];
+        (revoked, mocks)
+    }
+
+    #[test]
+    fn an_unavailable_store_stops_login_before_the_app_is_asked_for_anything() {
+        let mut api = mockito::Server::new();
+        let mut app = mockito::Server::new();
+        let calls: Vec<_> = [&mut api, &mut app]
+            .into_iter()
+            .flat_map(|server| {
+                ["GET", "POST"].map(|method| {
+                    server
+                        .mock(method, mockito::Matcher::Any)
+                        .expect(0)
+                        .create()
+                })
+            })
+            .collect();
+        let settings = settings_for(&api, &app);
+        let err =
+            login_with(&settings, &BrokenStore { available: false }, &DEVICE).expect_err("refused");
+        assert!(
+            err.message
+                .starts_with(crate::auth::store::KEYCHAIN_UNAVAILABLE),
+            "{}",
+            err.message
+        );
+        assert!(err.hint.as_deref().is_some_and(|h| h.contains("API_KEY")));
+        assert_eq!(format!("{:?}", err.kind), "General");
+        for call in &calls {
+            call.assert();
+        }
+    }
+
+    #[test]
+    fn tokens_that_cannot_be_stored_are_revoked_refresh_token_first() {
+        let mut api = mockito::Server::new();
+        let mut app = mockito::Server::new();
+        let (revoked, mocks) = device_app(&mut api, &mut app);
+        let settings = settings_for(&api, &app);
+        let err = login_with(&settings, &BrokenStore { available: true }, &DEVICE)
+            .expect_err("save fails");
+        assert_eq!(err.message, "system keychain: cannot write");
+        assert!(err.hint.as_deref().is_some_and(|h| h.contains("API_KEY")));
+        assert_eq!(
+            *revoked.lock().expect("lock"),
+            ["refresh_token=rt-new", "access_token=at-new"]
+        );
+        for mock in &mocks {
+            mock.assert();
+        }
+        // Nothing the person sees carries a token.
+        let notice = unstored_notice(&Ok(()));
+        assert!(notice.contains("revoked"), "{notice}");
+        let all = format!("{err:?} {notice}");
+        assert!(!all.contains("-new"), "{all}");
+    }
+
+    #[test]
+    fn the_notice_for_unrevoked_tokens_points_to_the_app() {
+        let notice = unstored_notice(&Err(Failure::general("the app refused to revoke")));
+        assert!(
+            notice.contains("did not confirm") && notice.contains("Application access"),
+            "{notice}"
+        );
+    }
+
+    #[test]
+    fn a_store_that_works_keeps_the_session_and_revokes_nothing() {
+        let mut api = mockito::Server::new();
+        let mut app = mockito::Server::new();
+        let (revoked, mocks) = device_app(&mut api, &mut app);
+        let settings = settings_for(&api, &app);
+        let store = MemoryStore::default();
+        login_with(&settings, &store, &DEVICE).expect("signed in");
+        let kept = store.load("default").expect("load").expect("stored");
+        assert_eq!(kept.access_token.expose_secret(), "at-new");
+        assert!(revoked.lock().expect("lock").is_empty());
+        // The revocation mock is the last one: it was never reached.
+        for mock in &mocks[..4] {
+            mock.assert();
+        }
+    }
+
+    #[test]
+    fn login_finds_the_sign_in_server_through_the_api_and_asks_for_the_scopes_it_needs() {
+        let mut api = mockito::Server::new();
+        let mut app = mockito::Server::new();
+        let issuer = format!("{}/api/auth", app.url());
+        let resource = api
+            .mock("GET", "/.well-known/oauth-protected-resource")
+            .with_body(
+                json!({ "resource": api.url(), "authorization_servers": [issuer] }).to_string(),
+            )
+            .expect(1)
+            .create();
+        // RFC 8414 §3.1: the issuer's path goes after the well-known segment.
+        app.mock("GET", "/.well-known/oauth-authorization-server/api/auth")
+            .with_body(
+                json!({
+                    "issuer": issuer,
+                    "token_endpoint": format!("{issuer}/oauth2/token"),
+                    "device_authorization_endpoint": format!("{issuer}/device/code"),
+                    "scopes_supported": ["supply_risk:read", "compliance.nis2:read", "radar:read", "offline_access"],
+                })
+                .to_string(),
+            )
+            .create();
+        let device = app
+            .mock("POST", "/api/auth/device/code")
+            .match_body(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("client_id".into(), "hodeishield-cli".into()),
+                mockito::Matcher::UrlEncoded(
+                    "scope".into(),
+                    "supply_risk:read compliance.nis2:read offline_access".into(),
+                ),
+            ]))
+            .with_body(
+                json!({
+                    "device_code": "dc", "user_code": "ABCD-EFGH",
+                    "verification_uri": format!("{}/device", app.url()),
+                    "expires_in": 600, "interval": 1,
+                })
+                .to_string(),
+            )
+            .expect(1)
+            .create();
+        // Denied at the end, so nothing is stored.
+        let token = app
+            .mock("POST", "/api/auth/oauth2/token")
+            .match_body(mockito::Matcher::UrlEncoded(
+                "client_id".into(),
+                "hodeishield-cli".into(),
+            ))
+            .with_status(400)
+            .with_body(r#"{"error":"access_denied"}"#)
+            .expect(1)
+            .create();
+        let settings = settings_for(&api, &app);
+        let store = MemoryStore::default();
+        let err = login_with(&settings, &store, &DEVICE).expect_err("denied");
+        assert!(err.message.contains("denied"), "{}", err.message);
+        assert_eq!(
+            err.kind.exit_code(),
+            crate::failure::Kind::NotAuthenticated.exit_code()
+        );
+        assert!(store.load("default").expect("load").is_none());
+        resource.assert();
+        device.assert();
+        token.assert();
+    }
+
+    #[test]
+    fn login_says_clearly_when_the_app_does_not_offer_it() {
+        let mut api = mockito::Server::new();
+        let mut app = mockito::Server::new();
+        api.mock("GET", "/.well-known/oauth-protected-resource")
+            .with_status(404)
+            .create();
+        app.mock("GET", mockito::Matcher::Regex("^/.well-known/".into()))
+            .with_status(404)
+            .expect(2)
+            .create();
+        let settings = settings_for(&api, &app);
+        let err = login_with(&settings, &MemoryStore::default(), &DEVICE).expect_err("none");
+        assert!(
+            err.message
+                .contains("does not offer sign-in for the CLI yet"),
+            "{}",
+            err.message
+        );
+        assert!(
+            err.hint
+                .as_deref()
+                .is_some_and(|h| h.contains("HODEISHIELD_API_KEY"))
+        );
     }
 }
