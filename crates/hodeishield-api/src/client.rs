@@ -34,6 +34,10 @@ pub struct Operation {
     /// open: the server may accept a value that is not listed, so use this to help and to warn,
     /// never to refuse. Read it through [`Operation::known_values`].
     pub known_values: &'static [(&'static str, &'static [&'static str])],
+    /// Whether a client built for one client tenant selects that tenant on this operation and
+    /// checks the answer's confirmation. True for the data operations, false for the portfolio
+    /// listing, which is never scoped.
+    pub tenant_scoped: bool,
 }
 
 impl Operation {
@@ -417,24 +421,15 @@ impl Client {
         std::thread::sleep(wait);
     }
 
+    /// A GET. The operation decides whether the client's tenant selection applies: scope headers
+    /// are sent and checked only when `operation.tenant_scoped`.
     pub(crate) fn get<T: DeserializeOwned>(
         &self,
         operation: &'static Operation,
         path: String,
         query: Vec<(&'static str, String)>,
     ) -> Result<ApiResponse<T>, Error> {
-        self.get_with(operation, path, query, true)
-    }
-
-    /// Like [`Client::get`]; with `scoped` false the client's scope headers are neither sent nor
-    /// checked, for an operation that sits outside the scope.
-    pub(crate) fn get_with<T: DeserializeOwned>(
-        &self,
-        operation: &'static Operation,
-        path: String,
-        query: Vec<(&'static str, String)>,
-        scoped: bool,
-    ) -> Result<ApiResponse<T>, Error> {
+        let scoped = operation.tenant_scoped;
         let url = self.url(&path, &query);
         let mut rate_limit_retries = 0;
         let mut transient_retries = 0;
@@ -665,6 +660,7 @@ mod tests {
             summary: "List things",
             scopes: &[],
             known_values: &[("severity", &["critical", "high"])],
+            tenant_scoped: true,
         };
         assert_eq!(
             operation.known_values("severity"),

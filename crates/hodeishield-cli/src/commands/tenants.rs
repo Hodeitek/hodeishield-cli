@@ -13,7 +13,10 @@ use crate::config::Settings;
 use crate::failure::{ApiContext, CredentialSource, Failure, Kind, Result};
 use crate::output::{Rows, clean};
 use hodeishield_api::Client;
-use hodeishield_api::portfolio::{ListTenantsParams, ListTenantsResponse, Tenant, is_uuid};
+use hodeishield_api::portfolio::{
+    ListTenantsParams, ListTenantsResponse, Readability, Tenant, is_uuid,
+};
+use std::collections::HashSet;
 use std::io::Write;
 
 /// Which client tenant the read commands read.
@@ -33,6 +36,9 @@ pub enum Selection {
 pub struct Target {
     pub client: Client,
     pub tenant: Option<Tenant>,
+    /// Set for a tenant of `--all-tenants` whose licence status this version does not know: it is
+    /// not read, and the walk reports it and fails at the end.
+    pub unknown_licence: bool,
 }
 
 impl Context {
@@ -46,6 +52,7 @@ impl Context {
                     vec![Target {
                         client,
                         tenant: None,
+                        unknown_licence: false,
                     }],
                     source,
                 ));
@@ -65,24 +72,34 @@ impl Context {
                 vec![tenant]
             }
             _ => {
-                let (usable, idle): (Vec<_>, Vec<_>) =
-                    portfolio.into_iter().partition(Tenant::readable);
-                if !idle.is_empty() {
+                // Inactive tenants are skipped on purpose. A tenant whose licence status this
+                // version does not know is not read either, but it stays in the list so the walk
+                // can report it and fail: nothing is silently missing.
+                let idle = portfolio
+                    .iter()
+                    .filter(|t| t.readability() == Readability::Inactive)
+                    .count();
+                if idle > 0 {
                     eprintln!(
-                        "Skipping {} inactive client tenants (see `hodeishield tenants list`).",
-                        idle.len()
+                        "Skipping {idle} inactive client tenants (see `hodeishield tenants list`)."
                     );
                 }
-                usable
+                portfolio
+                    .into_iter()
+                    .filter(|t| t.readability() != Readability::Inactive)
+                    .collect()
             }
         };
         let targets = tenants
             .into_iter()
             .map(|tenant| {
                 let (client, _) = self.api(settings, Some(&tenant.id))?;
+                let unknown_licence = matches!(selected, Selection::All)
+                    && tenant.readability() == Readability::Unknown;
                 Ok(Target {
                     client,
                     tenant: Some(tenant),
+                    unknown_licence,
                 })
             })
             .collect::<Result<_>>()?;
@@ -107,13 +124,19 @@ fn list_portfolio(lister: &Client, source: CredentialSource) -> Result<Vec<Tenan
     let api = ApiContext {
         source,
         framework: None,
+        tenant_selected: false,
     };
-    let (_, tenants) = collect_pages(
+    let mut totals: Vec<i64> = Vec::new();
+    let (_, mut tenants) = collect_pages(
         "client tenants",
         &api,
         Some(200),
         100_000,
-        &mut |page, per_page| lister.list_tenants(&ListTenantsParams::alphabetical(page, per_page)),
+        &mut |page, per_page| {
+            let response = lister.list_tenants(&ListTenantsParams::alphabetical(page, per_page))?;
+            totals.push(response.data.pagination.total);
+            Ok(response)
+        },
         |r: ListTenantsResponse| (r.data, r.pagination),
     )
     .map_err(|failure| {
@@ -126,19 +149,32 @@ fn list_portfolio(lister: &Client, source: CredentialSource) -> Result<Vec<Tenan
             failure
         }
     })?;
+    // The portfolio can change while it is walked: a tenant may then appear on two pages, or on
+    // none. Each tenant is read once, and the change is said out loud.
+    if totals.windows(2).any(|pair| pair[0] != pair[1]) {
+        eprintln!(
+            "warning: the number of client tenants changed while they were listed ({}); a tenant \
+             may be missing. Run the command again.",
+            totals
+                .iter()
+                .map(i64::to_string)
+                .collect::<Vec<_>>()
+                .join(", then ")
+        );
+    }
+    let mut seen = HashSet::new();
+    tenants.retain(|tenant| seen.insert(tenant.id.to_ascii_lowercase()));
     Ok(tenants)
 }
 
 /// The tenant the user named, by id or slug. One that is not in the portfolio is reported the way
 /// the API reports it: not found, with no hint about whether it exists elsewhere.
 fn find(portfolio: &[Tenant], wanted: &str) -> Result<Tenant> {
+    // An input shaped like a UUID may be an id, but a slug can have that shape too: if it matches
+    // an id of one tenant and the slug of another, it is ambiguous, never resolved to one of them.
     let by_id = is_uuid(wanted);
     let mut matches = portfolio.iter().filter(|t| {
-        if by_id {
-            t.id.eq_ignore_ascii_case(wanted)
-        } else {
-            t.slug.eq_ignore_ascii_case(wanted)
-        }
+        t.slug.eq_ignore_ascii_case(wanted) || (by_id && t.id.eq_ignore_ascii_case(wanted))
     });
     match (matches.next(), matches.next()) {
         (Some(tenant), None) => Ok(tenant.clone()),
@@ -170,6 +206,7 @@ pub fn run(ctx: &Context, command: TenantsCommand, out: &mut dyn Write) -> Resul
         ApiContext {
             source,
             framework: None,
+            tenant_selected: false,
         },
         &mut |page, per_page| client.list_tenants(&ListTenantsParams::alphabetical(page, per_page)),
         |r| (r.data, r.pagination),

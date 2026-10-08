@@ -195,7 +195,13 @@ pub fn from_api(error: hodeishield_api::Error, context: &ApiContext<'_>) -> Fail
                             "All portfolio keys of your organisation share this limit; another key \
                              or script may be using it.",
                         ),
-                        Some("portfolio_tenant" | "tenant") => Some(
+                        Some("portfolio_tenant") => Some(
+                            "This client tenant's own limit is used up; other client tenants are \
+                             not affected.",
+                        ),
+                        // The plain `tenant` limit is also what a single-tenant key hits: the
+                        // client wording fits only when a client tenant was selected.
+                        Some("tenant") if context.tenant_selected => Some(
                             "This client tenant's own limit is used up; other client tenants are \
                              not affected.",
                         ),
@@ -308,6 +314,8 @@ pub struct ApiContext<'a> {
     pub source: CredentialSource,
     /// The framework of a compliance call, to fill `compliance.<framework>:read`.
     pub framework: Option<&'a str>,
+    /// Whether the call reads a selected client tenant (`--tenant` or `--all-tenants`).
+    pub tenant_selected: bool,
 }
 
 impl ApiContext<'_> {

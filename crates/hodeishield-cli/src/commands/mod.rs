@@ -51,6 +51,7 @@ impl Context {
                     &ApiContext {
                         source,
                         framework: None,
+                        tenant_selected: true,
                     },
                 )
             })?;
@@ -84,10 +85,20 @@ impl Context {
                 &ApiContext {
                     source,
                     framework: None,
+                    tenant_selected: tenant.is_some(),
                 },
             )
         })?;
         Ok((client, source))
+    }
+
+    /// What a failure message needs to know about a call made with this context's selection.
+    pub fn call<'a>(&self, source: CredentialSource, framework: Option<&'a str>) -> ApiContext<'a> {
+        ApiContext {
+            source,
+            framework,
+            tenant_selected: !matches!(self.selection, Selection::Own),
+        }
     }
 }
 

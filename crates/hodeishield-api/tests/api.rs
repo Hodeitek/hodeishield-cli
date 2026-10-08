@@ -1031,3 +1031,200 @@ fn a_portfolio_key_is_sent_whole_and_never_shown() {
     let shown = format!("{builder:?}");
     assert!(!shown.contains(secret), "{shown}");
 }
+
+// Review follow-ups: the echo is checked on every operation, on every attempt, and only on success.
+
+fn tenant_client_retrying(server: &mockito::Server, tenant: &str) -> Client {
+    Client::builder(
+        server.url().parse().expect("url"),
+        SecretString::from(PORTFOLIO_KEY),
+    )
+    .tenant(tenant)
+    .expect("a UUID")
+    .transient_retries(2, Duration::from_millis(1))
+    .rate_limit_retries(1, Duration::from_secs(5))
+    .build()
+    .expect("client")
+}
+
+#[test]
+fn every_single_item_operation_checks_the_echo() {
+    let mut server = mockito::Server::new();
+    let any = server
+        .mock("GET", mockito::Matcher::Any)
+        .match_header("x-hs-tenant", TENANT_A)
+        .with_header("x-hs-tenant", TENANT_B)
+        .with_body("{}")
+        .expect(5)
+        .create();
+    let c = tenant_client(&server, TENANT_A);
+    fn refused<T>(r: Result<T, Error>) -> bool {
+        matches!(r, Err(Error::TenantMismatch { .. }))
+    }
+    assert!(refused(c.get_vendor("v1")));
+    assert!(refused(c.get_alert("a1")));
+    assert!(refused(c.get_risk("r1")));
+    assert!(refused(c.get_evidence("e1")));
+    assert!(refused(c.get_framework_posture("nis2")));
+    any.assert();
+}
+
+#[test]
+fn an_answer_after_a_retry_is_checked_too() {
+    // A 503 and then a 200 that confirms nothing, or another tenant: refused in both cases.
+    for echo in [None, Some(TENANT_B)] {
+        let mut server = mockito::Server::new();
+        let unavailable = server
+            .mock("GET", "/v1/vendors")
+            .with_status(503)
+            .expect(1)
+            .create();
+        let mut served = server.mock("GET", "/v1/vendors").with_body(EMPTY_PAGE);
+        if let Some(echo) = echo {
+            served = served.with_header("x-hs-tenant", echo);
+        }
+        let served = served.expect(1).create();
+        let err = tenant_client_retrying(&server, TENANT_A)
+            .list_vendors(&ListVendorsParams::default())
+            .expect_err("unconfirmed answer after a retry");
+        assert!(
+            matches!(err, Error::TenantMismatch { .. }),
+            "{echo:?}: {err:?}"
+        );
+        unavailable.assert();
+        served.assert();
+    }
+    // The same after a 429 that is waited out.
+    for echo in [None, Some(TENANT_B)] {
+        let mut server = mockito::Server::new();
+        let limited = server
+            .mock("GET", "/v1/vendors")
+            .with_status(429)
+            .with_header("retry-after", "1")
+            .expect(1)
+            .create();
+        let mut served = server.mock("GET", "/v1/vendors").with_body(EMPTY_PAGE);
+        if let Some(echo) = echo {
+            served = served.with_header("x-hs-tenant", echo);
+        }
+        let served = served.expect(1).create();
+        let err = tenant_client_retrying(&server, TENANT_A)
+            .list_vendors(&ListVendorsParams::default())
+            .expect_err("unconfirmed answer after a wait");
+        assert!(
+            matches!(err, Error::TenantMismatch { .. }),
+            "{echo:?}: {err:?}"
+        );
+        limited.assert();
+        served.assert();
+    }
+    // A confirmed answer after a retry is served.
+    let mut server = mockito::Server::new();
+    server.mock("GET", "/v1/vendors").with_status(503).create();
+    server
+        .mock("GET", "/v1/vendors")
+        .with_header("x-hs-tenant", TENANT_A)
+        .with_body(EMPTY_PAGE)
+        .create();
+    tenant_client_retrying(&server, TENANT_A)
+        .list_vendors(&ListVendorsParams::default())
+        .expect("confirmed after a retry");
+}
+
+#[test]
+fn a_redirect_on_a_scoped_client_is_an_error_and_the_target_gets_nothing() {
+    let mut server = mockito::Server::new();
+    let mut elsewhere = mockito::Server::new();
+    let never = elsewhere
+        .mock("GET", mockito::Matcher::Any)
+        .expect(0)
+        .create();
+    server
+        .mock("GET", "/v1/vendors")
+        .match_header("x-hs-tenant", TENANT_A)
+        .with_status(302)
+        .with_header("location", &format!("{}/steal", elsewhere.url()))
+        .with_header("x-hs-tenant", TENANT_A)
+        .create();
+    let err = tenant_client(&server, TENANT_A)
+        .list_vendors(&ListVendorsParams::default())
+        .expect_err("redirect");
+    assert_eq!(err.api().map(|a| a.status), Some(302), "{err:?}");
+    never.assert();
+}
+
+#[test]
+fn only_a_decodable_success_is_one_even_with_the_right_echo() {
+    let mut server = mockito::Server::new();
+    server
+        .mock("GET", "/v1/vendors")
+        .with_status(204)
+        .with_header("x-hs-tenant", TENANT_A)
+        .create();
+    let err = tenant_client(&server, TENANT_A)
+        .list_vendors(&ListVendorsParams::default())
+        .expect_err("no body");
+    assert!(matches!(err, Error::Decode { .. }), "{err:?}");
+
+    let mut server = mockito::Server::new();
+    server
+        .mock("GET", "/v1/vendors")
+        .with_status(304)
+        .with_header("x-hs-tenant", TENANT_A)
+        .create();
+    let err = tenant_client(&server, TENANT_A)
+        .list_vendors(&ListVendorsParams::default())
+        .expect_err("not modified is not data");
+    assert_eq!(err.api().map(|a| a.status), Some(304), "{err:?}");
+}
+
+#[test]
+fn the_listing_is_unscoped_by_its_operation_and_the_data_operations_are_scoped() {
+    use hodeishield_api::portfolio::LIST_TENANTS;
+    use hodeishield_api::v1::operations;
+    let listing = LIST_TENANTS;
+    assert!(!listing.tenant_scoped);
+    assert!(operations::ALL.len() >= 11);
+    assert!(operations::ALL.iter().all(|op| op.tenant_scoped));
+}
+
+#[test]
+fn a_404_or_405_with_a_portfolio_code_is_the_apis_own_error() {
+    use hodeishield_api::portfolio::ListTenantsParams;
+    for (status, code) in [
+        (404_usize, "TENANT_NOT_FOUND"),
+        (405, "TENANT_SELECTOR_NOT_SUPPORTED"),
+        (404, "TENANT_SOMETHING_NEW"),
+    ] {
+        let mut server = mockito::Server::new();
+        server
+            .mock("GET", "/v1/portfolio/tenants")
+            .with_status(status)
+            .with_body(format!(
+                r#"{{"error":{{"code":"not_found","message":"x","request_id":"r","details":{{"code":"{code}"}}}}}}"#
+            ))
+            .create();
+        let err = client(&server)
+            .list_tenants(&ListTenantsParams::default())
+            .expect_err("API error");
+        assert_eq!(
+            err.api().map(|a| a.status),
+            Some(u16::try_from(status).expect("status")),
+            "{status} {code}: {err:?}"
+        );
+    }
+    // An unrelated code, or none, still means the route is not there.
+    let mut server = mockito::Server::new();
+    server
+        .mock("GET", "/v1/portfolio/tenants")
+        .with_status(404)
+        .with_body(r#"{"error":{"code":"not_found","message":"x","request_id":"r","details":{"code":"SOMETHING_ELSE"}}}"#)
+        .create();
+    let err = client(&server)
+        .list_tenants(&ListTenantsParams::default())
+        .expect_err("no route");
+    assert!(
+        matches!(err, Error::PortfolioNotOffered { status: 404 }),
+        "{err:?}"
+    );
+}

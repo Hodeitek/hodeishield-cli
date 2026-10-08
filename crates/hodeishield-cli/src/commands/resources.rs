@@ -158,6 +158,16 @@ fn list_across<R, T>(
         let Some(tenant) = &target.tenant else {
             continue;
         };
+        if target.unknown_licence {
+            // The licence vocabulary is open. Not read, but not silently dropped either.
+            eprintln!(
+                "warning: client tenant {}: licence status `{}` is not known to this version; not read",
+                clean(&tenant.slug),
+                clean(&tenant.licence_status)
+            );
+            failures.push(Failure::general("licence status not known"));
+            continue;
+        }
         let walked = collect_pages(
             noun,
             &api,
@@ -204,7 +214,7 @@ fn list_across<R, T>(
             }
             let rows = render(items);
             headers.get_or_insert(rows.headers);
-            groups.push((tenant.slug.clone(), rows.rows));
+            groups.push((tenant.slug.clone(), tenant.id.clone(), rows.rows));
         }
         if let Some(headers) = headers {
             print_table(out, &tenant_table(headers, groups))?;
@@ -315,11 +325,8 @@ fn show<R, T: Serialize>(
     Ok(print_detail(out, &value)?)
 }
 
-fn plain(source: CredentialSource) -> ApiContext<'static> {
-    ApiContext {
-        source,
-        framework: None,
-    }
+fn plain(ctx: &Context, source: CredentialSource) -> ApiContext<'static> {
+    ctx.call(source, None)
 }
 
 pub fn vendors(ctx: &Context, command: VendorsCommand, out: &mut dyn Write) -> Result<()> {
@@ -341,7 +348,7 @@ pub fn vendors(ctx: &Context, command: VendorsCommand, out: &mut dyn Write) -> R
                 out,
                 &args.paging,
                 "vendors",
-                plain(source),
+                plain(ctx, source),
                 &targets,
                 &mut |client, page, per_page| {
                     client.list_vendors(&ListVendorsParams {
@@ -356,7 +363,9 @@ pub fn vendors(ctx: &Context, command: VendorsCommand, out: &mut dyn Write) -> R
         }
         VendorsCommand::Get { id } => {
             let (client, source) = ctx.single(&settings)?;
-            show(ctx, out, plain(source), client.get_vendor(&id), |r| &r.data)
+            show(ctx, out, plain(ctx, source), client.get_vendor(&id), |r| {
+                &r.data
+            })
         }
     }
 }
@@ -403,7 +412,7 @@ pub fn alerts(ctx: &Context, command: AlertsCommand, out: &mut dyn Write) -> Res
                 out,
                 &args.paging,
                 "alerts",
-                plain(source),
+                plain(ctx, source),
                 &targets,
                 &mut |client, page, per_page| {
                     client.list_alerts(&ListAlertsParams {
@@ -418,7 +427,9 @@ pub fn alerts(ctx: &Context, command: AlertsCommand, out: &mut dyn Write) -> Res
         }
         AlertsCommand::Get { id } => {
             let (client, source) = ctx.single(&settings)?;
-            show(ctx, out, plain(source), client.get_alert(&id), |r| &r.data)
+            show(ctx, out, plain(ctx, source), client.get_alert(&id), |r| {
+                &r.data
+            })
         }
     }
 }
@@ -468,7 +479,7 @@ pub fn risks(ctx: &Context, command: RisksCommand, out: &mut dyn Write) -> Resul
                 out,
                 &args.paging,
                 "risks",
-                plain(source),
+                plain(ctx, source),
                 &targets,
                 &mut |client, page, per_page| {
                     client.list_risks(&ListRisksParams {
@@ -483,7 +494,9 @@ pub fn risks(ctx: &Context, command: RisksCommand, out: &mut dyn Write) -> Resul
         }
         RisksCommand::Get { id } => {
             let (client, source) = ctx.single(&settings)?;
-            show(ctx, out, plain(source), client.get_risk(&id), |r| &r.data)
+            show(ctx, out, plain(ctx, source), client.get_risk(&id), |r| {
+                &r.data
+            })
         }
     }
 }
@@ -517,10 +530,7 @@ pub fn compliance(ctx: &Context, command: ComplianceCommand, out: &mut dyn Write
                 &[("status", args.status.as_deref())],
             );
             let (targets, source) = ctx.targets(&settings)?;
-            let api = ApiContext {
-                source,
-                framework: Some(&args.framework),
-            };
+            let api = ctx.call(source, Some(&args.framework));
             let mut base = ListComplianceControlsParams::new(args.framework.clone());
             base.status = args.status;
             base.sort = args.sort;
@@ -545,10 +555,7 @@ pub fn compliance(ctx: &Context, command: ComplianceCommand, out: &mut dyn Write
         }
         ComplianceCommand::Posture { framework } => {
             let (client, source) = ctx.single(&settings)?;
-            let api = ApiContext {
-                source,
-                framework: Some(&framework),
-            };
+            let api = ctx.call(source, Some(&framework));
             let response = client
                 .get_framework_posture(&framework)
                 .map_err(|e| from_api(e, &api))?;
@@ -614,7 +621,7 @@ pub fn evidence(ctx: &Context, command: EvidenceCommand, out: &mut dyn Write) ->
                 out,
                 &args.paging,
                 "evidence items",
-                plain(source),
+                plain(ctx, source),
                 &targets,
                 &mut |client, page, per_page| {
                     client.list_evidence(&ListEvidenceParams {
@@ -629,9 +636,13 @@ pub fn evidence(ctx: &Context, command: EvidenceCommand, out: &mut dyn Write) ->
         }
         EvidenceCommand::Get { id } => {
             let (client, source) = ctx.single(&settings)?;
-            show(ctx, out, plain(source), client.get_evidence(&id), |r| {
-                &r.data
-            })
+            show(
+                ctx,
+                out,
+                plain(ctx, source),
+                client.get_evidence(&id),
+                |r| &r.data,
+            )
         }
     }
 }
@@ -671,7 +682,7 @@ pub fn endpoints(ctx: &Context, command: EndpointsCommand, out: &mut dyn Write) 
                 out,
                 &args.paging,
                 "endpoints",
-                plain(source),
+                plain(ctx, source),
                 &targets,
                 &mut |client, page, per_page| {
                     client.list_endpoints(&ListEndpointsParams {
@@ -723,6 +734,7 @@ mod tests {
         let api = ApiContext {
             source: CredentialSource::ApiKey,
             framework: None,
+            tenant_selected: false,
         };
         let total_pages = (total + per_page - 1) / per_page;
         collect_pages(

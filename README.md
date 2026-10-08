@@ -402,9 +402,13 @@ hodeishield --all-tenants alerts list --status open
 - `--all-tenants` works on `list` commands and `compliance controls`. It fetches every page of each
   client (`--per-page` applies, `--page` does not) and adds the tenant to each row: a `TENANT`
   column in the table, and `tenant_id`, `tenant_slug` and `tenant_name` fields in `--json` and
-  `--csv`. Clients that are not readable are skipped, with a note on standard error: those that
-  are inactive, whose licence status is `inactive`, or whose licence status this CLI does not
-  know. A client in its grace period is read. Clients are asked one after the other.
+  `--csv`. Clients that are inactive, or whose licence status is `inactive`, are skipped with a
+  note on standard error. A client in its grace period is read. A client whose licence status this
+  CLI does not know is not read either; it is named on standard error (`licence status … is not
+  known to this version; not read`) and the command exits non-zero, so nothing goes missing
+  silently. Clients are asked one after the other. In the table, a slug with characters other
+  than `a-z`, `0-9` and `-` is followed by the start of the client's id, so look-alike names can be
+  told apart; `--json` and `--csv` carry the full values.
 - The tenant on a row is the one whose own request returned it. The CLI asks the API about one
   client at a time, and refuses an answer that does not confirm that client.
 
@@ -421,7 +425,9 @@ hodeishield --all-tenants vendors list --criticality critical --csv > critical-v
 - With `--all-tenants`, a client that cannot be read on its own account (for example its licence is
   not in force, exit code 8) is reported on standard error and skipped; the command prints the
   others and still exits non-zero, so a script does not mistake a partial result for a complete
-  one.
+  one. This is the only signal of a partial result: check the exit code, and read standard error
+  for which clients were left out. A client named by both an id and a slug of another client
+  (a slug can look like an id) is refused as ambiguous; use the id shown by `tenants list`.
 - Without `--tenant` or `--all-tenants`, a portfolio key is refused by the API, and the CLI tells
   you to choose. A single-tenant key or sign-in behaves exactly as before; asking it for a client
   fails with exit code 4 (it lacks the portfolio scope).

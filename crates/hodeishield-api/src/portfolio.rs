@@ -55,6 +55,7 @@ pub const LIST_TENANTS: Operation = Operation {
     summary: "List the client tenants of the credential's portfolio",
     scopes: &["portfolio:read"],
     known_values: &[],
+    tenant_scoped: false,
 };
 
 /// A client tenant of the portfolio. Text fields come from the server and are untrusted.
@@ -76,13 +77,39 @@ pub struct Tenant {
     pub licence_status: String,
 }
 
+/// Whether a [`Tenant`] can be expected to be readable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Readability {
+    /// Active, with a licence in force or in its grace period.
+    Readable,
+    /// Deactivated, or its licence status is `inactive`: the API would answer `403`.
+    Inactive,
+    /// Active, with a licence status this client does not know. The vocabulary is open, so such a
+    /// tenant is neither assumed readable nor assumed inactive.
+    Unknown,
+}
+
 impl Tenant {
+    /// Whether this tenant is readable, inactive, or has a licence status this client does not
+    /// know.
+    #[must_use]
+    pub fn readability(&self) -> Readability {
+        if !self.active {
+            return Readability::Inactive;
+        }
+        match self.licence_status.as_str() {
+            "in_force" | "grace" => Readability::Readable,
+            "inactive" => Readability::Inactive,
+            _ => Readability::Unknown,
+        }
+    }
+
     /// Whether reading this tenant can be expected to work: it is active and its licence is in
     /// force or in its grace period. A licence status this client does not know counts as not
     /// readable, since the vocabulary is open.
     #[must_use]
     pub fn readable(&self) -> bool {
-        self.active && matches!(self.licence_status.as_str(), "in_force" | "grace")
+        self.readability() == Readability::Readable
     }
 }
 
@@ -182,19 +209,30 @@ impl Client {
         &self,
         params: &ListTenantsParams,
     ) -> Result<ApiResponse<ListTenantsResponse>, Error> {
-        self.get_with(
+        self.get(
             &LIST_TENANTS,
             LIST_TENANTS.path.to_owned(),
             params.query_pairs(),
-            false,
         )
         .map_err(|error| match error {
-            Error::Api(api) if matches!(api.status, 404 | 405) => {
+            // A 404/405 that carries one of the portfolio contract's own codes comes from an
+            // API that does offer the portfolio: it stays the API's error.
+            Error::Api(api) if matches!(api.status, 404 | 405) && !is_portfolio_code(&api) => {
                 Error::PortfolioNotOffered { status: api.status }
             }
             other => other,
         })
     }
+}
+
+/// Whether the error answer names one of the portfolio contract's `details.code` values.
+fn is_portfolio_code(api: &crate::ApiError) -> bool {
+    api.body
+        .as_ref()
+        .and_then(|body| body.details.as_ref())
+        .and_then(|details| details.get("code"))
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|code| code.starts_with("TENANT_") || code == "LICENCE_INACTIVE")
 }
 
 impl ClientBuilder {
@@ -299,6 +337,20 @@ mod tests {
         assert!(!tenant(true, "suspended_soon").readable());
         assert!(!tenant(true, "").readable());
         assert!(!tenant(true, "IN_FORCE").readable());
+    }
+
+    #[test]
+    fn inactive_and_unknown_tenants_are_told_apart() {
+        use Readability::{Inactive, Readable, Unknown};
+        assert_eq!(tenant(true, "in_force").readability(), Readable);
+        assert_eq!(tenant(true, "grace").readability(), Readable);
+        assert_eq!(tenant(true, "inactive").readability(), Inactive);
+        assert_eq!(tenant(false, "in_force").readability(), Inactive);
+        // Deactivated wins over a status nobody knows.
+        assert_eq!(tenant(false, "suspended_soon").readability(), Inactive);
+        assert_eq!(tenant(true, "suspended_soon").readability(), Unknown);
+        assert_eq!(tenant(true, "").readability(), Unknown);
+        assert_eq!(tenant(true, "IN_FORCE").readability(), Unknown);
     }
 
     #[test]

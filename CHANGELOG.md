@@ -33,7 +33,8 @@ commands, `--json` output and exit codes. Each release's notes start with its se
   `tenant_slug` and `tenant_name` to each row in `--json` and `--csv` (a `TENANT` column in the
   table). An unknown client fails with exit code 5, before any data is read. Without these options
   nothing changes. `--all-tenants` skips clients that are inactive, whose licence is not in force, or
-  whose licence status the CLI does not know, asks one client at a time, and stops with exit code 6
+  whose licence status the CLI does not know (the latter are named on standard error and make the
+  command exit non-zero), asks one client at a time, and stops with exit code 6
   (naming the limit) when a rate limit is exhausted. Against an API without portfolio access the
   commands fail with exit code 7. The README has a new "Several tenants (MSSP)" section.
   ([#54](https://github.com/Hodeitek/hodeishield-cli/issues/54),
