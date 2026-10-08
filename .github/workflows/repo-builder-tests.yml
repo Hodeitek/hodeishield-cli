@@ -56,4 +56,6 @@ jobs:
       - name: Run the tests
         run: |
           set -euo pipefail
+          # MinIO is licensed under the GNU AGPL v3; it is built and run here only as a throwaway test
+          # service inside CI and is never shipped or distributed with the CLI or its packages.
           NFPM="$RUNNER_TEMP/nfpm" sh packaging/repo/repo-test.sh
