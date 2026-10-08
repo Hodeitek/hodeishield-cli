@@ -3,9 +3,11 @@
 
 //! Command-line surface.
 
+use crate::filters;
 use clap::builder::{PossibleValuesParser, TypedValueParser};
 use clap::{Args, CommandFactory, Parser, Subcommand};
 use hodeishield_api::ParseEnumError;
+use hodeishield_api::v1::operations;
 use hodeishield_api::v1::{
     AlertSort, AlertStatus, BusinessCriticality, ComplianceControlSort, EndpointSort,
     EndpointStatus, EvidenceSort, Order, RiskSort, VendorSort,
@@ -228,7 +230,7 @@ pub struct AlertsList {
     #[arg(long, value_parser = choice::<AlertStatus>(AlertStatus::VALUES))]
     pub status: Option<AlertStatus>,
     /// Exact severity.
-    #[arg(long)]
+    #[arg(long, help = filters::help("Exact severity.", &operations::LIST_ALERTS, "severity"))]
     pub severity: Option<String>,
     /// Only alerts about this vendor id.
     #[arg(long)]
@@ -257,10 +259,10 @@ pub enum RisksCommand {
 #[derive(Debug, Args)]
 pub struct RisksList {
     /// Exact status.
-    #[arg(long)]
+    #[arg(long, help = filters::help("Exact status.", &operations::LIST_RISKS, "status"))]
     pub status: Option<String>,
     /// Exact risk domain.
-    #[arg(long)]
+    #[arg(long, help = filters::help("Exact risk domain.", &operations::LIST_RISKS, "domain"))]
     pub domain: Option<String>,
     /// Only risks linked to this vendor id.
     #[arg(long)]
@@ -292,7 +294,10 @@ pub struct ControlsList {
     #[arg(long, short)]
     pub framework: String,
     /// Exact control status.
-    #[arg(long)]
+    #[arg(
+        long,
+        help = filters::help("Exact control status.", &operations::LIST_COMPLIANCE_CONTROLS, "status")
+    )]
     pub status: Option<String>,
     /// Field to order by.
     #[arg(long, value_parser = choice::<ComplianceControlSort>(ComplianceControlSort::VALUES))]
