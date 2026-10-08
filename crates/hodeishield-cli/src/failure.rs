@@ -157,6 +157,12 @@ pub fn from_api(error: hodeishield_api::Error, context: &ApiContext<'_>) -> Fail
                         .iter()
                         .map(|s| context.fill_scope(s))
                         .collect();
+                    let hint = if context.is_portfolio_key {
+                        "Ask an organisation administrator of your MSSP organisation for a key or \
+                         access with that scope."
+                    } else {
+                        "Ask a tenant administrator for a key or access with that scope."
+                    };
                     Failure::new(
                         Kind::Forbidden,
                         format!(
@@ -164,7 +170,7 @@ pub fn from_api(error: hodeishield_api::Error, context: &ApiContext<'_>) -> Fail
                             scopes.join(", ")
                         ),
                     )
-                    .hint("Ask a tenant administrator for a key or access with that scope.")
+                    .hint(hint)
                 }
                 404 => {
                     let failure = Failure::new(
@@ -316,6 +322,8 @@ pub struct ApiContext<'a> {
     pub framework: Option<&'a str>,
     /// Whether the call reads a selected client tenant (`--tenant` or `--all-tenants`).
     pub tenant_selected: bool,
+    /// Whether the credential is a portfolio key (starts with `hsp_`).
+    pub is_portfolio_key: bool,
 }
 
 impl ApiContext<'_> {

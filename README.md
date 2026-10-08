@@ -364,7 +364,9 @@ a profile, a key or a sign-in per client, and you should not set them up that wa
 A portfolio key reads only, always expires (90 days by default, 365 at most), and works on the
 HodeiShield API only. It can be limited when it is created to some of your clients and to source IP
 ranges; a request from another address is refused like an unknown key (exit code 3). Signing in
-with `hodeishield login` does not cover a whole portfolio: use the key.
+with `hodeishield login` does not cover a whole portfolio: use the key. Rotate your portfolio keys
+before they expire, so scripts do not stop working; a new key and its predecessor both work for up
+to 7 days while the old one is in force.
 
 **1. Use the credential as any other key.**
 

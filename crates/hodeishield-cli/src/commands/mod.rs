@@ -13,6 +13,7 @@ use crate::cli::{Cli, Command};
 use crate::config::{Overrides, Settings};
 use crate::failure::{ApiContext, CredentialSource, Result, from_api};
 use hodeishield_api::Client;
+use std::cell::Cell;
 use std::io::Write;
 use std::sync::Arc;
 use tenants::Selection;
@@ -23,6 +24,8 @@ pub struct Context {
     pub verbose: bool,
     pub selection: Selection,
     pub store: Arc<dyn TokenStore + Send + Sync>,
+    /// Cached information about whether the credential is a portfolio key, set on first API call.
+    is_portfolio_key: Cell<Option<bool>>,
 }
 
 impl Context {
@@ -38,6 +41,9 @@ impl Context {
         tenant: Option<&str>,
     ) -> Result<(Client, CredentialSource)> {
         let (credential, source) = auth::credential_for_api(settings, self.store.as_ref())?;
+        let is_portfolio =
+            source == CredentialSource::ApiKey && auth::is_portfolio_key(&credential);
+        self.is_portfolio_key.set(Some(is_portfolio));
         let mut builder =
             Client::builder(settings.api_url.clone(), credential).user_agent(crate::USER_AGENT);
         if source == CredentialSource::OAuth {
@@ -52,6 +58,7 @@ impl Context {
                         source,
                         framework: None,
                         tenant_selected: true,
+                        is_portfolio_key: is_portfolio,
                     },
                 )
             })?;
@@ -86,6 +93,7 @@ impl Context {
                     source,
                     framework: None,
                     tenant_selected: tenant.is_some(),
+                    is_portfolio_key: is_portfolio,
                 },
             )
         })?;
@@ -98,6 +106,7 @@ impl Context {
             source,
             framework,
             tenant_selected: !matches!(self.selection, Selection::Own),
+            is_portfolio_key: self.is_portfolio_key.get().unwrap_or(false),
         }
     }
 }
@@ -116,6 +125,7 @@ pub fn run(cli: Cli, out: &mut dyn Write) -> Result<()> {
             (None, false) => Selection::Own,
         },
         store: Arc::new(auth::store::Keychain),
+        is_portfolio_key: Cell::new(None),
     };
     match cli.command {
         Command::Vendors(command) => resources::vendors(&ctx, command, out),

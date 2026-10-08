@@ -735,6 +735,7 @@ mod tests {
             source: CredentialSource::ApiKey,
             framework: None,
             tenant_selected: false,
+            is_portfolio_key: false,
         };
         let total_pages = (total + per_page - 1) / per_page;
         collect_pages(

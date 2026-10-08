@@ -60,7 +60,8 @@ impl Context {
             selected => selected,
         };
         let (lister, source) = self.api(settings, None)?;
-        let portfolio = list_portfolio(&lister, source)?;
+        let is_portfolio = self.is_portfolio_key.get().unwrap_or(false);
+        let portfolio = list_portfolio(&lister, source, is_portfolio)?;
         let tenants = match selected {
             Selection::Tenant(wanted) => {
                 let tenant = find(&portfolio, wanted)?;
@@ -120,11 +121,16 @@ impl Context {
 }
 
 /// Every client tenant of the portfolio.
-fn list_portfolio(lister: &Client, source: CredentialSource) -> Result<Vec<Tenant>> {
+fn list_portfolio(
+    lister: &Client,
+    source: CredentialSource,
+    is_portfolio_key: bool,
+) -> Result<Vec<Tenant>> {
     let api = ApiContext {
         source,
         framework: None,
         tenant_selected: false,
+        is_portfolio_key,
     };
     let mut totals: Vec<i64> = Vec::new();
     let (_, mut tenants) = collect_pages(
@@ -198,6 +204,7 @@ pub fn run(ctx: &Context, command: TenantsCommand, out: &mut dyn Write) -> Resul
     let TenantsCommand::List(args) = command;
     let settings = ctx.settings()?;
     let (client, source) = ctx.api(&settings, None)?;
+    let is_portfolio = ctx.is_portfolio_key.get().unwrap_or(false);
     list_one(
         ctx,
         out,
@@ -207,6 +214,7 @@ pub fn run(ctx: &Context, command: TenantsCommand, out: &mut dyn Write) -> Resul
             source,
             framework: None,
             tenant_selected: false,
+            is_portfolio_key: is_portfolio,
         },
         &mut |page, per_page| client.list_tenants(&ListTenantsParams::alphabetical(page, per_page)),
         |r| (r.data, r.pagination),

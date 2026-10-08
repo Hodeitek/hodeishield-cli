@@ -1460,6 +1460,48 @@ fn a_missing_data_scope_stops_the_walk_instead_of_failing_once_per_tenant() {
 }
 
 #[test]
+fn a_missing_scope_with_a_portfolio_key_hints_organisation_administrator() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    mock_portfolio(&mut server, &two_clients());
+    server
+        .mock("GET", "/v1/vendors")
+        .match_query(mockito::Matcher::Any)
+        .with_status(403)
+        .with_body(r#"{"error":{"code":"forbidden","message":"x","request_id":"r","details":{"code":"INSUFFICIENT_SCOPE","missing":["supply_risk:read"]}}}"#)
+        .create();
+    let output = portfolio_cmd(&env, &server)
+        .args(["--tenant", "acme", "vendors", "list"])
+        .output()
+        .expect("run");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(4), "{output:?}");
+    assert!(stderr.contains("organisation administrator"), "{stderr}");
+    assert!(!stderr.contains("tenant administrator"), "{stderr}");
+}
+
+#[test]
+fn a_missing_scope_with_a_regular_key_hints_tenant_administrator() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    server
+        .mock("GET", "/v1/vendors")
+        .match_query(mockito::Matcher::Any)
+        .with_status(403)
+        .with_body(r#"{"error":{"code":"forbidden","message":"x","request_id":"r","details":{"code":"INSUFFICIENT_SCOPE","missing":["supply_risk:read"]}}}"#)
+        .create();
+    let output = env
+        .api(&server)
+        .args(["vendors", "list"])
+        .output()
+        .expect("run");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(4), "{output:?}");
+    assert!(stderr.contains("tenant administrator"), "{stderr}");
+    assert!(!stderr.contains("organisation administrator"), "{stderr}");
+}
+
+#[test]
 fn a_deactivated_client_is_a_licence_refusal_not_a_missing_resource() {
     let env = Env::new();
     let mut server = mockito::Server::new();
