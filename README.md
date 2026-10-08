@@ -377,6 +377,10 @@ to them (Apache-2.0 §6).
 
 ## About
 
+HodeiShield is in beta. To request access, visit
+[https://hodeishield.com/en/beta](https://hodeishield.com/en/beta) and review the
+[beta terms of service](https://hodeishield.com/en/beta/terms).
+
 - [HodeiShield](https://hodeishield.com): the third-party risk, supply-chain security and
   compliance platform that this CLI reads from; sign in at
   [app.hodeishield.com](https://app.hodeishield.com) and create API keys there.
