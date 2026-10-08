@@ -301,14 +301,21 @@ fn revoke_tokens(
     let refresh = refresh_token
         .map(|refresh| oauth::revoke(http, metadata, client_id, refresh, "refresh_token"));
     let access = oauth::revoke(http, metadata, client_id, access_token, "access_token");
-    let mut problems = Vec::new();
-    if let Err(failure) = access {
-        problems.push(failure.message);
-    }
+    // In request order (refresh token, then access token); the same text twice is said once, which
+    // is what a missing revocation endpoint produces.
+    let mut problems: Vec<String> = Vec::new();
+    let mut report = |problem: String| {
+        if !problems.contains(&problem) {
+            problems.push(problem);
+        }
+    };
     match refresh {
-        Some(Ok(Revocation::Unknown(detail))) => problems.push(detail),
-        Some(Err(failure)) => problems.push(failure.message),
+        Some(Ok(Revocation::Unknown(detail))) => report(detail),
+        Some(Err(failure)) => report(failure.message),
         Some(Ok(Revocation::Revoked)) | None => {}
+    }
+    if let Err(failure) = access {
+        report(failure.message);
     }
     if problems.is_empty() {
         Ok(())
@@ -549,6 +556,30 @@ mod tests {
         assert!(revoke_at_issuer(&signed_in(&issuer, None)).is_err());
     }
 
+    #[test]
+    fn a_missing_revocation_endpoint_is_reported_once_in_request_order() {
+        let mut issuer = mockito::Server::new();
+        issuer
+            .mock("GET", "/.well-known/oauth-authorization-server")
+            .with_body(
+                json!({
+                    "issuer": issuer.url(),
+                    "token_endpoint": format!("{}/token", issuer.url()),
+                })
+                .to_string(),
+            )
+            .create();
+        let err = revoke_at_issuer(&signed_in(&issuer, Some("rt"))).expect_err("no endpoint");
+        assert_eq!(err.message, "The app does not offer token revocation.");
+
+        // Different problems keep the order of the requests: refresh token first.
+        let issuer = revocation_server(500, 500);
+        let err = revoke_at_issuer(&signed_in(&issuer, Some("rt"))).expect_err("refused");
+        let refresh = err.message.find("refresh token").expect("refresh");
+        let access = err.message.find("access token").expect("access");
+        assert!(refresh < access, "{}", err.message);
+    }
+
     /// A store for the sign-in tests: it can be unreachable from the start, or fail on save.
     struct BrokenStore {
         available: bool,
@@ -609,6 +640,7 @@ mod tests {
     fn device_app(
         api: &mut mockito::ServerGuard,
         app: &mut mockito::ServerGuard,
+        revoke_status: usize,
     ) -> (
         std::sync::Arc<std::sync::Mutex<Vec<String>>>,
         Vec<mockito::Mock>,
@@ -672,6 +704,7 @@ mod tests {
                     ));
                     Vec::new()
                 })
+                .with_status(revoke_status)
                 .expect(2)
                 .create(),
         ];
@@ -713,7 +746,7 @@ mod tests {
     fn tokens_that_cannot_be_stored_are_revoked_refresh_token_first() {
         let mut api = mockito::Server::new();
         let mut app = mockito::Server::new();
-        let (revoked, mocks) = device_app(&mut api, &mut app);
+        let (revoked, mocks) = device_app(&mut api, &mut app, 200);
         let settings = settings_for(&api, &app);
         let err = login_with(&settings, &BrokenStore { available: true }, &DEVICE)
             .expect_err("save fails");
@@ -734,6 +767,34 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_revocation_is_said_without_showing_any_token() {
+        let mut api = mockito::Server::new();
+        let mut app = mockito::Server::new();
+        let (revoked, mocks) = device_app(&mut api, &mut app, 500);
+        let settings = settings_for(&api, &app);
+        let err = login_with(&settings, &BrokenStore { available: true }, &DEVICE)
+            .expect_err("save fails");
+        assert_eq!(err.message, "system keychain: cannot write");
+        assert_eq!(revoked.lock().expect("lock").len(), 2);
+        for mock in &mocks {
+            mock.assert();
+        }
+        // The notice login prints is built from the same revocation result.
+        let token = StoredToken {
+            access_token: SecretString::from("at-new"),
+            refresh_token: Some(SecretString::from("rt-new")),
+            ..signed_in(&app, None)
+        };
+        let revocation = revoke_at_issuer(&token).expect_err("the app answered 500");
+        let notice = unstored_notice(&Err(revocation));
+        assert!(notice.contains("did not confirm"), "{notice}");
+        let all = format!("{err:?} {} {notice}", err.message);
+        for secret in ["at-new", "rt-new"] {
+            assert!(!all.contains(secret), "{all}");
+        }
+    }
+
+    #[test]
     fn the_notice_for_unrevoked_tokens_points_to_the_app() {
         let notice = unstored_notice(&Err(Failure::general("the app refused to revoke")));
         assert!(
@@ -746,7 +807,7 @@ mod tests {
     fn a_store_that_works_keeps_the_session_and_revokes_nothing() {
         let mut api = mockito::Server::new();
         let mut app = mockito::Server::new();
-        let (revoked, mocks) = device_app(&mut api, &mut app);
+        let (revoked, mocks) = device_app(&mut api, &mut app, 200);
         let settings = settings_for(&api, &app);
         let store = MemoryStore::default();
         login_with(&settings, &store, &DEVICE).expect("signed in");
@@ -851,5 +912,6 @@ mod tests {
                 .as_deref()
                 .is_some_and(|h| h.contains("HODEISHIELD_API_KEY"))
         );
+        assert_eq!(err.kind, crate::failure::Kind::General);
     }
 }

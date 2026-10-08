@@ -108,11 +108,23 @@ fn ensure_store() -> Result<()> {
 }
 
 fn unavailable(reason: &str) -> Failure {
-    Failure::general(format!("{KEYCHAIN_UNAVAILABLE}: {reason}")).hint(
-        "Sign-in tokens are only kept in the system keychain. On Linux, start a Secret \
-         Service (GNOME Keyring or KWallet); on a server without one, use a tenant API key \
-         in HODEISHIELD_API_KEY instead.",
-    )
+    Failure::general(format!("{KEYCHAIN_UNAVAILABLE}: {reason}")).hint(unavailable_hint())
+}
+
+/// What to do about a missing keychain, for the platform this build runs on.
+fn unavailable_hint() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "Sign-in tokens are only kept in the system keychain. Allow access when the Keychain \
+         prompt appears (or in Keychain Access), or use a tenant API key in HODEISHIELD_API_KEY \
+         instead."
+    } else if cfg!(windows) {
+        "Sign-in tokens are only kept in the system keychain. Check that Windows Credential \
+         Manager is available, or use a tenant API key in HODEISHIELD_API_KEY instead."
+    } else {
+        "Sign-in tokens are only kept in the system keychain. Start a Secret Service \
+         (GNOME Keyring or KWallet); on a server without one, use a tenant API key in \
+         HODEISHIELD_API_KEY instead."
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -185,6 +197,11 @@ impl TokenStore for Keychain {
 
     /// Reads the profile's entry, which proves the backend answers without writing a secret: an
     /// entry that does not exist, or that cannot be decoded, still means the keychain works.
+    ///
+    /// Reading the stored entry and discarding it is deliberate: keyring-core 1.0 has no cheaper
+    /// probe that works everywhere. `get_attributes` is not implemented on macOS, and treating
+    /// `NotSupportedByStore` as unavailable would lock macOS users out. The value is dropped
+    /// at once; `zeroize` is not a direct dependency and is not added for this.
     fn check_available(&self, profile: &str) -> Result<()> {
         match entry(profile)?.get_password() {
             Err(

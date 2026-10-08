@@ -12,7 +12,8 @@ commands, `--json` output and exit codes. Each release's notes start with its se
   browser or shows a device code, and stops there with the usual pointer to API keys. If saving the
   session still fails after the app has issued tokens, the CLI revokes the refresh token and then
   the access token, says so on standard error and exits non-zero, instead of leaving an active
-  grant that nothing holds. ([#101](https://github.com/Hodeitek/hodeishield-cli/issues/101))
+  grant that nothing holds. The hint for a missing keychain now names the one for your system
+  (Secret Service, the Keychain prompt, or Credential Manager). ([#101](https://github.com/Hodeitek/hodeishield-cli/issues/101))
 
 ### Added
 
