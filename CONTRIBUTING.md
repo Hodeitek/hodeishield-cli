@@ -203,6 +203,11 @@ An issue is closed as soon as the fix reaches `main`, never left open once fixed
   with the reason. A security issue is closed only with evidence that it is fixed or not exploitable.
 - After a merge into `dev`, the issues the pull request mentions get the same review.
 
+## Design decisions
+
+Significant design choices are written up in [docs/decisions](docs/decisions), one numbered
+file each, with a status (Proposed, Accepted, Rejected or Superseded).
+
 ## Security issues
 
 Do not open a public issue: see [SECURITY.md](SECURITY.md).
