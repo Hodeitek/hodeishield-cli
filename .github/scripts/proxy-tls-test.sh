@@ -5,7 +5,7 @@
 # Proves the README's "Networking: proxies and TLS inspection" claims on Linux, end to end, with a
 # real TLS-inspecting proxy (mitmproxy) and a fake API, all on this machine:
 #
-#   1. HTTPS_PROXY set, proxy CA not trusted       -> exit 7, "Could not reach the API:", certificate
+#   1. HTTPS_PROXY set, proxy CA not trusted       -> exit 7, "error: Could not reach the API:", certificate
 #   2. proxy CA in the system store                -> works, and the proxy saw the request
 #   3. proxy CA only in SSL_CERT_FILE              -> works
 #   4. NO_PROXY covers the host                    -> the proxy is not used
@@ -91,9 +91,9 @@ wait_port "$PROXY_PORT"
 # --- Helpers ----------------------------------------------------------------------------------
 RESULTS=()
 FAILED=0
-record() { # case, description, ok|FAIL, detail
+record() { # case, description, PASS|FAIL, detail
   RESULTS+=("$1|$2|$3|$4")
-  if [ "$3" != ok ]; then FAILED=1; fi
+  if [ "$3" != PASS ]; then FAILED=1; fi
 }
 
 # Runs the CLI with a clean proxy/certificate environment plus the given NAME=value pairs.
@@ -138,10 +138,10 @@ PROXY=http://127.0.0.1:$PROXY_PORT
 p0=$(proxy_seen) a0=$(api_seen)
 cli HTTPS_PROXY="$PROXY" -- vendors list --json
 sleep 1
-if [ "$rc" -eq 7 ] && [[ "$(cat "$WORK/err")" == "Could not reach the API:"* ]] \
+if [ "$rc" -eq 7 ] && [[ "$(cat "$WORK/err")" == "error: Could not reach the API:"* ]] \
   && grep -qiE 'certificate|UnknownIssuer' "$WORK/err" \
   && [ "$(proxy_seen)" -eq "$p0" ] && [ "$(api_seen)" -eq "$a0" ]; then
-  record 1 "HTTPS_PROXY, proxy CA not trusted: exit 7, certificate error, nothing delivered" ok "exit $rc"
+  record 1 "HTTPS_PROXY, proxy CA not trusted: exit 7, certificate error, nothing delivered" PASS "exit $rc"
 else
   record 1 "HTTPS_PROXY, proxy CA not trusted: exit 7, certificate error, nothing delivered" FAIL "exit $rc"
   show_failure 1
@@ -151,7 +151,7 @@ fi
 p0=$(proxy_seen)
 cli HTTPS_PROXY="$PROXY" SSL_CERT_FILE="$WORK/proxy-ca.crt" -- vendors list --json
 if works && wait_proxy_above "$p0"; then
-  record 3 "proxy CA only in SSL_CERT_FILE: works through the proxy" ok "exit $rc"
+  record 3 "proxy CA only in SSL_CERT_FILE: works through the proxy" PASS "exit $rc"
 else
   record 3 "proxy CA only in SSL_CERT_FILE: works through the proxy" FAIL "exit $rc"
   show_failure 3
@@ -162,7 +162,7 @@ p0=$(proxy_seen) a0=$(api_seen)
 cli HTTPS_PROXY="$PROXY" NO_PROXY="$HOST" SSL_CERT_FILE="$WORK/upstream-ca.crt" -- vendors list --json
 sleep 1
 if works && [ "$(api_seen)" -gt "$a0" ] && [ "$(proxy_seen)" -eq "$p0" ]; then
-  record 4 "NO_PROXY covers the host: direct to the API, proxy bypassed" ok "exit $rc"
+  record 4 "NO_PROXY covers the host: direct to the API, proxy bypassed" PASS "exit $rc"
 else
   record 4 "NO_PROXY covers the host: direct to the API, proxy bypassed" FAIL "exit $rc"
   show_failure 4
@@ -174,7 +174,7 @@ sudo update-ca-certificates > /dev/null
 p0=$(proxy_seen)
 cli HTTPS_PROXY="$PROXY" -- vendors list --json
 if works && wait_proxy_above "$p0"; then
-  record 2 "proxy CA in the system store: works, the proxy saw the request" ok "exit $rc"
+  record 2 "proxy CA in the system store: works, the proxy saw the request" PASS "exit $rc"
 else
   record 2 "proxy CA in the system store: works, the proxy saw the request" FAIL "exit $rc"
   show_failure 2
@@ -184,7 +184,7 @@ fi
 p0=$(proxy_seen)
 cli https_proxy="$PROXY" -- vendors list --json
 if works && wait_proxy_above "$p0"; then
-  record 5 "lower-case https_proxy works like upper-case" ok "exit $rc"
+  record 5 "lower-case https_proxy works like upper-case" PASS "exit $rc"
 else
   record 5 "lower-case https_proxy works like upper-case" FAIL "exit $rc"
   show_failure 5
@@ -194,7 +194,7 @@ fi
 cli HTTPS_PROXY="$PROXY" -- --verbose vendors list --json
 if works && grep -qE "^GET https://api\.test:8443/v1/vendors.* → 200 " "$WORK/err" \
   && ! grep -q "GET " "$WORK/out"; then
-  record 6 "--verbose: request line on stderr, stdout stays clean JSON" ok "exit $rc"
+  record 6 "--verbose: request line on stderr, stdout stays clean JSON" PASS "exit $rc"
 else
   record 6 "--verbose: request line on stderr, stdout stays clean JSON" FAIL "exit $rc"
   show_failure 6
@@ -203,10 +203,9 @@ fi
 # --- Report ------------------------------------------------------------------------------------
 echo
 printf '%-5s %-78s %s\n' CASE DESCRIPTION RESULT
-for row in "${RESULTS[@]}"; do
-  IFS='|' read -r n desc result _detail <<< "$row"
+while IFS='|' read -r n desc result _detail; do
   printf '%-5s %-78s %s\n' "$n" "$desc" "$result"
-done
+done < <(printf '%s\n' "${RESULTS[@]}" | sort)
 if [ "$FAILED" -ne 0 ]; then
   echo
   echo "--- proxy log"; tail -n 40 "$WORK/proxy.log"
