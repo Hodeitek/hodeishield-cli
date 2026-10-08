@@ -136,7 +136,11 @@ after everything they list; packages and by-hash indexes are immutable, so a cli
 index can still finish its update). Only `hodeishield` packages vouched for by the previously signed
 index (an RPM, by the repository key's signature) or by the release's verified `SHA256SUMS` are
 published, and anything else found in the bucket stops the job, so write access to the bucket alone
-cannot get a package signed. The bucket user needs list, read and write permissions
+cannot get a package signed. The `Repository builder tests` workflow checks this on every change to
+`packaging/repo` and weekly (`packaging/repo/repo-test.sh`): with throwaway keys and a throwaway bucket it
+publishes releases, installs and upgrades from the result with apt and dnf, and plants forged packages
+and indexes that the builder and the clients must refuse. Those cases run in CI only and are not meant
+to be run ad hoc. The bucket user needs list, read and write permissions
 only: nothing is ever deleted or overwritten. It runs after the same approval and is skipped while
 the `packaging` environment has no `PACKAGES_S3_ENDPOINT`. It needs the variables
 `PACKAGES_S3_ENDPOINT`, `PACKAGES_S3_REGION` and `PACKAGES_S3_BUCKET`, the secrets
