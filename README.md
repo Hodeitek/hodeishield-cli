@@ -353,6 +353,48 @@ plain HTTP is accepted only for `localhost`.
 
 Shell completions: `hodeishield completions bash|zsh|fish|powershell|elvish`.
 
+## Networking: proxies and TLS inspection
+
+The CLI reaches `api.hodeishield.com` and `app.hodeishield.com` over HTTPS (port 443). Behind a
+corporate proxy, nothing needs configuring in the CLI itself; it follows the proxy settings of the
+machine.
+
+- **Proxy variables.** `HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY` and `NO_PROXY` are honoured, and so
+  are their lower-case forms. Since all traffic is HTTPS, `HTTPS_PROXY` (or `ALL_PROXY`) is the one
+  that matters; use `NO_PROXY` for hosts that must be reached directly.
+
+  ```sh
+  export HTTPS_PROXY=http://proxy.example.com:3128
+  export NO_PROXY=localhost,127.0.0.1
+  hodeishield vendors list
+  ```
+
+- **Operating system settings.** On macOS and Windows the system proxy settings are read as well,
+  next to the variables. On Linux only the variables are read.
+- **Certificates.** The CLI trusts the operating system's certificate store, not a bundled list. If
+  your organisation inspects TLS and its CA is installed in that store (the usual case on managed
+  Windows and macOS machines, or after `update-ca-certificates` / `update-ca-trust` on Linux), the
+  CLI trusts the proxy's certificates with no further setup. On Linux you can also point
+  `SSL_CERT_FILE` (a PEM file) or `SSL_CERT_DIR` at your CA certificates.
+- **What cannot be configured.** There is no CLI option to add a CA or to skip certificate
+  verification, and `SSL_CERT_FILE` / `SSL_CERT_DIR` have no effect on macOS and Windows: add the CA
+  to the system store there.
+- **Sign-in on this machine.** `hodeishield login` waits for the browser on `127.0.0.1`; that
+  redirect is made by your browser to the CLI, not by the CLI, so the CLI's proxy settings do not
+  apply to it (the CLI also never uses a proxy when its API or app URL is a loopback address). Your
+  browser's own proxy settings apply to the sign-in page. Where the browser cannot reach the
+  machine, use `hodeishield login --device`.
+
+To diagnose, add `--verbose`: each API request is logged to standard error with its URL, status,
+time and request id, followed by each retry and its reason. A failure to connect, including a proxy
+that refuses the connection or a certificate that is not trusted, ends with exit code 7 and a
+message that starts with `Could not reach the API:` (or `Could not reach the app` during sign-in)
+followed by the cause. A certificate error there usually means the proxy's CA is missing from the
+store described above.
+
+This behaviour comes from the CLI's HTTP library; it has not yet been verified behind a
+TLS-inspecting proxy on every platform.
+
 ## Repository layout
 
 - `crates/hodeishield-cli` — the `hodeishield` binary.
