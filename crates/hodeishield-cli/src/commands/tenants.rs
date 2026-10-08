@@ -226,7 +226,7 @@ fn tenant_rows(items: &[Tenant]) -> Rows {
         &[
             "SLUG",
             "NAME",
-            "ORGANIZATION",
+            "ORGANISATION",
             "TYPE",
             "STATUS",
             "LICENCE",

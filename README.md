@@ -355,8 +355,10 @@ what it accepts.
 
 ### Several tenants (MSSP)
 
-An MSSP reads all of its client tenants with **one** credential: a portfolio key, created in the
-app by an administrator of an active MSSP organisation, in the MSSP area (API keys). You do not need
+An MSSP reads all of its client tenants with **one** credential: a **portfolio key**, created in the
+app by an organisation administrator of an active MSSP organisation, in the MSSP area (API keys).
+Nobody else can create one: not a tenant administrator, and not a platform operator acting outside
+an MSSP organisation. You do not need
 a profile, a key or a sign-in per client, and you should not set them up that way.
 
 A portfolio key reads only, always expires (90 days by default, 365 at most), and works on the
@@ -378,8 +380,8 @@ key. The same variable takes a tenant API key as before.
 
 ```console
 $ hodeishield tenants list
-SLUG    NAME        ORGANIZATION  TYPE    STATUS  LICENCE   ID
-acme    Acme S.L.   -             client  active  in_force  11111111-1111-4111-8111-111111111111
+SLUG    NAME        ORGANISATION  TYPE    STATUS  LICENCE   ID
+acme    Acme S.L.   Acme Group    client  active  in_force  11111111-1111-4111-8111-111111111111
 beta    Beta Corp   Beta Group    client  active  grace     22222222-2222-4222-8222-222222222222
 ```
 
