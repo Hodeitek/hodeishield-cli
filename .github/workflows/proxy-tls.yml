@@ -41,6 +41,10 @@ jobs:
       contents: read
     env:
       # Official Linux release of mitmproxy, pinned by version and checksum. Bumped by hand.
+      # The download site publishes no checksum file, so the SHA-256 is the one of the
+      # release archive as downloaded when it was pinned (trust on first use). mitmproxy
+      # is only a test tool here and is never shipped. When bumping, record the new
+      # archive's SHA-256 the same way.
       MITMPROXY_VERSION: "12.2.3"
       MITMPROXY_SHA256: 2e95286b618fa6fd33e5e62a78c2e5112571d85f42ec2bac29b97ee242bdb5c5
     steps:
