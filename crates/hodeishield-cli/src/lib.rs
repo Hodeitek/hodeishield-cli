@@ -12,6 +12,7 @@ pub mod cli;
 mod commands;
 mod config;
 mod failure;
+mod filters;
 mod output;
 
 use std::io::{ErrorKind, Write};

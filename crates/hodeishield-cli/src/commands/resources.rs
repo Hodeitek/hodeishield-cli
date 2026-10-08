@@ -9,6 +9,7 @@ use crate::cli::{
     VendorsCommand,
 };
 use crate::failure::{ApiContext, CredentialSource, Result, from_api};
+use crate::filters::warn_unknown;
 use crate::output::{
     cell, clean, print_csv, print_detail, print_json, print_table, short_time, table,
 };
@@ -16,7 +17,7 @@ use comfy_table::Table;
 use hodeishield_api::v1::{
     Alert, ComplianceControl, Endpoint, Evidence, ListAlertsParams, ListComplianceControlsParams,
     ListEndpointsParams, ListEvidenceParams, ListRisksParams, ListVendorsParams, Pagination, Risk,
-    Vendor,
+    Vendor, operations,
 };
 use hodeishield_api::{ApiResponse, Error};
 use serde::Serialize;
@@ -225,6 +226,10 @@ pub fn alerts(ctx: &Context, command: AlertsCommand, out: &mut dyn Write) -> Res
     let (client, source) = ctx.api(&settings)?;
     match command {
         AlertsCommand::List(args) => {
+            warn_unknown(
+                &operations::LIST_ALERTS,
+                &[("severity", args.severity.as_deref())],
+            );
             let base = ListAlertsParams {
                 status: args.status,
                 severity: args.severity,
@@ -281,6 +286,13 @@ pub fn risks(ctx: &Context, command: RisksCommand, out: &mut dyn Write) -> Resul
     let (client, source) = ctx.api(&settings)?;
     match command {
         RisksCommand::List(args) => {
+            warn_unknown(
+                &operations::LIST_RISKS,
+                &[
+                    ("status", args.status.as_deref()),
+                    ("domain", args.domain.as_deref()),
+                ],
+            );
             let base = ListRisksParams {
                 status: args.status,
                 domain: args.domain,
@@ -338,6 +350,10 @@ pub fn compliance(ctx: &Context, command: ComplianceCommand, out: &mut dyn Write
     let (client, source) = ctx.api(&settings)?;
     match command {
         ComplianceCommand::Controls(args) => {
+            warn_unknown(
+                &operations::LIST_COMPLIANCE_CONTROLS,
+                &[("status", args.status.as_deref())],
+            );
             let api = ApiContext {
                 source,
                 framework: Some(&args.framework),

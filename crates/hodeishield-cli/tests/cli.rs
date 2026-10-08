@@ -709,3 +709,63 @@ fn compliance_controls_csv() {
     assert!(stdout.contains("failing"), "{stdout}");
     assert_no_key(&output);
 }
+
+/// The vendored document lists no values for these filters yet, so they are sent exactly as typed,
+/// without a warning, and the command succeeds. (The warning itself is covered by the unit tests
+/// of `filters`, with operations that carry lists.)
+#[test]
+fn free_form_filters_are_sent_as_typed_without_a_warning() {
+    for (args, path, param, value) in [
+        (
+            &["alerts", "list", "--severity", "High"][..],
+            "/v1/alerts",
+            "severity",
+            "High",
+        ),
+        (
+            &["vendors", "list", "--category", "Cloud Host"],
+            "/v1/vendors",
+            "category",
+            "Cloud Host",
+        ),
+        (
+            &["risks", "list", "--domain", "Cyber"],
+            "/v1/risks",
+            "domain",
+            "Cyber",
+        ),
+        (
+            &["risks", "list", "--status", "OPEN"],
+            "/v1/risks",
+            "status",
+            "OPEN",
+        ),
+        (
+            &[
+                "compliance",
+                "controls",
+                "--framework",
+                "nis2",
+                "--status",
+                "Covered",
+            ],
+            "/v1/compliance/controls",
+            "status",
+            "Covered",
+        ),
+    ] {
+        let env = Env::new();
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock("GET", path)
+            .match_query(mockito::Matcher::UrlEncoded(param.into(), value.into()))
+            .with_body(page(&[], 1, 0, 1))
+            .expect(1)
+            .create();
+        let output = env.api(&server).args(args).output().expect("run");
+        assert!(output.status.success(), "{args:?}: {output:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!stderr.contains("warning:"), "{args:?}: {stderr}");
+        mock.assert();
+    }
+}
