@@ -404,6 +404,7 @@ hodeishield config show                      # the settings in effect
 hodeishield config path                      # where the file is
 hodeishield --profile staging config set api_url https://api.example.test
 hodeishield config use staging               # make it the default profile
+hodeishield config set update_check false    # no new-version notice (global, not per profile)
 hodeishield --profile default vendors list   # or pick one per command
 ```
 
@@ -414,9 +415,40 @@ hodeishield --profile default vendors list   # or pick one per command
 | `HODEISHIELD_API_URL` | API base URL |
 | `HODEISHIELD_APP_URL` | App base URL (sign-in) |
 | `HODEISHIELD_CONFIG` | Path of the configuration file |
+| `HODEISHIELD_NO_UPDATE_CHECK` | Any non-empty value turns off the [new-version notice](#new-version-notice) |
 
 The configuration file holds URLs and sign-in settings only, never a credential. URLs must use HTTPS;
 plain HTTP is accepted only for `localhost`.
+
+## New-version notice
+
+On an interactive terminal the CLI tells you, in one line on standard error, when a newer release
+exists:
+
+```
+A newer version of hodeishield is available: 0.4.0 (you have 0.3.0). See https://github.com/Hodeitek/hodeishield-cli/releases
+```
+
+It never updates anything. Privacy, in full:
+
+- **What is sent.** One unauthenticated `GET` to GitHub's public API,
+  `https://api.github.com/repos/Hodeitek/hodeishield-cli/releases/latest`, with a 2 second limit.
+  Only what HTTP requires goes with it, including `User-Agent: hodeishield-cli/<version>` and
+  `Accept`. No API key, token, profile, tenant, command or machine identifier is sent, and nothing
+  goes to HodeiShield: GitHub sees your IP address, as it does for any request. Your proxy settings
+  apply (see [Networking](#networking-proxies-and-tls-inspection)).
+- **When.** At most once every 24 hours, after the command has finished and printed its output.
+  The time of the last attempt, and the version it found, are kept in `update-check.json` next to
+  the configuration file (see `hodeishield config path`). A failed attempt (offline, timeout,
+  GitHub unavailable) is silent, is not repeated before the next day, and never changes a command's
+  output or exit code. Add `--verbose` to see why nothing was shown.
+- **Where it is silent.** When standard error is not a terminal, with `--json` and `--csv`, for
+  `completions`, and whenever the `CI` environment variable is set, to any value. The notice goes to
+  standard error, so a terminal on standard error is what decides, not whether standard output is
+  piped.
+- **Turning it off.** `export HODEISHIELD_NO_UPDATE_CHECK=1`, or once for all profiles
+  `hodeishield config set update_check false` (`config unset update_check` restores the default).
+  With either, no request is made.
 
 Shell completions: `hodeishield completions bash|zsh|fish|powershell|elvish`.
 

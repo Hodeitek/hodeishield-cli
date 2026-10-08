@@ -14,6 +14,7 @@ mod config;
 mod failure;
 mod filters;
 mod output;
+mod update_check;
 
 use std::io::{ErrorKind, Write};
 use std::process::ExitCode;
@@ -28,10 +29,14 @@ pub const USER_AGENT: &str = concat!(
 #[must_use]
 pub fn main() -> ExitCode {
     let cli = cli::Cli::parse_checked();
+    let for_programs = cli.prints_for_programs();
+    let verbose = cli.verbose;
     let stdout = std::io::stdout();
     let mut out = std::io::BufWriter::new(stdout.lock());
     let result = commands::run(cli, &mut out);
     let flushed = out.flush();
+    // After the command's own work and output, so it never delays them.
+    update_check::notify(for_programs, verbose);
     match result {
         Ok(()) => match flushed {
             Ok(()) => ExitCode::SUCCESS,

@@ -8,6 +8,13 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ### Added
 
+- On an interactive terminal, the CLI now tells you in one line on standard error when a newer
+  release exists. It asks GitHub's public releases API (no credential or identifier is sent) at most
+  once a day, stays silent with `--json`, `--csv`, `completions`, when standard error is not a
+  terminal and when `CI` is set, and never changes a command's output or exit code. Turn it off with
+  `HODEISHIELD_NO_UPDATE_CHECK=1` or `hodeishield config set update_check false`; the README's "New-version
+  notice" section lists exactly what is sent.
+  ([#38](https://github.com/Hodeitek/hodeishield-cli/issues/38))
 - A container image, `ghcr.io/hodeitek/hodeishield-cli`, for `linux/amd64` and `linux/arm64`: the
   release's own binary on a distroless base, running as a non-root user, tagged with the exact
   version only. It is signed by digest with Sigstore and carries the release's SBOM as a signed

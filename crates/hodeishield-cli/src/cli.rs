@@ -138,6 +138,17 @@ impl Cli {
     }
 }
 
+impl Cli {
+    /// Whether this invocation prints something a program reads: `--json`, `--csv` or the
+    /// completion script. Nothing but that output may be added to such a run.
+    #[must_use]
+    pub(crate) fn prints_for_programs(&self) -> bool {
+        self.json
+            || matches!(self.command, Command::Completions { .. })
+            || self.command.paging().is_some_and(|paging| paging.csv)
+    }
+}
+
 impl Command {
     /// The paging options, for the commands that list.
     fn paging(&self) -> Option<&Paging> {
