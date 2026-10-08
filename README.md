@@ -345,8 +345,8 @@ and do not break the scripting surface. A 1.0 release will be announced in the c
 
 Adding to the scripting surface is not a breaking change: new commands and flags, and new fields in
 `--json` output. Giving an existing case a different exit code is a breaking change, even when the
-code is new (0.2.0 moved an inactive licence from 4 to 8). Write scripts to ignore the fields they do not know: `--json`
-prints the body the API returned, so it can gain fields at any time.
+code is new (0.2.0 moved an inactive licence from 4 to 8). Write scripts to ignore the fields they
+do not know: `--json` prints the body the API returned, so it can gain fields at any time.
 
 The table output and the messages on standard error are for people and may change in any release.
 Scripts should use `--json` or `--csv` for data, and the exit code for what happened, and should not
