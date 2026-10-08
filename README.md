@@ -34,7 +34,8 @@ endpoint agents from a terminal or a script.
 - **Verifiable.** Every release is signed with Sigstore (keyless, from GitHub Actions) and carries
   SLSA build provenance.
 
-> The CLI is at version 0.x: commands and output may still change before 1.0.
+> The CLI is at version 0.x: commands and output may still change before 1.0. See
+> [Stability](#stability) for what may change and how it is announced.
 
 ## Install
 
@@ -326,6 +327,30 @@ hodeishield vendors list --all --csv > vendors.csv
 Errors go to stderr with a hint and, when the API gave one, a **request id**: quote it when you
 contact support. `--verbose` logs each request's method, URL, status and request id to stderr, never
 a credential.
+
+## Stability
+
+The CLI follows [Semantic Versioning](https://semver.org/). Its **scripting surface** is what a
+script can depend on:
+
+- the command names and flags;
+- the field names and types in `--json` and `--csv` output;
+- the exit codes 0 to 8 and what each one means (see [Exit codes](#exit-codes));
+- what goes to standard output (the data) and to standard error (notes and errors).
+
+While the version is 0.x, a change that breaks the scripting surface only ships in a minor version
+(0.2 to 0.3, never 0.2.0 to 0.2.1), and the changelog lists it under **Changed (scripting
+surface)**, with what to do about it. Read that heading before you upgrade. Patch releases fix bugs
+and do not break the scripting surface. A 1.0 release will be announced in the changelog.
+
+Adding to the scripting surface is not a breaking change: new commands and flags, and new fields in
+`--json` output. Giving an existing case a different exit code is a breaking change, even when the
+code is new (0.2.0 moved an inactive licence from 4 to 8). Write scripts to ignore the fields they
+do not know: `--json` prints the body the API returned, so it can gain fields at any time.
+
+The table output and the messages on standard error are for people and may change in any release.
+Scripts should use `--json` or `--csv` for data, and the exit code for what happened, and should not
+parse tables or messages.
 
 ## Configure
 

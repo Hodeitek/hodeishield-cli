@@ -106,7 +106,8 @@ implementation plugged into one. **Depth** is the behaviour available per unit o
 - Keep changes focused, with tests for new behaviour.
 - Add a line under `## [Unreleased]` in `CHANGELOG.md` for any change a user or a script would
   notice. A release renames that section to `## [X.Y.Z] - YYYY-MM-DD`; the release workflow refuses
-  a tag without it and uses the section as the release notes.
+  a tag without it and uses the section as the release notes. A change to the scripting surface
+  goes under `### Changed (scripting surface)`; see [Stability](README.md#stability).
 - Commits must be signed (GPG or SSH) and use a clear, imperative message in English. Reference
   the issue it resolves with `Closes #N` in the commit message.
 - Commit messages and pull request descriptions must not mention Claude: no session trailer, no
