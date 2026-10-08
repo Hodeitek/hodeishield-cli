@@ -135,7 +135,9 @@ pub(super) fn list_one<R, T>(
 ///
 /// A tenant that cannot be read for its own reasons (no licence, left the portfolio) is reported
 /// and skipped, and the command still fails at the end, so a script never takes a partial result
-/// for a complete one. Any other failure stops the walk.
+/// for a complete one. Any other failure stops the walk: tenants are asked one after the other, and
+/// a rate limit (after the client has waited out the short ones) or a missing scope is not retried
+/// against the next tenant.
 #[allow(clippy::too_many_arguments)]
 fn list_across<R, T>(
     ctx: &Context,
@@ -169,12 +171,7 @@ fn list_across<R, T>(
                 total += items.len();
                 collected.push((tenant, raw_items, items));
             }
-            Err(failure)
-                if matches!(
-                    failure.kind,
-                    Kind::Forbidden | Kind::NotFound | Kind::LicenceInactive
-                ) =>
-            {
+            Err(failure) if matches!(failure.kind, Kind::NotFound | Kind::LicenceInactive) => {
                 eprintln!(
                     "warning: client tenant {}: {}",
                     clean(&tenant.slug),

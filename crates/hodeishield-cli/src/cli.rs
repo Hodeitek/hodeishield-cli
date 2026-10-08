@@ -16,7 +16,7 @@ use std::str::FromStr;
 
 const AFTER_HELP: &str = "\
 Credentials:
-  HODEISHIELD_API_KEY   A tenant API key. When set, it is used for every API call.
+  HODEISHIELD_API_KEY   A tenant API key, or an MSSP portfolio key (hsp_…). When set, it is used for every API call.
   hodeishield login     Otherwise, sign in to the app; the token is kept in the system keychain.
 
 Several client tenants (portfolio credential):
@@ -26,7 +26,7 @@ Several client tenants (portfolio credential):
 
 Exit codes:
   0 ok · 1 error · 2 usage · 3 not authenticated · 4 missing scope · 5 not found
-  6 rate limited · 7 API unreachable or failing · 8 tenant licence not in force";
+  6 rate limited · 7 API unreachable, failing or without portfolio access · 8 tenant licence not in force";
 
 /// Read-only command-line client for HodeiShield.
 ///

@@ -86,6 +86,12 @@ pub enum Error {
     /// An id or slug that would change which resource the path addresses.
     #[error("{0:?} is not a valid identifier")]
     InvalidPathArgument(String),
+    /// The API has no portfolio listing (it answered `404` or `405` for the route).
+    #[error("this API does not offer portfolio access (HTTP {status} for the tenant listing)")]
+    PortfolioNotOffered {
+        /// The status the route answered with.
+        status: u16,
+    },
     /// A client tenant identifier that is not a UUID.
     #[error("{0:?} is not a valid client tenant identifier")]
     InvalidTenant(String),

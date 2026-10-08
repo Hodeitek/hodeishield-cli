@@ -11,7 +11,7 @@ use super::resources::{collect_pages, list_one};
 use crate::cli::TenantsCommand;
 use crate::config::Settings;
 use crate::failure::{ApiContext, CredentialSource, Failure, Kind, Result};
-use crate::output::{Rows, cell, clean};
+use crate::output::{Rows, clean};
 use hodeishield_api::Client;
 use hodeishield_api::portfolio::{ListTenantsParams, ListTenantsResponse, Tenant, is_uuid};
 use std::io::Write;
@@ -65,7 +65,8 @@ impl Context {
                 vec![tenant]
             }
             _ => {
-                let (usable, idle): (Vec<_>, Vec<_>) = portfolio.into_iter().partition(readable);
+                let (usable, idle): (Vec<_>, Vec<_>) =
+                    portfolio.into_iter().partition(Tenant::readable);
                 if !idle.is_empty() {
                     eprintln!(
                         "Skipping {} inactive client tenants (see `hodeishield tenants list`).",
@@ -101,11 +102,6 @@ impl Context {
     }
 }
 
-/// Whether a tenant is worth asking: not inactive, and not without a licence in force.
-fn readable(tenant: &Tenant) -> bool {
-    tenant.active && tenant.licence_status.as_deref() != Some("inactive")
-}
-
 /// Every client tenant of the portfolio.
 fn list_portfolio(lister: &Client, source: CredentialSource) -> Result<Vec<Tenant>> {
     let api = ApiContext {
@@ -117,7 +113,7 @@ fn list_portfolio(lister: &Client, source: CredentialSource) -> Result<Vec<Tenan
         &api,
         Some(200),
         100_000,
-        &mut |page, per_page| lister.list_tenants(&ListTenantsParams { page, per_page }),
+        &mut |page, per_page| lister.list_tenants(&ListTenantsParams::alphabetical(page, per_page)),
         |r: ListTenantsResponse| (r.data, r.pagination),
     )
     .map_err(|failure| {
@@ -175,7 +171,7 @@ pub fn run(ctx: &Context, command: TenantsCommand, out: &mut dyn Write) -> Resul
             source,
             framework: None,
         },
-        &mut |page, per_page| client.list_tenants(&ListTenantsParams { page, per_page }),
+        &mut |page, per_page| client.list_tenants(&ListTenantsParams::alphabetical(page, per_page)),
         |r| (r.data, r.pagination),
         tenant_rows,
     )
@@ -205,10 +201,10 @@ fn tenant_rows(items: &[Tenant]) -> Rows {
                 vec![
                     clean(&t.slug),
                     clean(&t.name),
-                    cell(t.organization.as_ref().map(|o| o.name.as_str())),
+                    clean(&t.organization.name),
                     if t.internal { "own" } else { "client" }.to_owned(),
                     if t.active { "active" } else { "inactive" }.to_owned(),
-                    cell(t.licence_status.as_deref()),
+                    clean(&t.licence_status),
                     clean(&t.id),
                 ]
             })

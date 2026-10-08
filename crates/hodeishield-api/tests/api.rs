@@ -663,7 +663,11 @@ fn retry_observer_receives_expected_events() {
     success.assert();
 }
 
-// The portfolio module is provisional: these tests pin its interface, not the published contract.
+// The portfolio contract (version 2026-10-16): the listing, the tenant selection and its echo.
+
+/// The shape of a portfolio key: `hsp_`, 12 hex, `_`, 64 hex.
+const PORTFOLIO_KEY: &str =
+    "hsp_3f2a9c0d1b4e_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
 const TENANT_A: &str = "11111111-1111-4111-8111-111111111111";
 const TENANT_B: &str = "22222222-2222-4222-8222-222222222222";
@@ -673,7 +677,7 @@ const EMPTY_PAGE: &str =
 fn tenant_client(server: &mockito::Server, tenant: &str) -> Client {
     Client::builder(
         server.url().parse().expect("url"),
-        SecretString::from("hsp_example"),
+        SecretString::from(PORTFOLIO_KEY),
     )
     .tenant(tenant)
     .expect("a UUID")
@@ -687,10 +691,10 @@ fn list_tenants_decodes_the_listing_and_never_sends_a_tenant() {
     let mut server = mockito::Server::new();
     let mock = server
         .mock("GET", "/v1/portfolio/tenants")
-        .match_header("authorization", "Bearer hsp_example")
+        .match_header("authorization", format!("Bearer {PORTFOLIO_KEY}").as_str())
         .match_header("x-hs-tenant", mockito::Matcher::Missing)
         .with_body(format!(
-            r#"{{"data":[{{"id":"{TENANT_A}","name":"Acme","slug":"acme","organization":{{"id":"o1","name":"Acme Group"}},"internal":false,"active":true,"licence_status":"in_force","later":1}}],"pagination":{{"page":1,"per_page":50,"total":1,"total_pages":1}}}}"#
+            r#"{{"data":[{{"id":"{TENANT_A}","name":"Acme","slug":"acme","organization":{{"id":"o1","name":"Acme Group"}},"internal":false,"active":true,"licence_status":"in_force","later":1}},{{"id":"{TENANT_B}","name":"Beta","slug":"beta","organization":{{"id":"o2","name":"Beta Group"}},"internal":true,"active":false,"licence_status":"something_new"}}],"pagination":{{"page":1,"per_page":50,"total":2,"total_pages":1}}}}"#
         ))
         .create();
     // Even a client built for one tenant lists the whole portfolio.
@@ -699,11 +703,13 @@ fn list_tenants_decodes_the_listing_and_never_sends_a_tenant() {
         .expect("listing");
     mock.assert();
     assert_eq!(response.data.data[0].slug, "acme");
-    assert_eq!(
-        response.data.data[0].licence_status.as_deref(),
-        Some("in_force")
-    );
+    assert_eq!(response.data.data[0].licence_status, "in_force");
     assert_eq!(response.raw["data"][0]["later"], 1);
+    // An unknown licence status decodes, and is not readable.
+    let beta = &response.data.data[1];
+    assert_eq!(beta.licence_status, "something_new");
+    assert!(!beta.readable() && beta.internal);
+    assert!(response.data.data[0].readable());
 }
 
 #[test]
@@ -712,7 +718,9 @@ fn a_selected_tenant_travels_on_data_calls_and_must_be_confirmed() {
     let ok = server
         .mock("GET", "/v1/vendors")
         .match_header("x-hs-tenant", TENANT_A)
-        .with_header("x-hs-tenant", &TENANT_A.to_ascii_uppercase())
+        // Header names are case-insensitive; the value is the lowercase UUID.
+        .with_header("X-HS-Tenant", TENANT_A)
+        .with_header("Vary", "X-HS-Tenant")
         .with_body(EMPTY_PAGE)
         .create();
     tenant_client(&server, TENANT_A)
@@ -779,4 +787,247 @@ fn a_tenant_that_is_not_a_uuid_is_refused_before_any_request() {
         .expect_err("not a UUID");
         assert!(matches!(err, Error::InvalidTenant(_)), "{bad:?}");
     }
+}
+
+#[test]
+fn the_tenant_is_sent_in_lowercase_and_the_echo_must_be_exactly_that() {
+    let lower = "0b8f2a52-6a0e-4d5c-9d3e-1f2a3b4c5d6e";
+    let upper = lower.to_ascii_uppercase();
+    let mut server = mockito::Server::new();
+    // The request carries the lowercase form even when the caller gave capitals.
+    let sent = server
+        .mock("GET", "/v1/vendors")
+        .match_header("x-hs-tenant", lower)
+        .with_header("x-hs-tenant", lower)
+        .with_body(EMPTY_PAGE)
+        .create();
+    tenant_client(&server, &upper)
+        .list_vendors(&ListVendorsParams::default())
+        .expect("lowercase echo");
+    sent.assert();
+    // An echo in capitals is not what the contract promises: refused.
+    let mut server = mockito::Server::new();
+    server
+        .mock("GET", "/v1/vendors")
+        .with_header("x-hs-tenant", &upper)
+        .with_body(EMPTY_PAGE)
+        .create();
+    let err = tenant_client(&server, lower)
+        .list_vendors(&ListVendorsParams::default())
+        .expect_err("not the contract's form");
+    assert!(matches!(err, Error::TenantMismatch { .. }), "{err:?}");
+}
+
+#[test]
+fn an_echo_that_names_two_tenants_is_refused() {
+    let mut server = mockito::Server::new();
+    server
+        .mock("GET", "/v1/vendors")
+        .with_header("x-hs-tenant", TENANT_A)
+        .with_header("x-hs-tenant", TENANT_B)
+        .with_body(EMPTY_PAGE)
+        .create();
+    let err = tenant_client(&server, TENANT_A)
+        .list_vendors(&ListVendorsParams::default())
+        .expect_err("two values");
+    assert!(matches!(err, Error::TenantMismatch { .. }), "{err:?}");
+}
+
+#[test]
+fn every_data_operation_sends_the_selection_and_checks_the_echo() {
+    use hodeishield_api::v1::{
+        ListAlertsParams, ListComplianceControlsParams, ListEndpointsParams, ListEvidenceParams,
+        ListRisksParams,
+    };
+    let mut server = mockito::Server::new();
+    let any = server
+        .mock("GET", mockito::Matcher::Any)
+        .match_header("x-hs-tenant", TENANT_A)
+        .with_header("x-hs-tenant", TENANT_B)
+        .with_body(EMPTY_PAGE)
+        .expect(5)
+        .create();
+    let c = tenant_client(&server, TENANT_A);
+    fn refused<T>(r: Result<T, Error>) -> bool {
+        matches!(r, Err(Error::TenantMismatch { .. }))
+    }
+    assert!(refused(c.list_alerts(&ListAlertsParams::default())));
+    assert!(refused(c.list_risks(&ListRisksParams::default())));
+    assert!(refused(c.list_evidence(&ListEvidenceParams::default())));
+    assert!(refused(c.list_endpoints(&ListEndpointsParams::default())));
+    assert!(refused(c.list_compliance_controls(
+        &ListComplianceControlsParams {
+            page: None,
+            per_page: None,
+            sort: None,
+            order: None,
+            framework: "nis2".to_owned(),
+            status: None,
+        }
+    )));
+    any.assert();
+}
+
+#[test]
+fn an_error_answer_is_reported_as_the_api_error_whatever_the_header_says() {
+    // The contract has no echo on errors; a client must not mistake one for a mismatch, nor hide
+    // the real refusal behind it.
+    let mut server = mockito::Server::new();
+    server
+        .mock("GET", "/v1/vendors")
+        .with_status(404)
+        .with_body(r#"{"error":{"code":"not_found","message":"No such tenant in this credential's portfolio.","request_id":"r","details":{"code":"TENANT_NOT_FOUND"}}}"#)
+        .create();
+    let err = tenant_client(&server, TENANT_A)
+        .list_vendors(&ListVendorsParams::default())
+        .expect_err("not in the portfolio");
+    let api = err.api().expect("the API's own error");
+    assert_eq!(api.status, 404);
+    let details = api
+        .body
+        .as_ref()
+        .and_then(|b| b.details.as_ref())
+        .expect("details");
+    assert_eq!(details["code"], "TENANT_NOT_FOUND");
+}
+
+#[test]
+fn the_listing_asks_for_the_order_it_is_given() {
+    use hodeishield_api::portfolio::ListTenantsParams;
+    let mut server = mockito::Server::new();
+    let mock = server
+        .mock("GET", "/v1/portfolio/tenants")
+        .match_query(mockito::Matcher::AllOf(vec![
+            mockito::Matcher::UrlEncoded("page".into(), "2".into()),
+            mockito::Matcher::UrlEncoded("per_page".into(), "200".into()),
+            mockito::Matcher::UrlEncoded("sort".into(), "name".into()),
+            mockito::Matcher::UrlEncoded("order".into(), "asc".into()),
+        ]))
+        .with_body(EMPTY_PAGE)
+        .create();
+    client(&server)
+        .list_tenants(&ListTenantsParams::alphabetical(Some(2), Some(200)))
+        .expect("listing");
+    mock.assert();
+}
+
+#[test]
+fn a_listing_that_breaks_the_contract_is_a_decode_error() {
+    use hodeishield_api::portfolio::ListTenantsParams;
+    let mut server = mockito::Server::new();
+    // `organization` is never null.
+    server
+        .mock("GET", "/v1/portfolio/tenants")
+        .with_body(format!(
+            r#"{{"data":[{{"id":"{TENANT_A}","name":"A","slug":"a","organization":null,"internal":false,"active":true,"licence_status":"in_force"}}],"pagination":{{"page":1,"per_page":50,"total":1,"total_pages":1}}}}"#
+        ))
+        .create();
+    let err = client(&server)
+        .list_tenants(&ListTenantsParams::default())
+        .expect_err("null organization");
+    assert!(matches!(err, Error::Decode { .. }), "{err:?}");
+}
+
+#[test]
+fn an_api_without_the_listing_route_is_told_apart_from_other_errors() {
+    use hodeishield_api::portfolio::ListTenantsParams;
+    for status in [404_usize, 405] {
+        let mut server = mockito::Server::new();
+        server
+            .mock("GET", "/v1/portfolio/tenants")
+            .with_status(status)
+            .with_body(r#"{"error":{"code":"not_found","message":"Not found","request_id":"r"}}"#)
+            .create();
+        let err = client(&server)
+            .list_tenants(&ListTenantsParams::default())
+            .expect_err("no route");
+        assert!(
+            matches!(&err, Error::PortfolioNotOffered { status: s } if usize::from(*s) == status),
+            "{status}: {err:?}"
+        );
+    }
+    // Other statuses stay what the API said, and a 404 on a data operation is not this.
+    let mut server = mockito::Server::new();
+    server
+        .mock("GET", "/v1/portfolio/tenants")
+        .with_status(403)
+        .with_body(r#"{"error":{"code":"forbidden","message":"x","request_id":"r","details":{"code":"INSUFFICIENT_SCOPE","missing":["portfolio:read"]}}}"#)
+        .create();
+    server
+        .mock("GET", "/v1/vendors/v1")
+        .with_status(404)
+        .with_body(r#"{"error":{"code":"not_found","message":"x","request_id":"r"}}"#)
+        .create();
+    let c = client(&server);
+    let err = c
+        .list_tenants(&ListTenantsParams::default())
+        .expect_err("403");
+    assert_eq!(err.api().map(|a| a.status), Some(403));
+    let err = c.get_vendor("v1").expect_err("404");
+    assert_eq!(err.api().map(|a| a.status), Some(404));
+}
+
+#[test]
+fn a_portfolio_429_is_retried_after_a_short_retry_after_and_reports_its_scope_otherwise() {
+    use hodeishield_api::portfolio::ListTenantsParams;
+    let body = r#"{"error":{"code":"rate_limited","message":"x","request_id":"r","details":{"scope":"portfolio_key","limit":100,"window_seconds":60,"retry_after_seconds":1}}}"#;
+    // Within the wait the client accepts: waited out, then served.
+    let mut server = mockito::Server::new();
+    let limited = server
+        .mock("GET", "/v1/portfolio/tenants")
+        .with_status(429)
+        .with_header("retry-after", "1")
+        .with_body(body)
+        .expect(1)
+        .create();
+    let served = server
+        .mock("GET", "/v1/portfolio/tenants")
+        .with_body(EMPTY_PAGE)
+        .expect(1)
+        .create();
+    client(&server)
+        .list_tenants(&ListTenantsParams::default())
+        .expect("served after the wait");
+    limited.assert();
+    served.assert();
+    // Longer than the client accepts: one request, and the scope is in the error.
+    let mut server = mockito::Server::new();
+    let once = server
+        .mock("GET", "/v1/portfolio/tenants")
+        .with_status(429)
+        .with_header("retry-after", "600")
+        .with_body(body)
+        .expect(1)
+        .create();
+    let err = client(&server)
+        .list_tenants(&ListTenantsParams::default())
+        .expect_err("too long to wait");
+    once.assert();
+    let api = err.api().expect("API error");
+    assert_eq!(api.status, 429);
+    assert_eq!(api.meta.retry_after, Some(600));
+    let details = api
+        .body
+        .as_ref()
+        .and_then(|b| b.details.as_ref())
+        .expect("details");
+    assert_eq!(details["scope"], "portfolio_key");
+}
+
+#[test]
+fn a_portfolio_key_is_sent_whole_and_never_shown() {
+    let server = mockito::Server::new();
+    let c = tenant_client(&server, TENANT_A);
+    let shown = format!("{c:?}");
+    let secret = PORTFOLIO_KEY.rsplit('_').next().expect("secret part");
+    assert!(
+        !shown.contains(secret) && !shown.contains(PORTFOLIO_KEY),
+        "{shown}"
+    );
+    let builder = Client::builder(
+        server.url().parse().expect("url"),
+        SecretString::from(PORTFOLIO_KEY),
+    );
+    let shown = format!("{builder:?}");
+    assert!(!shown.contains(secret), "{shown}");
 }

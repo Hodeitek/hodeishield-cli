@@ -3,22 +3,31 @@
 
 //! Client tenants of a portfolio credential: list them, and read one of them.
 //!
-//! # Provisional
+//! This module follows the published `/v1` portfolio contract (contract version `2026-10-16`):
 //!
-//! **This module is written by hand against a draft of the `/v1` contract and is not part of the
-//! published API description yet.** Nothing in `openapi/v1.json` or the generated client describes
-//! it. When the contract is published, this file is the only place that changes: the operation, the
-//! shape of [`Tenant`] and the way the selected tenant travels on a request are all decided here,
-//! and callers see only the interface below.
+//! - `GET /v1/portfolio/tenants` (`listPortfolioTenants`), scope `portfolio:read`, paginated like
+//!   every `/v1` list (`page`, `per_page`, `sort`, `order`; the API's default order is descending,
+//!   so this client asks for ascending);
+//! - the client tenant is selected on each of the data operations with one optional `X-HS-Tenant`
+//!   request header holding the tenant's UUID, and every successful answer to such a request
+//!   repeats the tenant it read in an `X-HS-Tenant` response header (lowercase UUID). Error
+//!   answers never carry it, and the listing neither takes nor returns it;
+//! - a tenant is readable when it is active and its `licence_status` is `in_force` or `grace`. The
+//!   `licence_status` vocabulary is open: a value this client does not know counts as not
+//!   readable.
 //!
-//! The draft assumes:
+//! The version string of the API description is not compared with anything. Whether an API offers
+//! portfolio access is found by asking for the listing: a `404` or `405` on that route becomes
+//! [`Error::PortfolioNotOffered`].
 //!
-//! - `GET /v1/portfolio/tenants`, scope `portfolio:read`, paginated like the other lists
-//!   (`page`, `per_page`, answer `{ data, pagination }`);
-//! - the client is selected on every data operation with one `X-HS-Tenant` request header holding
-//!   the tenant's UUID, and every answer to such a request repeats it in an `X-HS-Tenant` response
-//!   header;
-//! - the listing does not take that header.
+//! # Relation to the generated client
+//!
+//! The vendored `openapi/v1.json` does not describe these operations yet, so this file is written
+//! by hand. When the vendored document is synced to the contract version above, the listing
+//! operation, [`Tenant`] and the paging types come from `cargo xtask codegen` (which first has to
+//! learn header parameters and the new security scheme), and this file shrinks to what is not an
+//! operation: [`ClientBuilder::tenant`] and its confirmation check, which the generated code does
+//! not provide.
 //!
 //! # Interface
 //!
@@ -29,7 +38,7 @@
 
 use crate::client::{Operation, Scope};
 use crate::error::Error;
-use crate::v1::Pagination;
+use crate::v1::{Order, Pagination};
 use crate::{ApiResponse, Client, ClientBuilder};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
@@ -55,24 +64,26 @@ pub struct Tenant {
     pub id: String,
     /// Display name.
     pub name: String,
-    /// Short unique name, for people and scripts.
+    /// Short name, unique across the platform, for people and scripts.
     pub slug: String,
-    /// The client organisation the tenant belongs to, when it has one.
-    #[serde(default)]
-    pub organization: Option<TenantOrganization>,
-    /// Whether this is the MSSP's own tenant rather than a client's.
-    #[serde(default)]
+    /// The organisation the tenant belongs to: the MSSP's own for the tenants it holds directly.
+    pub organization: TenantOrganization,
+    /// Whether this is the MSSP's own internal tenant rather than a client's.
     pub internal: bool,
-    /// Whether the tenant is active.
-    #[serde(default = "yes")]
+    /// Whether the tenant is enabled.
     pub active: bool,
-    /// `in_force`, `grace` or `inactive`. The vocabulary may grow.
-    #[serde(default)]
-    pub licence_status: Option<String>,
+    /// `in_force`, `grace` or `inactive`. The vocabulary is open: other values may appear.
+    pub licence_status: String,
 }
 
-fn yes() -> bool {
-    true
+impl Tenant {
+    /// Whether reading this tenant can be expected to work: it is active and its licence is in
+    /// force or in its grace period. A licence status this client does not know counts as not
+    /// readable, since the vocabulary is open.
+    #[must_use]
+    pub fn readable(&self) -> bool {
+        self.active && matches!(self.licence_status.as_str(), "in_force" | "grace")
+    }
 }
 
 /// The organisation a [`Tenant`] belongs to.
@@ -93,16 +104,51 @@ pub struct ListTenantsResponse {
     pub pagination: Pagination,
 }
 
-/// Paging of [`Client::list_tenants`].
+/// What [`Client::list_tenants`] sends.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ListTenantsParams {
     /// 1-based page number.
     pub page: Option<i64>,
     /// Items per page, 1..200.
     pub per_page: Option<i64>,
+    /// Sort by `name` or `slug`.
+    pub sort: Option<TenantSort>,
+    /// Direction. The API's default is descending.
+    pub order: Option<Order>,
+}
+
+/// The fields the tenant listing can be sorted by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TenantSort {
+    /// `name`
+    Name,
+    /// `slug`
+    Slug,
+}
+
+impl TenantSort {
+    /// The value as sent on the wire.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Name => "name",
+            Self::Slug => "slug",
+        }
+    }
 }
 
 impl ListTenantsParams {
+    /// Alphabetical by name, the order a person expects.
+    #[must_use]
+    pub fn alphabetical(page: Option<i64>, per_page: Option<i64>) -> Self {
+        Self {
+            page,
+            per_page,
+            sort: Some(TenantSort::Name),
+            order: Some(Order::Asc),
+        }
+    }
+
     fn query_pairs(&self) -> Vec<(&'static str, String)> {
         let mut pairs = Vec::new();
         if let Some(page) = self.page {
@@ -110,6 +156,12 @@ impl ListTenantsParams {
         }
         if let Some(per_page) = self.per_page {
             pairs.push(("per_page", per_page.to_string()));
+        }
+        if let Some(sort) = self.sort {
+            pairs.push(("sort", sort.as_str().to_owned()));
+        }
+        if let Some(order) = self.order {
+            pairs.push(("order", order.as_str().to_owned()));
         }
         pairs
     }
@@ -124,7 +176,8 @@ impl Client {
     /// # Errors
     ///
     /// [`Error`] when the request cannot be sent, the API answers with an error (a credential
-    /// without portfolio scope gets `403`), or the body does not match the draft.
+    /// without portfolio scope gets `403`), or the body does not match the contract.
+    /// [`Error::PortfolioNotOffered`] when the API has no such route.
     pub fn list_tenants(
         &self,
         params: &ListTenantsParams,
@@ -135,6 +188,12 @@ impl Client {
             params.query_pairs(),
             false,
         )
+        .map_err(|error| match error {
+            Error::Api(api) if matches!(api.status, 404 | 405) => {
+                Error::PortfolioNotOffered { status: api.status }
+            }
+            other => other,
+        })
     }
 }
 
@@ -158,10 +217,13 @@ impl ClientBuilder {
             HeaderValue::from_str(&wanted).map_err(|_| Error::InvalidTenant(id.to_owned()))?,
         );
         let check = move |answer: &HeaderMap| {
-            let answered = answer
-                .get(TENANT_HEADER)
-                .and_then(|v| v.to_str().ok())
-                .map(|v| v.trim().to_ascii_lowercase());
+            // Header names compare case-insensitively (the map does it); the answer must carry
+            // exactly one value, the lowercase UUID of the tenant that was read.
+            let mut values = answer.get_all(TENANT_HEADER).iter();
+            let answered = match (values.next(), values.next()) {
+                (Some(value), None) => value.to_str().ok().map(str::to_owned),
+                _ => None,
+            };
             if answered.as_deref() == Some(wanted.as_str()) {
                 Ok(())
             } else {
@@ -209,5 +271,48 @@ mod tests {
         ] {
             assert!(!is_uuid(bad), "{bad:?}");
         }
+    }
+
+    fn tenant(active: bool, licence: &str) -> Tenant {
+        Tenant {
+            id: "0b8f2a52-6a0e-4d5c-9d3e-1f2a3b4c5d6e".to_owned(),
+            name: "Acme".to_owned(),
+            slug: "acme".to_owned(),
+            organization: TenantOrganization {
+                id: "o".to_owned(),
+                name: "Acme Group".to_owned(),
+            },
+            internal: false,
+            active,
+            licence_status: licence.to_owned(),
+        }
+    }
+
+    #[test]
+    fn a_tenant_is_readable_only_when_active_with_a_known_good_licence() {
+        assert!(tenant(true, "in_force").readable());
+        assert!(tenant(true, "grace").readable());
+        assert!(!tenant(true, "inactive").readable());
+        assert!(!tenant(false, "in_force").readable());
+        assert!(!tenant(false, "grace").readable());
+        // The vocabulary is open: what is not known is not assumed readable.
+        assert!(!tenant(true, "suspended_soon").readable());
+        assert!(!tenant(true, "").readable());
+        assert!(!tenant(true, "IN_FORCE").readable());
+    }
+
+    #[test]
+    fn the_listing_asks_for_ascending_names_when_told_to() {
+        let pairs = ListTenantsParams::alphabetical(Some(2), Some(200)).query_pairs();
+        assert_eq!(
+            pairs,
+            vec![
+                ("page", "2".to_owned()),
+                ("per_page", "200".to_owned()),
+                ("sort", "name".to_owned()),
+                ("order", "asc".to_owned()),
+            ]
+        );
+        assert!(ListTenantsParams::default().query_pairs().is_empty());
     }
 }
