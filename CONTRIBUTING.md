@@ -42,6 +42,16 @@ cargo deny check && cargo audit   # dependency policy and advisories
 CI runs the tests on Linux, macOS and Windows and the other checks on Linux; a pull request needs
 them all green.
 
+### The scripting surface is tested
+
+`crates/hodeishield-cli/tests/contract.rs` pins what [Stability](README.md#stability) promises
+scripts: the exit codes 0 to 8, the shape of `--json` output (including fields the CLI does not
+know), the `--csv` header and quoting rules, and which stream carries data and which carries notes
+and errors. The expectations are written out in full so a change shows in review. If one of these
+tests fails, either the change is a mistake or it breaks the scripting surface: in the second case
+edit the expectation on purpose and add a line under `### Changed (scripting surface)` in
+`CHANGELOG.md`.
+
 ### Dependency updates
 
 Dependabot (`.github/dependabot.yml`) proposes cargo and GitHub Actions updates once a week, against
