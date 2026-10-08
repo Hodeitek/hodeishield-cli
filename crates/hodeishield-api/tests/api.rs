@@ -82,6 +82,62 @@ fn list_sends_the_bearer_and_the_query_and_keeps_unknown_fields_in_raw() {
     assert_eq!(page.raw["data"][0]["field_added_later"]["nested"], true);
 }
 
+const TENANT: &str = "3f2b8c1a-0d4e-4f6a-9b7c-5e1d2a3b4c5d";
+
+fn tenant_meta(status: usize, headers: &[&str]) -> hodeishield_api::ResponseMeta {
+    let mut server = mockito::Server::new();
+    let mut mock = server.mock("GET", "/v1/vendors").with_status(status);
+    for value in headers {
+        mock = mock.with_header("x-hs-tenant", value);
+    }
+    let body = if status == 200 {
+        r#"{"data":[],"pagination":{"page":1,"per_page":50,"total":0,"total_pages":0}}"#
+    } else {
+        r#"{"error":{"code":"forbidden","message":"no","request_id":"r"}}"#
+    };
+    let _mock = mock.with_body(body).create();
+    match client(&server).list_vendors(&ListVendorsParams::default()) {
+        Ok(page) => page.meta,
+        Err(e) => e.api().expect("api error").meta.clone(),
+    }
+}
+
+#[test]
+fn the_tenant_header_of_a_2xx_answer_is_kept_lowercase() {
+    assert_eq!(
+        tenant_meta(200, &[TENANT]).tenant_id.as_deref(),
+        Some(TENANT)
+    );
+    let upper = TENANT.to_ascii_uppercase();
+    assert_eq!(
+        tenant_meta(200, &[upper.as_str()]).tenant_id.as_deref(),
+        Some(TENANT)
+    );
+}
+
+#[test]
+fn a_missing_malformed_or_duplicated_tenant_header_gives_none() {
+    assert_eq!(tenant_meta(200, &[]).tenant_id, None);
+    for bad in [
+        "",
+        "not-a-uuid",
+        "3f2b8c1a0d4e4f6a9b7c5e1d2a3b4c5d",
+        "3f2b8c1a-0d4e-4f6a-9b7c-5e1d2a3b4c5",
+        "3f2b8c1a-0d4e-4f6a-9b7c-5e1d2a3b4c5g",
+        "{3f2b8c1a-0d4e-4f6a-9b7c-5e1d2a3b4c5d}",
+    ] {
+        assert_eq!(tenant_meta(200, &[bad]).tenant_id, None, "{bad:?}");
+    }
+    let other = "11111111-2222-4333-8444-555555555555";
+    assert_eq!(tenant_meta(200, &[TENANT, other]).tenant_id, None);
+    assert_eq!(tenant_meta(200, &[TENANT, TENANT]).tenant_id, None);
+}
+
+#[test]
+fn a_tenant_header_on_an_error_answer_is_ignored() {
+    assert_eq!(tenant_meta(403, &[TENANT]).tenant_id, None);
+}
+
 #[test]
 fn path_arguments_are_encoded() {
     let mut server = mockito::Server::new();

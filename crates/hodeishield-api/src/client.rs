@@ -54,6 +54,9 @@ pub struct ResponseMeta {
     pub rate_limit: Option<RateLimit>,
     /// `Retry-After`, in seconds.
     pub retry_after: Option<u64>,
+    /// `X-HS-Tenant` of a 2xx answer: the tenant id, lowercase, when the header is present exactly
+    /// once and holds a UUID. Informational only; this is not a tenant-isolation check.
+    pub tenant_id: Option<String>,
 }
 
 /// The `RateLimit-*` headers of an answer: the limit closest to being exhausted.
@@ -98,8 +101,28 @@ impl ResponseMeta {
             request_id: text("x-request-id"),
             rate_limit,
             retry_after: number("retry-after"),
+            tenant_id: if status.is_success() {
+                tenant_header(headers)
+            } else {
+                None
+            },
         }
     }
+}
+
+/// The single `X-HS-Tenant` value, when it is a canonical UUID (any case), lowercased.
+fn tenant_header(headers: &HeaderMap) -> Option<String> {
+    let mut values = headers.get_all("x-hs-tenant").iter();
+    let value = values.next()?.to_str().ok()?;
+    if values.next().is_some() {
+        return None;
+    }
+    let canonical = value.len() == 36
+        && value.bytes().enumerate().all(|(i, b)| match i {
+            8 | 13 | 18 | 23 => b == b'-',
+            _ => b.is_ascii_hexdigit(),
+        });
+    canonical.then(|| value.to_ascii_lowercase())
 }
 
 /// What the client reports about each request it sends, for `--verbose`. It carries no header and
