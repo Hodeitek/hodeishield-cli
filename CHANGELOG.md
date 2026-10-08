@@ -6,6 +6,13 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ## [Unreleased]
 
+### Added
+
+- A container image, `ghcr.io/hodeitek/hodeishield-cli`, for `linux/amd64` and `linux/arm64`: the
+  release's own binary on a distroless base, running as a non-root user, tagged with the exact
+  version only. It is signed by digest with Sigstore and carries the release's SBOM as a signed
+  attestation. ([#36](https://github.com/Hodeitek/hodeishield-cli/issues/36))
+
 ## [0.3.0] - 2026-10-07
 
 ### Added
