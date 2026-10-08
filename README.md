@@ -284,6 +284,9 @@ hodeishield login --profile client-b
 
 A profile that has not been defined is refused (`Profile ... is not defined`).
 
+`login` first checks that the system keychain is available and stops before opening the browser or
+showing a code if it is not; use a tenant API key on such a machine.
+
 With `--device`, open the address the CLI prints on any device and **type the code by hand**: the app
 does not accept a link with the code filled in, on purpose.
 

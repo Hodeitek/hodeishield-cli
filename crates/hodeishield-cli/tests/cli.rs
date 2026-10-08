@@ -382,100 +382,39 @@ fn config_profiles_round_trip() {
     assert!(text.contains("default_profile = \"staging\""), "{text}");
 }
 
+/// Without a reachable Secret Service (as in every test here) signing in is refused before the app
+/// is asked for anything. Only on Linux: elsewhere the real keychain would be consulted.
+#[cfg(all(unix, not(target_os = "macos")))]
 #[test]
-fn login_finds_the_sign_in_server_through_the_api_and_asks_for_the_scopes_it_needs() {
-    let env = Env::new();
-    let mut api = mockito::Server::new();
-    let mut app = mockito::Server::new();
-    let issuer = format!("{}/api/auth", app.url());
-    let resource = api
-        .mock("GET", "/.well-known/oauth-protected-resource")
-        .with_body(
-            serde_json::json!({ "resource": api.url(), "authorization_servers": [issuer] })
-                .to_string(),
-        )
-        .expect(1)
-        .create();
-    // RFC 8414 §3.1: the issuer's path goes after the well-known segment.
-    app.mock("GET", "/.well-known/oauth-authorization-server/api/auth")
-        .with_body(
-            serde_json::json!({
-                "issuer": issuer,
-                "token_endpoint": format!("{issuer}/oauth2/token"),
-                "device_authorization_endpoint": format!("{issuer}/device/code"),
-                "scopes_supported": ["supply_risk:read", "compliance.nis2:read", "radar:read", "offline_access"],
+fn login_is_refused_up_front_when_there_is_no_keychain_to_keep_the_session_in() {
+    for args in [&["login"][..], &["login", "--device"][..]] {
+        let env = Env::new();
+        let mut api = mockito::Server::new();
+        let mut app = mockito::Server::new();
+        let untouched: Vec<_> = [&mut api, &mut app]
+            .into_iter()
+            .flat_map(|server| {
+                ["GET", "POST"].map(|method| {
+                    server
+                        .mock(method, mockito::Matcher::Any)
+                        .expect(0)
+                        .create()
+                })
             })
-            .to_string(),
-        )
-        .create();
-    let device = app
-        .mock("POST", "/api/auth/device/code")
-        .match_body(mockito::Matcher::AllOf(vec![
-            mockito::Matcher::UrlEncoded("client_id".into(), "hodeishield-cli".into()),
-            mockito::Matcher::UrlEncoded(
-                "scope".into(),
-                "supply_risk:read compliance.nis2:read offline_access".into(),
-            ),
-        ]))
-        .with_body(
-            serde_json::json!({
-                "device_code": "dc",
-                "user_code": "ABCD-EFGH",
-                "verification_uri": format!("{}/device", app.url()),
-                "expires_in": 600,
-                "interval": 1,
-            })
-            .to_string(),
-        )
-        .expect(1)
-        .create();
-    // Denied at the end, so no token exists to store: on macOS and Windows the test would otherwise
-    // write to the machine's real keychain.
-    let token = app
-        .mock("POST", "/api/auth/oauth2/token")
-        .match_body(mockito::Matcher::UrlEncoded(
-            "client_id".into(),
-            "hodeishield-cli".into(),
-        ))
-        .with_status(400)
-        .with_body(r#"{"error":"access_denied"}"#)
-        .expect(1)
-        .create();
-    env.cmd()
-        .env("HODEISHIELD_API_URL", api.url())
-        .env("HODEISHIELD_APP_URL", app.url())
-        .args(["login", "--device"])
-        .assert()
-        .code(3)
-        .stderr(predicate::str::contains("ABCD-EFGH"))
-        .stderr(predicate::str::contains("denied"));
-    resource.assert();
-    device.assert();
-    token.assert();
-}
-
-#[test]
-fn login_says_clearly_when_the_app_does_not_offer_it() {
-    let env = Env::new();
-    let mut api = mockito::Server::new();
-    let mut app = mockito::Server::new();
-    api.mock("GET", "/.well-known/oauth-protected-resource")
-        .with_status(404)
-        .create();
-    app.mock("GET", mockito::Matcher::Regex("^/.well-known/".into()))
-        .with_status(404)
-        .expect(2)
-        .create();
-    env.cmd()
-        .env("HODEISHIELD_API_URL", api.url())
-        .env("HODEISHIELD_APP_URL", app.url())
-        .args(["login", "--device"])
-        .assert()
-        .code(1)
-        .stderr(predicate::str::contains(
-            "does not offer sign-in for the CLI yet",
-        ))
-        .stderr(predicate::str::contains("HODEISHIELD_API_KEY"));
+            .collect();
+        env.cmd()
+            .env("HODEISHIELD_API_URL", api.url())
+            .env("HODEISHIELD_APP_URL", app.url())
+            .args(args)
+            .assert()
+            .code(1)
+            .stdout(predicate::str::is_empty())
+            .stderr(predicate::str::contains("system keychain is not available"))
+            .stderr(predicate::str::contains("HODEISHIELD_API_KEY"));
+        for mock in &untouched {
+            mock.assert();
+        }
+    }
 }
 
 #[test]

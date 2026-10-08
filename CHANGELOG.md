@@ -6,6 +6,14 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ## [Unreleased]
 
+### Fixed
+
+- `hodeishield login` now checks that the system keychain can keep a session before it opens the
+  browser or shows a device code, and stops there with the usual pointer to API keys. If saving the
+  session still fails after the app has issued tokens, the CLI revokes the refresh token and then
+  the access token, says so on standard error and exits non-zero, instead of leaving an active
+  grant that nothing holds. ([#101](https://github.com/Hodeitek/hodeishield-cli/issues/101))
+
 ### Added
 
 - On an interactive terminal, the CLI now tells you in one line on standard error when a newer

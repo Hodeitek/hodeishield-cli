@@ -89,6 +89,9 @@ pub trait TokenStore {
     fn save(&self, profile: &str, token: &StoredToken) -> Result<()>;
     /// Whether there was something to delete.
     fn delete(&self, profile: &str) -> Result<bool>;
+    /// Whether tokens can be kept for this profile, without writing anything. Sign-in checks it
+    /// before it asks the person to approve anything.
+    fn check_available(&self, profile: &str) -> Result<()>;
 }
 
 /// The system keychain.
@@ -101,13 +104,15 @@ fn ensure_store() -> Result<()> {
     STORE_READY
         .get_or_init(|| native_store().map(keyring_core::set_default_store))
         .clone()
-        .map_err(|reason| {
-            Failure::general(format!("{KEYCHAIN_UNAVAILABLE}: {reason}")).hint(
-                "Sign-in tokens are only kept in the system keychain. On Linux, start a Secret \
-                 Service (GNOME Keyring or KWallet); on a server without one, use a tenant API key \
-                 in HODEISHIELD_API_KEY instead.",
-            )
-        })
+        .map_err(|reason| unavailable(&reason))
+}
+
+fn unavailable(reason: &str) -> Failure {
+    Failure::general(format!("{KEYCHAIN_UNAVAILABLE}: {reason}")).hint(
+        "Sign-in tokens are only kept in the system keychain. On Linux, start a Secret \
+         Service (GNOME Keyring or KWallet); on a server without one, use a tenant API key \
+         in HODEISHIELD_API_KEY instead.",
+    )
 }
 
 #[cfg(target_os = "macos")]
@@ -177,6 +182,20 @@ impl TokenStore for Keychain {
             Err(e) => Err(keychain_failure(e)),
         }
     }
+
+    /// Reads the profile's entry, which proves the backend answers without writing a secret: an
+    /// entry that does not exist, or that cannot be decoded, still means the keychain works.
+    fn check_available(&self, profile: &str) -> Result<()> {
+        match entry(profile)?.get_password() {
+            Err(
+                e @ (keyring_core::Error::PlatformFailure(_)
+                | keyring_core::Error::NoStorageAccess(_)
+                | keyring_core::Error::NoDefaultStore
+                | keyring_core::Error::NotSupportedByStore(_)),
+            ) => Err(unavailable(&e.to_string())),
+            _ => Ok(()),
+        }
+    }
 }
 
 /// In-memory store for tests.
@@ -209,6 +228,10 @@ impl TokenStore for MemoryStore {
             .map_err(|_| Failure::general("poisoned"))?
             .remove(profile)
             .is_some())
+    }
+
+    fn check_available(&self, _profile: &str) -> Result<()> {
+        Ok(())
     }
 }
 
