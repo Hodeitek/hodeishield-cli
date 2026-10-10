@@ -6,6 +6,11 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ## [Unreleased]
 
+### Fixed
+
+- The Windows executable no longer needs the Visual C++ Redistributable; it failed to start on systems
+  without it ([#110](https://github.com/Hodeitek/hodeishield-cli/issues/110)).
+
 ## [0.3.0] - 2026-10-07
 
 ### Added
