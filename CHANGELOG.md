@@ -17,6 +17,9 @@ commands, `--json` output and exit codes. Each release's notes start with its se
   before `=cmd`). It decides on the text as it is written, because some spreadsheet applications
   trim the whitespace before evaluating the cell. Numbers are still written as they are.
   ([#106](https://github.com/Hodeitek/hodeishield-cli/issues/106))
+- `install.sh` now looks up the latest release over HTTPS only, with TLS 1.2 or newer, as the
+  download already did, so a redirect cannot lead that lookup to another protocol.
+  ([#106](https://github.com/Hodeitek/hodeishield-cli/issues/106))
 - `hodeishield login` now checks that the system keychain can keep a session before it opens the
   browser or shows a device code, and stops there with the usual pointer to API keys. If saving the
   session still fails after the app has issued tokens, the CLI revokes the refresh token and then
