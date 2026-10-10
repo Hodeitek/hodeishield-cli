@@ -8,6 +8,18 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ### Fixed
 
+- Terminal output cleaning now also replaces the line and paragraph separators (U+2028, U+2029),
+  the deprecated format characters U+206A to U+206F and the tag characters and variation selectors supplement
+  (U+E0000 to U+E0FFF), which display differently from what they contain. This applies to tables,
+  detail views, CSV and the escaping of `--json` output. ([#106](https://github.com/Hodeitek/hodeishield-cli/issues/106))
+- CSV output now also defuses a field whose first character after any leading whitespace is `=`,
+  `+`, `-` or `@`, or one of their full-width forms (for example `" =1+1"`, or a no-break space
+  before `=cmd`). It decides on the text as it is written, because some spreadsheet applications
+  trim the whitespace before evaluating the cell. Numbers are still written as they are.
+  ([#106](https://github.com/Hodeitek/hodeishield-cli/issues/106))
+- `install.sh` now looks up the latest release over HTTPS only, with TLS 1.2 or newer, as the
+  download already did, so a redirect cannot lead that lookup to another protocol.
+  ([#106](https://github.com/Hodeitek/hodeishield-cli/issues/106))
 - `hodeishield login` now checks that the system keychain can keep a session before it opens the
   browser or shows a device code, and stops there with the usual pointer to API keys. If saving the
   session still fails after the app has issued tokens, the CLI revokes the refresh token and then

@@ -18,7 +18,20 @@ pub fn clean(text: &str) -> String {
 }
 
 /// Control characters (C0, DEL, C1) and the invisible or direction-changing format characters that
-/// can make text display as something it is not.
+/// can make text display as something it is not:
+///
+/// - U+00AD, U+061C, U+180E, U+200B..U+200F, U+202A..U+202E, U+2060..U+2064, U+2066..U+2069,
+///   U+FEFF and U+FFF9..U+FFFB: soft hyphen, zero-width and direction marks and embeddings,
+///   isolates, the word joiner and invisible operators, the zero-width no-break space and the
+///   interlinear annotation anchors, which hide text or reorder it.
+/// - U+2028 and U+2029: the line and paragraph separators, which some terminals and viewers treat
+///   as a line break although `\n` is what the caller checked for.
+/// - U+206A..U+206F: the deprecated format characters (symmetric swapping, Arabic shaping, digit
+///   shapes), which are invisible and which bidi-aware renderers still act on. With U+2066..U+2069
+///   they form one range; U+2065 is unassigned and stays out.
+/// - U+E0000..U+E0FFF: the tag characters and the variation selectors supplement (U+E0100..U+E01EF)
+///   inside the invisible block, which can carry hidden text. The variation selectors U+FE00..U+FE0F
+///   are left alone on purpose: U+FE0F selects the emoji presentation of visible text.
 fn is_unsafe(c: char) -> bool {
     c.is_control()
         || matches!(
@@ -27,11 +40,14 @@ fn is_unsafe(c: char) -> bool {
                 | '\u{061c}'
                 | '\u{180e}'
                 | '\u{200b}'..='\u{200f}'
+                | '\u{2028}'
+                | '\u{2029}'
                 | '\u{202a}'..='\u{202e}'
                 | '\u{2060}'..='\u{2064}'
-                | '\u{2066}'..='\u{2069}'
+                | '\u{2066}'..='\u{206f}'
                 | '\u{feff}'
                 | '\u{fff9}'..='\u{fffb}'
+                | '\u{e0000}'..='\u{e0fff}'
         )
 }
 
@@ -158,7 +174,7 @@ pub fn print_csv(out: &mut dyn Write, items: &[Value]) -> std::io::Result<()> {
     if columns.is_empty() {
         return Ok(());
     }
-    let header: Vec<String> = columns.iter().map(|c| csv_field(&defuse(c))).collect();
+    let header: Vec<String> = columns.iter().map(|c| csv_field(&csv_text(c))).collect();
     write!(out, "{}\r\n", header.join(","))?;
     for item in items {
         let record: Vec<String> = columns
@@ -177,26 +193,15 @@ fn csv_cell(value: Option<&Value>) -> String {
         None | Some(Value::Null) => String::new(),
         Some(Value::Number(n)) => n.to_string(),
         Some(Value::Bool(b)) => b.to_string(),
-        Some(Value::String(s)) => defuse(s),
-        Some(other) => defuse(&other.to_string()),
+        Some(Value::String(s)) => csv_text(s),
+        Some(other) => csv_text(&other.to_string()),
     }
 }
 
-/// A spreadsheet runs a cell that starts with `=`, `+`, `-` or `@` (and, in some, a tab or carriage
-/// return) as a formula; a leading `'` makes it text (CWE-1236). Numbers never pass through here, so
-/// `-5` stays a number.
-fn defuse(text: &str) -> String {
-    if text.starts_with(['=', '+', '-', '@', '\t', '\r']) {
-        format!("'{text}")
-    } else {
-        text.to_owned()
-    }
-}
-
-/// One RFC 4180 field: quoted when it holds a comma, a quote, a line break or a leading or trailing
-/// space, with quotes doubled. Tabs and line breaks are kept; every other character [`clean`]
-/// replaces is replaced here too, as the file may well be printed to a terminal.
-fn csv_field(text: &str) -> String {
+/// Text for a CSV field, in the form it will be written: every character [`clean`] replaces is
+/// replaced here too (tabs and line breaks are kept), as the file may well be printed to a terminal,
+/// and only then is the result checked by [`defuse`], so the decision is made on what is written.
+fn csv_text(text: &str) -> String {
     let text: String = text
         .chars()
         .map(|c| {
@@ -207,10 +212,36 @@ fn csv_field(text: &str) -> String {
             }
         })
         .collect();
+    defuse(&text)
+}
+
+/// A spreadsheet runs a cell whose first character is `=`, `+`, `-` or `@` (and, in some, a tab or
+/// carriage return) as a formula, and some trim leading whitespace first, so the first character
+/// after any Unicode whitespace (spaces, no-break space, line breaks, …) counts too, as do the
+/// full-width forms `＝`, `＋`, `－` and `＠`, which some applications fold to the ASCII ones. A
+/// leading `'` makes the cell text (CWE-1236). Numbers never pass through here, so `-5` stays a
+/// number.
+fn defuse(text: &str) -> String {
+    let first = text.trim_start_matches(char::is_whitespace).chars().next();
+    if text.starts_with(['\t', '\r'])
+        || matches!(
+            first,
+            Some('=' | '+' | '-' | '@' | '\u{ff1d}' | '\u{ff0b}' | '\u{ff0d}' | '\u{ff20}')
+        )
+    {
+        format!("'{text}")
+    } else {
+        text.to_owned()
+    }
+}
+
+/// One RFC 4180 field: quoted when it holds a comma, a quote, a line break or a leading or trailing
+/// space, with quotes doubled.
+fn csv_field(text: &str) -> String {
     if text.contains([',', '"', '\r', '\n']) || text.starts_with(' ') || text.ends_with(' ') {
         format!("\"{}\"", text.replace('"', "\"\""))
     } else {
-        text
+        text.to_owned()
     }
 }
 
@@ -258,11 +289,48 @@ mod tests {
     }
 
     #[test]
+    fn separators_format_characters_and_tags_are_replaced() {
+        for c in [
+            '\u{2028}',
+            '\u{2029}',
+            '\u{206a}',
+            '\u{206f}',
+            '\u{feff}',
+            '\u{fff9}',
+            '\u{fffa}',
+            '\u{fffb}',
+            '\u{e0000}',
+            '\u{e0041}',
+            '\u{e007f}',
+            '\u{e0100}',
+            '\u{e01ef}',
+            '\u{e0fff}',
+        ] {
+            assert_eq!(
+                clean(&format!("a{c}b")),
+                "a\u{fffd}b",
+                "U+{:04X}",
+                u32::from(c)
+            );
+        }
+        // The neighbours of the ranges are visible or unassigned text and stay as they are.
+        let kept = "\u{2027}\u{202f}\u{2065}\u{2070}\u{fe0f}\u{e1000}";
+        assert_eq!(clean(kept), kept);
+        assert_eq!(
+            clean("caf\u{e9} \u{1f600} \u{4e2d}"),
+            "caf\u{e9} \u{1f600} \u{4e2d}"
+        );
+    }
+
+    #[test]
     fn json_escapes_what_could_drive_the_terminal_without_changing_the_value() {
-        let value = serde_json::json!({"name": "a\u{9b}31m\u{7f}\u{202e}b\u{1b}"});
+        let value = serde_json::json!({"name": "a\u{9b}31m\u{7f}\u{202e}b\u{1b}\u{e0041}\u{2028}"});
         let mut out = Vec::new();
         print_json(&mut out, &value).expect("print");
         let text = String::from_utf8(out).expect("utf8");
+        // A tag character outside the BMP is escaped as a surrogate pair.
+        assert!(text.contains("\\udb40\\udc41"), "{text:?}");
+        assert!(text.contains("\\u2028"), "{text:?}");
         assert!(text.chars().all(|c| !is_unsafe(c) || c == '\n'), "{text:?}");
         let back: Value = serde_json::from_str(&text).expect("still JSON");
         assert_eq!(back, value);
@@ -364,6 +432,23 @@ mod tests {
             "'=1+1,'+1,'-1,'@SUM(A1),'\tx,\"'\rx\",-5,\"[\"\"=x\"\"]\",a=b\r\n"
         );
         assert!(csv(&serde_json::json!([{"=bad": 1}])).starts_with("'=bad\r\n"));
+        assert!(csv(&serde_json::json!([{" =bad": 1}])).starts_with("' =bad\r\n"));
+        assert!(csv(&serde_json::json!([{"\u{a0}@bad": 1}])).starts_with("'\u{a0}@bad\r\n"));
+    }
+
+    #[test]
+    fn csv_defuses_formulas_after_leading_whitespace() {
+        let text = csv(&serde_json::json!([{
+            "space": " =1+1", "spaces": "  @SUM(A1)", "nbsp": "\u{a0}=cmd", "em": "\u{2003}+1",
+            "nel": "\u{85}-1", "zw": "\u{200b}=x", "wide": " \u{ff1d}1", "wideplus": "\u{ff0b}1",
+            "widedash": "\u{ff0d}1", "wideat": "\u{3000}\u{ff20}x", "lf": "\n=x", "mixed": " \t -2",
+            "plain": " a=b", "only": "   ", "dash": " - note", "ok": "a =b"
+        }]));
+        let record = text.split_once("\r\n").expect("header").1;
+        assert_eq!(
+            record,
+            "' =1+1,'  @SUM(A1),'\u{a0}=cmd,'\u{2003}+1,\u{fffd}-1,\u{fffd}=x,' \u{ff1d}1,'\u{ff0b}1,'\u{ff0d}1,'\u{3000}\u{ff20}x,\"'\n=x\",' \t -2,\" a=b\",\"   \",' - note,a =b\r\n"
+        );
     }
 
     #[test]
