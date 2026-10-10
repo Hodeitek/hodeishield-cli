@@ -39,13 +39,23 @@ pub fn credential_for_api(
     settings: &Settings,
     store: &dyn TokenStore,
 ) -> Result<(SecretString, CredentialSource)> {
-    if let Some(key) = api_key_from_env() {
+    credential_with(api_key_from_env(), settings, store)
+}
+
+/// [`credential_for_api`] with the environment's API key given, so it can be tested without
+/// touching the process environment. With a key, the store is not read.
+fn credential_with(
+    env_key: Option<SecretString>,
+    settings: &Settings,
+    store: &dyn TokenStore,
+) -> Result<(SecretString, CredentialSource)> {
+    if let Some(key) = env_key {
         return Ok((key, CredentialSource::ApiKey));
     }
     let token = match current_token(settings, store) {
         Ok(Some(token)) => token,
         Ok(None) => return Err(not_signed_in(settings)),
-        Err(failure) => return Err(explain_store_failure(failure, settings)),
+        Err(failure) => return Err(explain_store_failure(failure)),
     };
     // A sign-in token only goes to the API it was obtained for: a changed profile, environment or
     // `--api-url` must not be able to send it elsewhere.
@@ -81,19 +91,30 @@ pub fn not_signed_in(settings: &Settings) -> Failure {
     ))
 }
 
-/// Turns a raw store failure into words about what to do, when the underlying reason is that this
-/// machine has no keychain to sign in to. Any other store failure (a corrupt entry, say) passes
-/// through unchanged: it already says what happened.
-pub fn explain_store_failure(failure: Failure, settings: &Settings) -> Failure {
-    if failure.message.starts_with(store::KEYCHAIN_UNAVAILABLE) {
-        not_signed_in(settings).hint(format!(
-            "Set a tenant API key: export {API_KEY_ENV}=<key>. Signing in is not possible on \
-             this machine: {}.",
-            failure.message
-        ))
+/// Turns a store failure into words about what to do, when the underlying reason is that the
+/// keychain cannot be reached (none on this machine, or not from this session, as over SSH on
+/// Windows): it is "not authenticated" (exit code 3), with a pointer to the API key. Any other
+/// store failure (a corrupt entry, say) passes through unchanged: it already says what happened.
+pub fn explain_store_failure(failure: Failure) -> Failure {
+    let Some(rest) = failure.message.strip_prefix(store::KEYCHAIN_UNAVAILABLE) else {
+        return failure;
+    };
+    let reason = rest.trim_start_matches(':').trim();
+    let detail = if reason.is_empty() {
+        String::new()
     } else {
-        failure
-    }
+        format!(": {reason}")
+    };
+    Failure::new(
+        Kind::NotAuthenticated,
+        format!("The system keychain is not available in this session{detail}"),
+    )
+    .hint(match failure.hint {
+        // Keep what the store said about this platform (allow the Keychain prompt, start a Secret
+        // Service...), then the way out that works in a remote session.
+        Some(platform) => format!("{platform} In remote or automated sessions, set {API_KEY_ENV}."),
+        None => format!("In remote or automated sessions, set {API_KEY_ENV}."),
+    })
 }
 
 /// The profile's sign-in token, refreshed when needed. `None` when not signed in.
@@ -460,5 +481,118 @@ mod tests {
             store.load("default").expect("load").is_none(),
             "the dead token is removed"
         );
+    }
+
+    /// A store whose answer is fixed; with `panic_on_use` it proves the store is never touched.
+    struct FixedStore {
+        load_error: std::sync::Mutex<Option<keyring_core::Error>>,
+        panic_on_use: bool,
+    }
+
+    impl TokenStore for FixedStore {
+        fn load(&self, _profile: &str) -> Result<Option<StoredToken>> {
+            assert!(!self.panic_on_use, "the store must not be read");
+            match self.load_error.lock().expect("lock").take() {
+                Some(error) => Err(store::read_failure(error)),
+                None => Ok(None),
+            }
+        }
+        fn save(&self, _: &str, _: &StoredToken) -> Result<()> {
+            unreachable!()
+        }
+        fn delete(&self, _: &str) -> Result<bool> {
+            unreachable!()
+        }
+        fn check_available(&self, _: &str) -> Result<()> {
+            unreachable!()
+        }
+    }
+
+    fn io_error() -> Box<dyn std::error::Error + Send + Sync> {
+        "Windows ERROR_NO_SUCH_LOGON_SESSION".into()
+    }
+
+    fn assert_keychain_unreachable(error: keyring_core::Error) {
+        let store = FixedStore {
+            load_error: std::sync::Mutex::new(Some(error)),
+            panic_on_use: false,
+        };
+        let err = credential_with(None, &settings("https://app.example.test"), &store)
+            .expect_err("no credential");
+        assert_eq!(err.kind, Kind::NotAuthenticated);
+        assert!(
+            err.message
+                .contains("keychain is not available in this session"),
+            "{}",
+            err.message
+        );
+        let hint = err.hint.expect("hint");
+        // The platform's own advice stays, followed by the remote-session one.
+        assert!(
+            hint.starts_with("Sign-in tokens are only kept in the system keychain."),
+            "{hint}"
+        );
+        assert!(
+            hint.ends_with(" In remote or automated sessions, set HODEISHIELD_API_KEY."),
+            "{hint}"
+        );
+    }
+
+    #[test]
+    fn an_unreachable_keychain_is_not_authenticated_not_a_raw_error() {
+        assert_keychain_unreachable(keyring_core::Error::NoStorageAccess(io_error()));
+    }
+
+    #[test]
+    fn a_platform_failure_reading_the_keychain_is_the_same() {
+        assert_keychain_unreachable(keyring_core::Error::PlatformFailure(io_error()));
+    }
+
+    #[test]
+    fn another_store_failure_is_left_as_it_is() {
+        let failure = explain_store_failure(Failure::general("system keychain: broken entry"));
+        assert_eq!(failure.kind, Kind::General);
+        assert_eq!(failure.message, "system keychain: broken entry");
+    }
+
+    #[test]
+    fn a_failure_without_a_platform_hint_gets_only_the_api_key_one() {
+        let failure = explain_store_failure(Failure::general(format!(
+            "{}: no Secret Service",
+            store::KEYCHAIN_UNAVAILABLE
+        )));
+        assert_eq!(failure.kind, Kind::NotAuthenticated);
+        assert_eq!(
+            failure.hint.as_deref(),
+            Some("In remote or automated sessions, set HODEISHIELD_API_KEY.")
+        );
+    }
+
+    #[test]
+    fn another_keyring_error_stays_a_general_keychain_failure() {
+        let failure = store::read_failure(keyring_core::Error::BadEncoding(vec![0xff]));
+        assert_eq!(failure.kind, Kind::General);
+        assert!(
+            failure.message.starts_with("system keychain:"),
+            "{}",
+            failure.message
+        );
+        assert_eq!(explain_store_failure(failure).kind, Kind::General);
+    }
+
+    #[test]
+    fn an_api_key_in_the_environment_never_touches_the_store() {
+        let store = FixedStore {
+            load_error: std::sync::Mutex::new(None),
+            panic_on_use: true,
+        };
+        let (key, source) = credential_with(
+            Some(SecretString::from("key_1")),
+            &settings("https://app.example.test"),
+            &store,
+        )
+        .expect("key used");
+        assert_eq!(key.expose_secret(), "key_1");
+        assert!(matches!(source, CredentialSource::ApiKey));
     }
 }

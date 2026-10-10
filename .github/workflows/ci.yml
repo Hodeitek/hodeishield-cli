@@ -107,6 +107,38 @@ jobs:
       - name: cargo test
         run: cargo test --workspace --locked
 
+      # The Visual C++ runtime is not part of Windows: the executable must not import it (see
+      # .cargo/config.toml).
+      - name: Build the executable (Windows)
+        if: runner.os == 'Windows'
+        run: cargo build --locked -p hodeishield-cli
+
+      - name: Check the executable needs no Visual C++ runtime
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+          if (-not (Test-Path -LiteralPath $vswhere)) { throw "vswhere.exe not found at $vswhere" }
+          $dumpbin = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -find "VC\Tools\MSVC\**\bin\Hostx64\x64\dumpbin.exe" | Select-Object -First 1
+          if (-not $dumpbin -or -not (Test-Path -LiteralPath $dumpbin)) { throw "dumpbin.exe not found through vswhere" }
+          $exes = @(Get-ChildItem -LiteralPath target/debug -File -Filter hodeishield.exe)
+          if ($exes.Count -eq 0) { throw "No .exe found to inspect in target/debug" }
+          $failed = $false
+          foreach ($exe in $exes) {
+            $output = & $dumpbin /nologo /dependents $exe.FullName
+            if ($LASTEXITCODE -ne 0) { throw "dumpbin failed on $($exe.FullName)" }
+            $imports = @($output | ForEach-Object { $_.Trim() } | Where-Object { $_ -match '^\S+\.dll$' })
+            if ($imports.Count -eq 0) { throw "No imports parsed from $($exe.FullName)" }
+            Write-Host "$($exe.Name): $($imports -join ', ')"
+            $runtime = @($imports | Where-Object { $_ -match '^(VCRUNTIME|MSVCP|CONCRT|VCOMP|VCCORLIB|MSVCR\d)' })
+            if ($runtime.Count -gt 0) {
+              Write-Host "::error::$($exe.Name) imports the Visual C++ runtime ($($runtime -join ', ')), which Windows does not include."
+              $failed = $true
+            }
+          }
+          if ($failed) { exit 1 }
+
   deny:
     name: deny
     runs-on: ubuntu-latest

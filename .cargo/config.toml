@@ -1,2 +1,16 @@
 [alias]
 xtask = "run --quiet --package xtask --"
+
+# Link the C runtime statically on Windows, so the executable does not need the Visual C++
+# Redistributable (VCRUNTIME140.dll), which is not part of Windows.
+#
+# Keep this in step with the import check in .github/workflows (ci.yml and release.yml). The
+# RUSTFLAGS, CARGO_ENCODED_RUSTFLAGS and CARGO_TARGET_<TRIPLE>_RUSTFLAGS environment variables
+# replace these flags instead of adding to them, so anyone who sets one of them must repeat
+# "-C target-feature=+crt-static" for these targets; the check fails the build if the
+# redistributable is needed again.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
