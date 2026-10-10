@@ -148,9 +148,15 @@ fn fetch_latest() -> Result<String, String> {
     }
     let body = hodeishield_api::read_body(response, MAX_BODY_BYTES).map_err(|e| e.to_string())?;
     let release: Release = serde_json::from_slice(&body).map_err(|e| format!("bad answer: {e}"))?;
-    parse_version(&release.tag_name)
-        .map(|_| release.tag_name.trim_start_matches('v').to_owned())
+    release_version(&release.tag_name)
         .ok_or_else(|| "the release tag is not a plain version".to_owned())
+}
+
+/// The version a release tag stands for, as `major.minor.patch`. The tag comes from the network and
+/// is printed, so it is rebuilt from the parsed numbers: build metadata after a `+` is dropped by
+/// the parser and must not reach the terminal.
+fn release_version(tag: &str) -> Option<String> {
+    parse_version(tag).map(|(major, minor, patch)| format!("{major}.{minor}.{patch}"))
 }
 
 /// `1.2.3` or `v1.2.3` as numbers. Pre-releases (`1.2.3-rc.1`) are not versions to announce, so
@@ -191,6 +197,16 @@ fn write_cache(path: &Path, cache: &Cache) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_printed_version_is_rebuilt_from_the_numbers() {
+        assert_eq!(release_version("v1.2.3").as_deref(), Some("1.2.3"));
+        assert_eq!(
+            release_version("v9.9.9+\u{9b}2J\u{202e}\u{1b}[31m").as_deref(),
+            Some("9.9.9")
+        );
+        assert_eq!(release_version("v1.2.3-rc.1"), None);
+    }
 
     #[test]
     fn versions_compare_as_numbers() {
