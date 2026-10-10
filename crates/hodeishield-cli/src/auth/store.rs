@@ -163,6 +163,19 @@ fn keychain_failure(error: keyring_core::Error) -> Failure {
     Failure::general(format!("system keychain: {error}"))
 }
 
+/// The failure for a keychain read that did not find an entry. When the platform store cannot be
+/// reached from this session (Windows ERROR_NO_SUCH_LOGON_SESSION over SSH, no Secret Service on
+/// Linux), it is worded as an unavailable keychain, which `explain_store_failure` turns into "not
+/// authenticated"; anything else is a plain keychain failure.
+pub(crate) fn read_failure(error: keyring_core::Error) -> Failure {
+    match error {
+        keyring_core::Error::PlatformFailure(_) | keyring_core::Error::NoStorageAccess(_) => {
+            unavailable(&error.to_string())
+        }
+        other => keychain_failure(other),
+    }
+}
+
 impl TokenStore for Keychain {
     fn load(&self, profile: &str) -> Result<Option<StoredToken>> {
         let entry = entry(profile)?;
@@ -175,7 +188,7 @@ impl TokenStore for Keychain {
                 Ok(Some(StoredToken::from_payload(payload)))
             }
             Err(keyring_core::Error::NoEntry) => Ok(None),
-            Err(e) => Err(keychain_failure(e)),
+            Err(e) => Err(read_failure(e)),
         }
     }
 

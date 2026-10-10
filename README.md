@@ -299,6 +299,11 @@ Service — GNOME Keyring, KWallet — on Linux) and refreshed automatically, al
 access token early. Without a keychain, signing in is refused rather than falling back to a file: use
 an API key there.
 
+The keychain can also be out of reach in a session that has one on the machine, such as an SSH or
+other remote logon on Windows. With no API key set, commands then stop with exit code 3 and say that
+the system keychain is not available in this session; set `HODEISHIELD_API_KEY` in remote or
+automated sessions. With the key set, the keychain is not read at all.
+
 To cut the CLI's access from elsewhere, revoke it in [the app](https://app.hodeishield.com) under
 **Account → Application access**. Signing out of the web app does not cut it.
 
@@ -362,7 +367,7 @@ hodeishield vendors list --all --csv > vendors.csv
 | 0 | Success |
 | 1 | Error (invalid input, configuration, unexpected answer) |
 | 2 | Invalid command line |
-| 3 | Not authenticated: no credential, or the API rejected it |
+| 3 | Not authenticated: no credential (also when the system keychain cannot be reached in this session), or the API rejected it |
 | 4 | The credential lacks the scope the command needs |
 | 5 | Not found (or not in your organisation) |
 | 6 | Rate limit exhausted (the CLI already retried short waits) |

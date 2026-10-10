@@ -20,6 +20,12 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 - `install.sh` now looks up the latest release over HTTPS only, with TLS 1.2 or newer, as the
   download already did, so a redirect cannot lead that lookup to another protocol.
   ([#106](https://github.com/Hodeitek/hodeishield-cli/issues/106))
+- In a session where the system keychain cannot be reached (a Windows SSH or other network logon,
+  or a Secret Service on Linux that is locked or does not answer) and no API key is set, commands
+  such as `whoami` no longer fail with a raw platform error and exit code 1. They now say that the system keychain is not available in
+  this session, suggest `HODEISHIELD_API_KEY` for remote and automated sessions, and exit with 3,
+  the code for "not authenticated". With the key set, nothing changes.
+  ([#111](https://github.com/Hodeitek/hodeishield-cli/issues/111))
 - The Windows executable no longer needs the Visual C++ Redistributable. It now carries its C
   runtime, and the build checks that no shipped `.exe` imports the Visual C++ runtime (`VCRUNTIME*`,
   `MSVCP*`, `CONCRT*` and the like). This applies to the published executables: a build with

@@ -192,16 +192,33 @@ fn logout_with(settings: &crate::config::Settings, store: &dyn auth::TokenStore)
 
 pub fn whoami(ctx: &Context, out: &mut dyn Write) -> Result<()> {
     let settings = ctx.settings()?;
+    whoami_with(
+        &settings,
+        auth::api_key_from_env().is_some(),
+        ctx.store.as_ref(),
+        ctx.json,
+        out,
+    )
+}
+
+/// `whoami` with the settings and whether an API key is set given, so it can be tested without the
+/// process environment. With a key, the store is not read.
+fn whoami_with(
+    settings: &crate::config::Settings,
+    has_api_key: bool,
+    store: &dyn auth::TokenStore,
+    json: bool,
+    out: &mut dyn Write,
+) -> Result<()> {
     let mut info = Map::new();
     info.insert("profile".into(), json!(settings.profile));
     info.insert("api_url".into(), json!(settings.api_url.as_str()));
     info.insert("app_url".into(), json!(settings.app_url.as_str()));
 
-    let source = if auth::api_key_from_env().is_some() {
+    let source = if has_api_key {
         Some(CredentialSource::ApiKey)
     } else {
-        let existing = auth::current_token(&settings, ctx.store.as_ref())
-            .map_err(|failure| auth::explain_store_failure(failure, &settings))?;
+        let existing = auth::current_token(settings, store).map_err(auth::explain_store_failure)?;
         match existing {
             Some(token) => {
                 info.insert("issuer".into(), json!(token.issuer));
@@ -235,7 +252,7 @@ pub fn whoami(ctx: &Context, out: &mut dyn Write) -> Result<()> {
         })),
     );
 
-    if ctx.json {
+    if json {
         print_json(out, &Value::Object(info))?;
     } else {
         let mut rows = vec![
@@ -266,7 +283,7 @@ pub fn whoami(ctx: &Context, out: &mut dyn Write) -> Result<()> {
     }
     match source {
         Some(_) => Ok(()),
-        None => Err(auth::not_signed_in(&settings)),
+        None => Err(auth::not_signed_in(settings)),
     }
 }
 
@@ -628,6 +645,59 @@ mod tests {
             env,
         )
         .expect("settings")
+    }
+
+    /// A store whose keychain cannot be reached from this session; reading is the only thing it does.
+    struct UnreachableStore;
+
+    impl TokenStore for UnreachableStore {
+        fn load(&self, _profile: &str) -> Result<Option<StoredToken>> {
+            Err(crate::auth::store::read_failure(
+                keyring_core::Error::NoStorageAccess("Windows ERROR_NO_SUCH_LOGON_SESSION".into()),
+            ))
+        }
+        fn save(&self, _: &str, _: &StoredToken) -> Result<()> {
+            unreachable!()
+        }
+        fn delete(&self, _: &str) -> Result<bool> {
+            unreachable!()
+        }
+        fn check_available(&self, _: &str) -> Result<()> {
+            unreachable!()
+        }
+    }
+
+    #[test]
+    fn whoami_with_an_unreachable_keychain_is_not_authenticated() {
+        let (api, app) = (mockito::Server::new(), mockito::Server::new());
+        let settings = settings_for(&api, &app);
+        let mut out = Vec::new();
+        let err = whoami_with(&settings, false, &UnreachableStore, false, &mut out)
+            .expect_err("no credential");
+        assert_eq!(err.kind, crate::failure::Kind::NotAuthenticated);
+        assert!(
+            err.message
+                .starts_with("The system keychain is not available in this session"),
+            "{}",
+            err.message
+        );
+        assert!(
+            err.hint.as_deref().is_some_and(
+                |h| h.ends_with("In remote or automated sessions, set HODEISHIELD_API_KEY.")
+            ),
+            "{:?}",
+            err.hint
+        );
+        assert!(out.is_empty(), "nothing is printed before the failure");
+    }
+
+    #[test]
+    fn whoami_with_an_api_key_does_not_read_the_store() {
+        let (api, app) = (mockito::Server::new(), mockito::Server::new());
+        let settings = settings_for(&api, &app);
+        let mut out = Vec::new();
+        whoami_with(&settings, true, &UnreachableStore, true, &mut out).expect("key set");
+        assert!(String::from_utf8(out).expect("utf8").contains("api_key"));
     }
 
     const DEVICE: LoginArgs = LoginArgs {
