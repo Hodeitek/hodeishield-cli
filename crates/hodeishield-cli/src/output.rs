@@ -174,7 +174,7 @@ pub fn print_csv(out: &mut dyn Write, items: &[Value]) -> std::io::Result<()> {
     if columns.is_empty() {
         return Ok(());
     }
-    let header: Vec<String> = columns.iter().map(|c| csv_field(&defuse(c))).collect();
+    let header: Vec<String> = columns.iter().map(|c| csv_field(&csv_text(c))).collect();
     write!(out, "{}\r\n", header.join(","))?;
     for item in items {
         let record: Vec<String> = columns
@@ -193,26 +193,15 @@ fn csv_cell(value: Option<&Value>) -> String {
         None | Some(Value::Null) => String::new(),
         Some(Value::Number(n)) => n.to_string(),
         Some(Value::Bool(b)) => b.to_string(),
-        Some(Value::String(s)) => defuse(s),
-        Some(other) => defuse(&other.to_string()),
+        Some(Value::String(s)) => csv_text(s),
+        Some(other) => csv_text(&other.to_string()),
     }
 }
 
-/// A spreadsheet runs a cell that starts with `=`, `+`, `-` or `@` (and, in some, a tab or carriage
-/// return) as a formula; a leading `'` makes it text (CWE-1236). Numbers never pass through here, so
-/// `-5` stays a number.
-fn defuse(text: &str) -> String {
-    if text.starts_with(['=', '+', '-', '@', '\t', '\r']) {
-        format!("'{text}")
-    } else {
-        text.to_owned()
-    }
-}
-
-/// One RFC 4180 field: quoted when it holds a comma, a quote, a line break or a leading or trailing
-/// space, with quotes doubled. Tabs and line breaks are kept; every other character [`clean`]
-/// replaces is replaced here too, as the file may well be printed to a terminal.
-fn csv_field(text: &str) -> String {
+/// Text for a CSV field, in the form it will be written: every character [`clean`] replaces is
+/// replaced here too (tabs and line breaks are kept), as the file may well be printed to a terminal,
+/// and only then is the result checked by [`defuse`], so the decision is made on what is written.
+fn csv_text(text: &str) -> String {
     let text: String = text
         .chars()
         .map(|c| {
@@ -223,10 +212,36 @@ fn csv_field(text: &str) -> String {
             }
         })
         .collect();
+    defuse(&text)
+}
+
+/// A spreadsheet runs a cell whose first character is `=`, `+`, `-` or `@` (and, in some, a tab or
+/// carriage return) as a formula, and some trim leading whitespace first, so the first character
+/// after any Unicode whitespace (spaces, no-break space, line breaks, …) counts too, as do the
+/// full-width forms `＝`, `＋`, `－` and `＠`, which some applications fold to the ASCII ones. A
+/// leading `'` makes the cell text (CWE-1236). Numbers never pass through here, so `-5` stays a
+/// number.
+fn defuse(text: &str) -> String {
+    let first = text.trim_start_matches(char::is_whitespace).chars().next();
+    if text.starts_with(['\t', '\r'])
+        || matches!(
+            first,
+            Some('=' | '+' | '-' | '@' | '\u{ff1d}' | '\u{ff0b}' | '\u{ff0d}' | '\u{ff20}')
+        )
+    {
+        format!("'{text}")
+    } else {
+        text.to_owned()
+    }
+}
+
+/// One RFC 4180 field: quoted when it holds a comma, a quote, a line break or a leading or trailing
+/// space, with quotes doubled.
+fn csv_field(text: &str) -> String {
     if text.contains([',', '"', '\r', '\n']) || text.starts_with(' ') || text.ends_with(' ') {
         format!("\"{}\"", text.replace('"', "\"\""))
     } else {
-        text
+        text.to_owned()
     }
 }
 
@@ -417,6 +432,23 @@ mod tests {
             "'=1+1,'+1,'-1,'@SUM(A1),'\tx,\"'\rx\",-5,\"[\"\"=x\"\"]\",a=b\r\n"
         );
         assert!(csv(&serde_json::json!([{"=bad": 1}])).starts_with("'=bad\r\n"));
+        assert!(csv(&serde_json::json!([{" =bad": 1}])).starts_with("' =bad\r\n"));
+        assert!(csv(&serde_json::json!([{"\u{a0}@bad": 1}])).starts_with("'\u{a0}@bad\r\n"));
+    }
+
+    #[test]
+    fn csv_defuses_formulas_after_leading_whitespace() {
+        let text = csv(&serde_json::json!([{
+            "space": " =1+1", "spaces": "  @SUM(A1)", "nbsp": "\u{a0}=cmd", "em": "\u{2003}+1",
+            "nel": "\u{85}-1", "zw": "\u{200b}=x", "wide": " \u{ff1d}1", "wideplus": "\u{ff0b}1",
+            "widedash": "\u{ff0d}1", "wideat": "\u{3000}\u{ff20}x", "lf": "\n=x", "mixed": " \t -2",
+            "plain": " a=b", "only": "   ", "dash": " - note", "ok": "a =b"
+        }]));
+        let record = text.split_once("\r\n").expect("header").1;
+        assert_eq!(
+            record,
+            "' =1+1,'  @SUM(A1),'\u{a0}=cmd,'\u{2003}+1,\u{fffd}-1,\u{fffd}=x,' \u{ff1d}1,'\u{ff0b}1,'\u{ff0d}1,'\u{3000}\u{ff20}x,\"'\n=x\",' \t -2,\" a=b\",\"   \",' - note,a =b\r\n"
+        );
     }
 
     #[test]
