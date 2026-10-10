@@ -6,6 +6,13 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ## [Unreleased]
 
+### Added
+
+- Signed APT and DNF repositories at `packages.hodeishield.com` for x86_64 and arm64, so `apt` and
+  `dnf` install and upgrade the CLI. The repositories are signed with a key whose fingerprint is
+  `@@PACKAGES_KEY_FINGERPRINT@@`; the README has the setup steps for Debian and Ubuntu, and for Fedora,
+  RHEL, Rocky Linux and AlmaLinux (DNF 4 and 5).
+
 ### Fixed
 
 - Terminal output cleaning now also replaces the line and paragraph separators (U+2028, U+2029),

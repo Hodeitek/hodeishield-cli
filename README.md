@@ -83,17 +83,81 @@ waiting for review by the winget community repository; it is not available yet.
 
 ### Debian, Ubuntu, Fedora, RHEL and other Linux distributions
 
-From 0.3.0, each release also publishes `.deb` and `.rpm` packages for x86_64 and arm64. They install `/usr/bin/hodeishield`, the man pages and the bash, zsh and fish completions.
-Verify the package as in the next section (it has its own `.sigstore.json` and is listed in
-`SHA256SUMS`), then:
+Signed APT and DNF repositories at `packages.hodeishield.com` provide `.deb` and `.rpm` packages for
+x86_64 and arm64, and your system's normal upgrades keep the CLI current. The packages install
+`/usr/bin/hodeishield`, the man pages and the bash, zsh and fish completions.
+
+The repositories are signed with this key (RSA 4096); check its fingerprint before trusting it:
+
+```text
+@@PACKAGES_KEY_FINGERPRINT@@
+```
+
+#### Debian, Ubuntu (APT)
+
+```sh
+sudo install -d -m 0755 /etc/apt/keyrings
+curl -fsSL https://packages.hodeishield.com/gpg.key -o hodeishield.asc
+gpg --show-keys --with-fingerprint hodeishield.asc     # must show the fingerprint above
+sudo install -m 0644 hodeishield.asc /etc/apt/keyrings/hodeishield.asc && rm hodeishield.asc
+echo "deb [signed-by=/etc/apt/keyrings/hodeishield.asc] https://packages.hodeishield.com/apt stable main" \
+  | sudo tee /etc/apt/sources.list.d/hodeishield.list
+sudo apt update && sudo apt install hodeishield
+```
+
+Do not install the key into `/etc/apt/trusted.gpg.d`: with `signed-by`, it is trusted for this repository
+only. Upgrade with `sudo apt update && sudo apt upgrade` (or `sudo apt install --only-upgrade hodeishield`).
+
+#### Fedora, RHEL, Rocky Linux, AlmaLinux (DNF)
+
+Add the repository with the `.repo` file, which turns on signature checking of both the packages and the
+repository metadata (`gpgcheck=1`, `repo_gpgcheck=1`). The command depends on your DNF version:
+
+```sh
+# DNF 5 (Fedora 41 and later)
+sudo dnf config-manager addrepo --from-repofile=https://packages.hodeishield.com/rpm/hodeishield.repo
+
+# DNF 4 (RHEL, Rocky Linux and AlmaLinux 8 and 9, older Fedora; needs the dnf-plugins-core package)
+sudo dnf config-manager --add-repo https://packages.hodeishield.com/rpm/hodeishield.repo
+
+# Either one, without the plugin
+sudo curl -fsSLo /etc/yum.repos.d/hodeishield.repo https://packages.hodeishield.com/rpm/hodeishield.repo
+```
+
+Then install. The first time, DNF shows the key and asks to import it: confirm only if the fingerprint
+is the one above.
+
+```sh
+sudo dnf install hodeishield
+```
+
+Upgrade with `sudo dnf upgrade hodeishield`. `sudo apt remove hodeishield` or
+`sudo dnf remove hodeishield` uninstalls it.
+
+#### When the repository key is renewed
+
+The signing key has an expiry date and is extended before it passes. The fingerprint stays the same, so
+only your copy of the public key needs refreshing. If `apt update` or `dnf` reports an expired key, run:
+
+```sh
+# Debian, Ubuntu: compare the fingerprint with the one above first (as in the install steps)
+curl -fsSL https://packages.hodeishield.com/gpg.key | sudo tee /etc/apt/keyrings/hodeishield.asc > /dev/null
+
+# Fedora, RHEL, Rocky Linux, AlmaLinux
+sudo rpm --import https://packages.hodeishield.com/gpg.key
+```
+
+#### A single package file
+
+Each release also attaches the `.deb` and `.rpm` packages (from 0.3.0). Verify the package as in the next
+section (it has its own `.sigstore.json` and is listed in `SHA256SUMS`), then:
 
 ```sh
 sudo apt install ./hodeishield_<version>-1_amd64.deb      # Debian, Ubuntu (arm64: _arm64.deb)
 sudo dnf install ./hodeishield-<version>-1.x86_64.rpm     # Fedora, RHEL (arm64: .aarch64.rpm)
 ```
 
-Upgrading is the same command with the newer package; `sudo apt remove hodeishield` or
-`sudo dnf remove hodeishield` uninstalls it.
+Upgrading is the same command with the newer package.
 
 ### Windows installer (MSI)
 
