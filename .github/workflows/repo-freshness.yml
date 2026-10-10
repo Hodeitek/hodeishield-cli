@@ -143,6 +143,10 @@ jobs:
               result=grace
               echo "::warning::The latest release is less than $GRACE_HOURS hours old and the repositories do not serve it yet; not treated as a failure."
               ;;
+            5)
+              result=warn
+              echo "::warning::The repository key, or its signing subkey, expires within 60 days; renew it (CONTRIBUTING.md)."
+              ;;
             *) result=fail ;;
           esac
           echo "result=$result" >> "$GITHUB_OUTPUT"
@@ -177,6 +181,29 @@ jobs:
 
           issue=$(gh issue list -R "$GITHUB_REPOSITORY" --label "$LABEL" --state open --json number --jq '.[0].number // empty')
           case ${RESULT:-fail} in
+            warn)
+              {
+                echo "The APT and DNF repositories at $BASE_URL are current, but the repository key or its signing subkey expires within 60 days."
+                echo
+                echo "Renew it before then and publish a release: see \"The repository signing key\" in CONTRIBUTING.md. Clients that still hold the old copy reject signatures made after the expiry."
+                echo
+                echo '```'
+                print_report
+                echo '```'
+                echo
+                echo "Run: $run_url"
+              } > "$RUNNER_TEMP/issue.md"
+              if [ -n "$issue" ]; then
+                gh issue comment "$issue" -R "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/issue.md"
+              else
+                gh label list -R "$GITHUB_REPOSITORY" --search "$LABEL" --json name --jq '.[].name' | grep -qx "$LABEL" ||
+                  gh label create "$LABEL" -R "$GITHUB_REPOSITORY" --color D93F0B \
+                    --description "The APT or DNF repository is not serving the latest release"
+                gh issue create -R "$GITHUB_REPOSITORY" --label "$LABEL" \
+                  --title "The repository signing key expires within 60 days" \
+                  --body-file "$RUNNER_TEMP/issue.md"
+              fi
+              ;;
             pass)
               if [ -n "$issue" ]; then
                 gh issue close "$issue" -R "$GITHUB_REPOSITORY" --reason completed \
@@ -210,7 +237,7 @@ jobs:
           esac
 
       - name: Fail if the check failed
-        if: "!cancelled() && steps.gate.outputs.active == 'true' && steps.check.outputs.result != 'pass' && steps.check.outputs.result != 'grace'"
+        if: "!cancelled() && steps.gate.outputs.active == 'true' && steps.check.outputs.result != 'pass' && steps.check.outputs.result != 'grace' && steps.check.outputs.result != 'warn'"
         run: |
           echo "::error::The APT and DNF repositories did not pass the freshness check; see the issue labelled repo-freshness."
           exit 1

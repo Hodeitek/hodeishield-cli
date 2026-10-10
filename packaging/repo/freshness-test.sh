@@ -12,6 +12,9 @@
 #
 #   freshness-test.sh
 #
+# The signature cases use throwaway keys made with gpg's faked system time: one whose signing subkey
+# has expired, one whose signing subkey is revoked, and two that expire within 60 days (a warning, 5).
+#
 # Needs curl, gpg, gpgv, gzip, python3 and the tools freshness.sh needs. The indexes are written by
 # hand in the structure that apt-ftparchive and createrepo_c produce (the repository builder's own
 # output is checked by build.sh when the repositories are published).
@@ -54,6 +57,45 @@ other_fpr=$(gpg --batch --with-colons --list-keys other@example.invalid | awk -F
 gpg --batch --quiet --armor --export "$other_fpr" > "$work/other.asc"
 signer=$repo_sub
 
+# gpg with a faked clock when $faked is set (a time as YYYYMMDDTHHMMSS), for keys that have to be
+# expired now but valid when they signed.
+faked=
+gpgt() {
+  if [ -n "$faked" ]; then gpg --faked-system-time "$faked" "$@"; else gpg "$@"; fi
+}
+# newkey <email> <time> <primary expiry> <subkey expiry>: a key made at <time> ("" for now).
+newkey() {
+  faked=$2
+  gpgt --batch --quiet --passphrase '' --quick-generate-key "Test <$1>" ed25519 cert "$3"
+  fpr=$(gpg --batch --with-colons --list-keys "$1" | awk -F: '$1 == "fpr" { print $10; exit }')
+  gpgt --batch --quiet --passphrase '' --quick-add-key "$fpr" ed25519 sign "$4"
+  sub=$(gpg --batch --with-colons --list-keys "$fpr" | awk -F: '$1 == "sub" { s = 1 } $1 == "fpr" && s { print $10; exit }')
+  faked=
+}
+# The signing subkey expired at the beginning of 2021; the signatures were made in 2020.
+newkey expired@example.invalid 20200101T000000 never 1y
+expired_fpr=$fpr
+expired_sub=$sub
+gpg --batch --quiet --armor --export "$expired_fpr" > "$work/expired.asc"
+# The signing subkey is revoked after the signatures were made.
+newkey revoked@example.invalid "" never never
+revoked_fpr=$fpr
+revoked_sub=$sub
+# Expire within 60 days: the signing subkey, and the primary key.
+newkey soon-sub@example.invalid "" 2y 30d
+soon_sub_fpr=$fpr
+soon_sub_sub=$sub
+gpg --batch --quiet --armor --export "$soon_sub_fpr" > "$work/soon-sub.asc"
+newkey soon-primary@example.invalid "" 30d 2y
+soon_primary_fpr=$fpr
+soon_primary_sub=$sub
+gpg --batch --quiet --armor --export "$soon_primary_fpr" > "$work/soon-primary.asc"
+# Expires in more than 60 days: no warning.
+newkey later@example.invalid "" 2y 2y
+later_fpr=$fpr
+later_sub=$sub
+gpg --batch --quiet --armor --export "$later_fpr" > "$work/later.asc"
+
 # --- Fixtures ----------------------------------------------------------------------------------------
 # mk <dir> <APT versions> <DNF versions>: both repositories, each listing those versions of the
 # package (a version is "0.2.1"; the packages are built with release 1), signed by $signer!.
@@ -86,7 +128,7 @@ mk() {
       done
     done
   } > "$dir/apt/dists/stable/Release"
-  gpg --batch --yes --local-user "$signer!" --digest-algo SHA512 --clearsign \
+  gpgt --batch --yes --local-user "$signer!" --digest-algo SHA512 --clearsign \
     --output "$dir/apt/dists/stable/InRelease" "$dir/apt/dists/stable/Release"
 
   for arch in x86_64 aarch64; do
@@ -123,7 +165,7 @@ mk() {
       printf '  <data type="filelists">\n    <checksum type="sha256">%s</checksum>\n' "$(printf filelists | sha256sum | cut -d' ' -f1)"
       printf '    <location href="repodata/%s-filelists.xml.gz"/>\n  </data>\n</repomd>\n' "$(printf filelists | sha256sum | cut -d' ' -f1)"
     } > "$d/repomd.xml"
-    gpg --batch --yes --local-user "$signer!" --digest-algo SHA512 --armor --detach-sign \
+    gpgt --batch --yes --local-user "$signer!" --digest-algo SHA512 --armor --detach-sign \
       --output "$d/repomd.xml.asc" "$d/repomd.xml"
   done
 }
@@ -145,6 +187,25 @@ mk "$www/stale-dnf" "0.9.0 0.10.0" "0.9.0"
 mk "$www/no-package" "" "0.9.0 0.10.0"
 signer=$other_fpr
 mk "$www/other-key" "0.9.0 0.10.0" "0.9.0 0.10.0"
+signer=$repo_sub
+
+signer=$expired_sub
+faked=20200601T120000
+mk "$www/expired-key" "0.9.0 0.10.0" "0.9.0 0.10.0"
+faked=
+signer=$revoked_sub
+mk "$www/revoked-key" "0.9.0 0.10.0" "0.9.0 0.10.0"
+# The revocation of the subkey (reason 0, no text), after it signed.
+printf 'key 1\nrevkey\ny\n0\n\ny\nsave\n' |
+  gpg --batch --yes --command-fd 0 --status-fd 2 --edit-key "$revoked_fpr" 2> "$work/revoke.log" ||
+  die "cannot revoke the test subkey"
+gpg --batch --quiet --armor --export "$revoked_fpr" > "$work/revoked.asc"
+signer=$soon_sub_sub
+mk "$www/soon-sub" "0.9.0 0.10.0" "0.9.0 0.10.0"
+signer=$soon_primary_sub
+mk "$www/soon-primary" "0.9.0 0.10.0" "0.9.0 0.10.0"
+signer=$later_sub
+mk "$www/later" "0.9.0 0.10.0" "0.9.0 0.10.0"
 signer=$repo_sub
 
 cp -R "$www/fresh" "$www/tampered-inrelease"
@@ -255,6 +316,26 @@ check 'text after the signature' 1 "$url/text-after-signature" 0.10.0 "$work/rep
 check 'two signed messages' 1 "$url/two-messages" 0.10.0 "$work/repo.asc"
 check 'signed by another key' 1 "$url/other-key" 0.10.0 "$work/repo.asc"
 check 'checked with another key' 1 "$url/fresh" 0.10.0 "$work/other.asc"
+check 'signed by an expired key' 1 "$url/expired-key" 0.10.0 "$work/expired.asc"
+check 'signed by a revoked subkey' 1 "$url/revoked-key" 0.10.0 "$work/revoked.asc"
+# These two are only a real test if gpgv itself accepts them (exit 0) and says why on the status fd.
+rawstatus() {
+  gpg --batch --yes --quiet --dearmor --output "$work/raw.gpg" "$2"
+  st=0
+  gpgv --keyring "$work/raw.gpg" --status-fd 1 "$www/$1/apt/dists/stable/InRelease" > "$work/raw.out" 2> /dev/null || st=$?
+  if [ "$st" = 0 ] && grep -q "^\[GNUPG:\] $3 " "$work/raw.out"; then
+    printf '%-34s gpgv exits 0 and reports %s\n' "  ($1)" "$3"
+  else
+    printf '%-34s WRONG: gpgv exit %s, no %s\n' "  ($1)" "$st" "$3"
+    bad=1
+  fi
+}
+rawstatus expired-key "$work/expired.asc" EXPKEYSIG
+rawstatus revoked-key "$work/revoked.asc" REVKEYSIG
+check 'subkey expires within 60 days' 5 "$url/soon-sub" 0.10.0 "$work/soon-sub.asc"
+check 'primary expires within 60 days' 5 "$url/soon-primary" 0.10.0 "$work/soon-primary.asc"
+check 'expiring key and a stale index' 3 "$url/soon-sub" 0.11.0 "$work/soon-sub.asc"
+check 'key expires in over 60 days' 0 "$url/later" 0.10.0 "$work/later.asc"
 check 'tampered repomd.xml' 1 "$url/tampered-repomd" 0.10.0 "$work/repo.asc"
 check 'bad repomd.xml.asc' 1 "$url/bad-asc" 0.10.0 "$work/repo.asc"
 check 'missing repomd.xml.asc' 1 "$url/no-asc" 0.10.0 "$work/repo.asc"

@@ -41,6 +41,9 @@ check=$(mktemp -d)
 trap 'rm -rf "$rpmdb" "$check"' EXIT
 rpm --dbpath "$rpmdb" --import "$PUBLIC_KEY"
 gpg --batch --quiet --dearmor --output "$check/key.gpg" "$PUBLIC_KEY"
+primary=$(gpg --batch --with-colons --show-keys "$PUBLIC_KEY" | awk -F: '$1 == "fpr" { print $10; exit }')
+# shellcheck source=sigcheck.sh
+. "$here/sigcheck.sh"
 
 die() {
   printf 'build.sh: %s\n' "$*" >&2
@@ -116,7 +119,7 @@ if [ -e "$published/InRelease" ]; then
   }; then
     die "the published InRelease is not a single signed message"
   fi
-  gpgv --quiet --keyring "$check/key.gpg" --output "$check/Release" "$published/InRelease" 2> /dev/null ||
+  sig_ok "$check/key.gpg" "$primary" --output "$check/Release" "$published/InRelease" ||
     die "the published InRelease does not verify"
   for arch in amd64 arm64; do
     packages=$published/main/binary-$arch/Packages
@@ -242,8 +245,8 @@ fingerprint=$(gpg --batch --with-colons --show-keys "$PUBLIC_KEY" | awk -F: '$1 
 sed "s/@FINGERPRINT@/$fingerprint/g" "$here/index.html" > "$repo/index.html"
 
 # --- Self-check before anything is uploaded ---------------------------------------------------------
-gpgv --quiet --keyring "$check/key.gpg" "$dists/InRelease" 2> /dev/null || die "InRelease does not verify"
-gpgv --quiet --keyring "$check/key.gpg" "$dists/Release.gpg" "$dists/Release" 2> /dev/null ||
+sig_ok "$check/key.gpg" "$primary" "$dists/InRelease" || die "InRelease does not verify"
+sig_ok "$check/key.gpg" "$primary" "$dists/Release.gpg" "$dists/Release" ||
   die "Release.gpg does not verify"
 # Every index that Release lists must be there, with its by-hash copies (apt-ftparchive makes none for
 # the per-architecture Release files, whose content never changes). apt asks for the strongest hash.
@@ -268,8 +271,8 @@ for arch in amd64 arm64; do
   fi
 done
 for arch in x86_64 aarch64; do
-  gpgv --quiet --keyring "$check/key.gpg" "$repo/rpm/$arch/repodata/repomd.xml.asc" \
-    "$repo/rpm/$arch/repodata/repomd.xml" 2> /dev/null || die "repomd.xml ($arch) does not verify"
+  sig_ok "$check/key.gpg" "$primary" "$repo/rpm/$arch/repodata/repomd.xml.asc" \
+    "$repo/rpm/$arch/repodata/repomd.xml" || die "repomd.xml ($arch) does not verify"
   for rpm in "$repo/rpm/$arch"/*.rpm; do
     [ -e "$rpm" ] || continue
     rpm_signed "$rpm" || die "$(basename "$rpm") has no valid signature"

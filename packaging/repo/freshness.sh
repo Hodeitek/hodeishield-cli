@@ -18,13 +18,16 @@
 #
 # Exit status: 0 when both repositories verify and offer exactly the expected version; 3 when everything
 # verifies but a repository offers an older version than expected (the index is stale, or the new
-# release is not published there yet); 1 for anything else. Failing closed: a download that fails, an
+# release is not published there yet); 5 when everything verifies and is current but the repository key
+# or its signing subkey expires within 60 days (a warning, to renew it in time); 1 for anything else. Failing closed: a download that fails, an
 # unreadable or unsigned index, a hash that does not match or a version that cannot be read is never a pass.
 #
 # Only what a signature covers is believed. The APT index is a single clear-signed message and only the
 # text that gpgv writes is read; each Packages file is fetched by hash and compared with the hash in
 # that text. For DNF, repomd.xml is verified with its detached signature and names the hash and the
 # location of primary.xml.gz. The newest hodeishield version in each index must be the expected one.
+# A signature counts only when gpgv reports it good and made by the repository key: an expired or
+# revoked key, or an expired signature, is a failure although gpgv exits 0 (see sigcheck.sh).
 # Uses curl, gpgv, gpg, gzip, awk, sed, grep and sort (GNU, for -V).
 
 set -eu
@@ -34,6 +37,9 @@ expected=$2
 key=$3
 retries=${FRESHNESS_RETRIES:-3}
 status=0
+here=$(cd "$(dirname "$0")" && pwd)
+# shellcheck source=sigcheck.sh
+. "$here/sigcheck.sh"
 
 die() {
   printf 'freshness.sh: %s\n' "$*" >&2
@@ -62,6 +68,8 @@ GNUPGHOME=$work
 export GNUPGHOME
 gpg --batch --quiet --dearmor --output "$work/key.gpg" "$key" || die "cannot read the public key $key"
 [ -s "$work/key.gpg" ] || die "the public key $key holds no key"
+primary=$(gpg --batch --with-colons --show-keys "$key" | awk -F: '$1 == "fpr" { print $10; exit }')
+[ -n "$primary" ] || die "cannot read the fingerprint of the public key $key"
 stamp=$(date +%s)
 
 # Downloads $base/<path> to <dest>. The CDN's copy must not be what is judged, so the request asks
@@ -106,7 +114,7 @@ if ! {
 }; then
   die "InRelease is not a single signed message"
 fi
-gpgv --quiet --keyring "$work/key.gpg" --output "$work/Release" "$work/InRelease" 2> /dev/null ||
+sig_ok "$work/key.gpg" "$primary" --output "$work/Release" "$work/InRelease" ||
   die "InRelease does not verify against the repository key"
 [ -s "$work/Release" ] || die "InRelease holds no text"
 for arch in amd64 arm64; do
@@ -149,7 +157,7 @@ for arch in x86_64 aarch64; do
   }; then
     die "repomd.xml.asc ($arch) is not a single signature"
   fi
-  gpgv --quiet --keyring "$work/key.gpg" "$work/repomd.xml.asc.$arch" "$work/repomd.xml.$arch" 2> /dev/null ||
+  sig_ok "$work/key.gpg" "$primary" "$work/repomd.xml.asc.$arch" "$work/repomd.xml.$arch" ||
     die "repomd.xml ($arch) does not verify against the repository key"
   # The primary data: its sha256 and where it is, as createrepo_c writes them (one element per line).
   entry=$(awk '
@@ -188,6 +196,35 @@ for arch in x86_64 aarch64; do
     /<\/package>/ { if (p == "hodeishield" && r == a && v != "") print v }' "$work/primary.$arch.xml")
   # The package is built with release 1.
   judge "DNF ($arch)" "$versions" "$expected-1"
+done
+
+# --- Key expiry -------------------------------------------------------------------------------------
+# A renewal takes a release (see CONTRIBUTING.md), so the key is reported 60 days ahead. The expiry of
+# the primary key and the latest expiry of its usable signing subkeys, as gpg lists them (field 7 is
+# empty when the key never expires; field 2 is r for revoked and e for expired).
+now=$(date +%s)
+expiries=$(gpg --batch --with-colons --show-keys "$key" | awk -F: -v now="$now" '
+  $1 == "pub" { prim = ($7 == "" ? "never" : $7) }
+  $1 == "sub" && $2 !~ /[re]/ && $12 ~ /s/ {
+    if ($7 == "") sub_never = 1
+    else if ($7 > sub_max) sub_max = $7
+    sub_seen = 1
+  }
+  END { if (prim == "" || !sub_seen) exit 1; print prim, (sub_never ? "never" : sub_max) }') ||
+  die "cannot read the expiry of the public key $key"
+soon=$((now + 60 * 86400))
+for expiry in $expiries; do
+  case $expiry in
+    never) ;;
+    *[!0-9]* | '') die "cannot read the expiry of the public key $key" ;;
+    *)
+      if [ "$expiry" -le "$soon" ]; then
+        printf 'The repository key (or its signing subkey) expires on %s, within 60 days: renew it (CONTRIBUTING.md).\n' \
+          "$(date -u -d "@$expiry" +%Y-%m-%d)"
+        [ "$status" != 0 ] || status=5
+      fi
+      ;;
+  esac
 done
 
 exit "$status"
