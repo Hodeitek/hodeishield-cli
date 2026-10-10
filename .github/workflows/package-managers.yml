@@ -290,6 +290,9 @@ jobs:
           set -euo pipefail
           mkdir -m 700 "$GNUPGHOME"
           printf '%s\n' "$SIGNING_KEY" | gpg --batch --quiet --import
+          # The public key carries the current binding signatures: after a renewal it is newer than the
+          # secret's copy, whose subkey gpg would refuse to sign with once the old expiry has passed.
+          gpg --batch --quiet --import packaging/gpg.key
           fingerprints=$(gpg --batch --with-colons --list-secret-keys |
             awk -F: '$1 == "ssb" { sign = ($12 ~ /s/) } $1 == "fpr" && sign { print $10; sign = 0 }')
           if [ "$(printf '%s\n' "$fingerprints" | grep -c .)" != 1 ]; then
