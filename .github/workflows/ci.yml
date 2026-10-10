@@ -233,7 +233,9 @@ jobs:
 
   # The repository freshness monitor must go red: its control builds small repositories with a
   # throwaway key, serves them from localhost and checks that every stale, altered, unsigned or
-  # missing case fails and the current one passes.
+  # missing case fails and the current one passes. It also checks the live switch: inert only when
+  # the domain serves nothing (all 404); a live repository without the key, or a fetch error that is
+  # not a 404, is red.
   repo-freshness:
     name: repo-freshness
     runs-on: ubuntu-latest

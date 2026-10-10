@@ -2,10 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 Hodeitek S.L.
 #
-# Proves that freshness.sh goes red: builds small APT and DNF repositories with a throwaway key made
+# Proves that freshness.sh goes red, and that live.sh (which decides whether there is anything to
+# check) is inert only when the domain serves nothing: builds small APT and DNF repositories with a throwaway key made
 # here (nothing secret, nothing real), serves them from localhost and runs freshness.sh against them.
 # A repository that is up to date must pass, and every case in which it is stale, altered, unsigned,
 # missing or unreachable must fail, with the status expected for it (3 for stale, 1 for the rest).
+# For live.sh: no index at all (every entry point a clean 404) is inert (10); a fetch error that is not
+# a 404 (500, a redirect, a refused connection) and a served index without the key are red (1).
 #
 #   freshness-test.sh
 #
@@ -23,9 +26,11 @@ mkdir -m 700 "$GNUPGHOME"
 www=$work/www
 mkdir "$www"
 server=
+servers=
 
 cleanup() {
   [ -z "$server" ] || kill "$server" 2> /dev/null || true
+  for pid in $servers; do kill "$pid" 2> /dev/null || true; done
   gpgconf --homedir "$GNUPGHOME" --kill all 2> /dev/null || true
   # The throwaway secret keys are overwritten before they are removed.
   find "$GNUPGHOME" -type f -exec shred -u {} + 2> /dev/null || true
@@ -182,6 +187,47 @@ done
 [ -n "$port" ] || die "the test server did not start"
 url=http://127.0.0.1:$port
 
+# A server that answers every request with the status <code> (and a redirect to nowhere for 301).
+# start_status <code> sets $status_url.
+start_status() {
+  : > "$work/status.log"
+  python3 -I -u -c '
+import http.server, sys
+code = int(sys.argv[1])
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(code)
+        if code == 301:
+            self.send_header("Location", "http://127.0.0.1:1/")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+    def log_message(self, *args):
+        pass
+s = http.server.HTTPServer(("127.0.0.1", 0), H)
+print(s.server_address[1], flush=True)
+s.serve_forever()' "$1" > "$work/status.log" &
+  servers="$servers $!"
+  sp=
+  i=0
+  while [ -z "$sp" ] && [ "$i" -lt 50 ]; do
+    sp=$(sed -n '1p' "$work/status.log")
+    i=$((i + 1))
+    [ -n "$sp" ] || sleep 0.1
+  done
+  [ -n "$sp" ] || die "the status server did not start"
+  status_url=http://127.0.0.1:$sp
+}
+start_status 500
+url500=$status_url
+start_status 403
+url403=$status_url
+start_status 301
+url301=$status_url
+
+# Only the APT repository is served: the DNF entry points answer 404.
+cp -R "$www/fresh" "$www/apt-only"
+rm -r "$www/apt-only/rpm"
+
 # --- The cases ---------------------------------------------------------------------------------------
 FRESHNESS_ALLOW_HTTP=1
 FRESHNESS_RETRIES=0
@@ -219,5 +265,37 @@ check 'server unreachable' 1 http://127.0.0.1:1 0.10.0 "$work/repo.asc"
 check 'no public key' 1 "$url/fresh" 0.10.0 "$work/missing.asc"
 FRESHNESS_ALLOW_HTTP=0
 check 'plain http not allowed' 1 "$url/fresh" 0.10.0 "$work/repo.asc"
+
+# checklive <name> <wanted status> <base URL> <public key> [<text the output must contain>]
+checklive() {
+  status=0
+  sh "$here/live.sh" "$3" "$4" > "$work/out" 2>&1 || status=$?
+  if [ "$status" = "$2" ] && { [ -z "${5:-}" ] || grep -Fq -- "$5" "$work/out"; }; then result=ok; else result=WRONG; bad=1; fi
+  printf '%-34s %-6s %-6s %-6s %s\n' "$1" "$2" "$status" "$result" "$(sed -n 's/^live.sh: //p' "$work/out" | head -n 1)"
+  [ "$result" = ok ] || sed 's/^/    /' "$work/out"
+}
+
+FRESHNESS_ALLOW_HTTP=1
+printf '\n%-34s %-6s %-6s %-6s %s\n' 'LIVE CASE' WANT GOT RESULT WHY
+# Nothing served: inert, with or without a key.
+checklive 'domain serves nothing (all 404)' 10 "$url/nowhere" "$work/repo.asc"
+checklive 'serves nothing, no key' 10 "$url/nowhere" "$work/missing.asc"
+# An index is served.
+checklive 'live repo, key present' 0 "$url/fresh" "$work/repo.asc"
+checklive 'live repo, key missing' 1 "$url/fresh" "$work/missing.asc" 'the repositories are live but the public key'
+: > "$work/empty.asc"
+checklive 'live repo, key empty' 1 "$url/fresh" "$work/empty.asc" 'the repositories are live but the public key'
+mkdir "$work/keydir"
+checklive 'live repo, key is a directory' 1 "$url/fresh" "$work/keydir"
+checklive 'only APT served, key missing' 1 "$url/apt-only" "$work/missing.asc"
+checklive 'only APT served, key present' 0 "$url/apt-only" "$work/repo.asc"
+# Anything but a clean 404 is red, whether or not the key is there.
+checklive 'fetch error: HTTP 500' 1 "$url500" "$work/repo.asc" 'answered HTTP 500'
+checklive 'fetch error: HTTP 500, no key' 1 "$url500" "$work/missing.asc" 'answered HTTP 500'
+checklive 'fetch error: HTTP 403' 1 "$url403" "$work/missing.asc"
+checklive 'fetch error: redirect' 1 "$url301" "$work/missing.asc"
+checklive 'fetch error: refused' 1 http://127.0.0.1:1 "$work/missing.asc" 'cannot reach'
+FRESHNESS_ALLOW_HTTP=0
+checklive 'plain http not allowed' 1 "$url/nowhere" "$work/repo.asc"
 [ "$bad" = 0 ] || exit 1
 echo "All cases behave as expected."
