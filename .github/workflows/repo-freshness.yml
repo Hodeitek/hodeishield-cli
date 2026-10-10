@@ -7,9 +7,11 @@ name: Repository freshness
 # files only, uses no secret and no environment, and writes nothing but an issue labelled
 # `repo-freshness`: opened (or commented on) while the check fails, and closed when it passes again.
 #
-# Until packaging/gpg.key is committed (the repositories are not live before that) it does nothing.
-# From then on it fails closed: a download that fails, an unreadable release or a signature that does
-# not verify is a failure, never a pass.
+# It does nothing only while the domain serves no APT or DNF index (every entry point answers a clean
+# 404: the repositories are not live yet). Once any index is served, packaging/gpg.key must be present
+# or the run fails, so removing the key cannot silence the monitor. From then on it fails closed: a
+# download that fails, an unreadable release or a signature that does not verify is a failure, never
+# a pass (packaging/repo/live.sh decides which of the two applies).
 on:
   schedule:
     - cron: "43 6 * * 1" # Mondays, 06:43 UTC
@@ -46,14 +48,23 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Check the repositories are live
+      # Inert only while no index is served. Any other answer than a clean 404 (a network error, a
+      # 403, a 5xx, a redirect) or a served index without packaging/gpg.key fails the run, and the
+      # report step below opens or reuses the issue.
+      - name: Check whether the repositories are live
         id: gate
         run: |
-          if [ ! -s packaging/gpg.key ]; then
-            echo "::notice::packaging/gpg.key is not committed yet, so the repositories are not live; nothing to check."
-            exit 0
-          fi
-          echo "active=true" >> "$GITHUB_OUTPUT"
+          rc=0
+          sh packaging/repo/live.sh "$BASE_URL" packaging/gpg.key > "$RUNNER_TEMP/report.txt" 2>&1 || rc=$?
+          cat "$RUNNER_TEMP/report.txt"
+          case $rc in
+            0) echo "active=true" >> "$GITHUB_OUTPUT" ;;
+            10) echo "::notice::The repositories are not live yet (no index is served); nothing to check." ;;
+            *)
+              echo "active=true" >> "$GITHUB_OUTPUT"
+              echo "result=fail" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
 
       # GitHub disables scheduled workflows of a repository without activity for 60 days. A long gap
       # since the previous run is reported with the result, because a monitor that did not run
@@ -89,7 +100,7 @@ jobs:
       # The latest published release (not a draft, not a prerelease) decides what must be served.
       # Anything that cannot be read is a failure. The report is what the issue shows.
       - name: Check the repositories serve the latest release
-        if: steps.gate.outputs.active == 'true'
+        if: steps.gate.outputs.active == 'true' && steps.gate.outputs.result != 'fail'
         id: check
         env:
           GH_TOKEN: ${{ github.token }}
@@ -140,7 +151,7 @@ jobs:
         if: "!cancelled() && steps.gate.outputs.active == 'true'"
         env:
           GH_TOKEN: ${{ github.token }}
-          RESULT: ${{ steps.check.outputs.result }}
+          RESULT: ${{ steps.gate.outputs.result || steps.check.outputs.result }}
           EXPECTED: ${{ steps.check.outputs.expected }}
           GAP: ${{ steps.gap.outputs.note }}
         run: |
@@ -176,7 +187,7 @@ jobs:
               {
                 echo "The APT and DNF repositories at $BASE_URL did not pass the weekly freshness check."
                 echo
-                echo "Expected version: ${EXPECTED:-unknown (the latest release could not be read)}"
+                echo "Expected version: ${EXPECTED:-not determined (the check stopped before reading the latest release)}"
                 echo
                 echo '```'
                 print_report
