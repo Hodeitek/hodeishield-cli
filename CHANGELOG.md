@@ -26,12 +26,6 @@ commands, `--json` output and exit codes. Each release's notes start with its se
   this session, suggest `HODEISHIELD_API_KEY` for remote and automated sessions, and exit with 3,
   the code for "not authenticated". With the key set, nothing changes.
   ([#111](https://github.com/Hodeitek/hodeishield-cli/issues/111))
-- The Windows executable no longer needs the Visual C++ Redistributable. It now carries its C
-  runtime, and the build checks that no shipped `.exe` imports the Visual C++ runtime (`VCRUNTIME*`,
-  `MSVCP*`, `CONCRT*` and the like). This applies to the published executables: a build with
-  `cargo install --git` does not read the repository's `.cargo/config.toml`, which is harmless
-  there because whoever builds it has the Visual C++ tools installed.
-  ([#110](https://github.com/Hodeitek/hodeishield-cli/issues/110))
 - `hodeishield login` now checks that the system keychain can keep a session before it opens the
   browser or shows a device code, and stops there with the usual pointer to API keys. If saving the
   session still fails after the app has issued tokens, the CLI revokes the refresh token and then
@@ -62,6 +56,13 @@ commands, `--json` output and exit codes. Each release's notes start with its se
   release's own binary on a distroless base, running as a non-root user, tagged with the exact
   version only. It is signed by digest with Sigstore and carries the release's SBOM as a signed
   attestation. ([#36](https://github.com/Hodeitek/hodeishield-cli/issues/36))
+
+## [0.3.1] - 2026-10-10
+
+### Fixed
+
+- The Windows executable no longer needs the Visual C++ Redistributable; it failed to start on systems
+  without it ([#110](https://github.com/Hodeitek/hodeishield-cli/issues/110)).
 
 ## [0.3.0] - 2026-10-07
 
@@ -141,7 +142,8 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 - Profiles (`config`), shell completions, and release archives for Linux, macOS and Windows signed
   with Sigstore and with SLSA provenance.
 
-[Unreleased]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.1.0...v0.1.1
