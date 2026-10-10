@@ -184,6 +184,69 @@ fn a_missing_scope_exits_4_and_names_the_framework_scope() {
 }
 
 #[test]
+fn an_api_message_that_says_broken_pipe_still_fails() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    server
+        .mock("GET", "/v1/risks/r1")
+        .with_status(404)
+        .with_body(
+            r#"{"error":{"code":"not_found","message":"Broken pipe","request_id":"req_bp"}}"#,
+        )
+        .create();
+    env.api(&server)
+        .args(["risks", "get", "r1"])
+        .assert()
+        .code(5)
+        .stderr(predicate::str::contains("error: Broken pipe"));
+}
+
+/// Unix only: the child gets a plain pipe and sees `EPIPE` once the reader is gone. Windows reports
+/// a closed pipe with other codes, and this suite cannot confirm that mapping there.
+#[cfg(unix)]
+#[test]
+fn a_closed_output_pipe_exits_0_silently() {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    let filler = "x".repeat(1000);
+    let items: Vec<String> = (0..1000)
+        .map(|i| vendor(&format!("v{i}"), &filler))
+        .collect();
+    server
+        .mock("GET", "/v1/vendors")
+        .match_query(mockito::Matcher::Any)
+        .with_status(200)
+        .with_body(page(&items, 1, 1000, 1))
+        .create();
+    let mut child = Command::new(assert_cmd::cargo::cargo_bin("hodeishield"))
+        .args(["--json", "vendors", "list"])
+        .env_clear()
+        .env("HODEISHIELD_CONFIG", &env.config)
+        .env(
+            "DBUS_SESSION_BUS_ADDRESS",
+            "unix:path=/nonexistent/hodeishield-test",
+        )
+        .env("HODEISHIELD_API_KEY", KEY)
+        .env("HODEISHIELD_API_URL", server.url())
+        .env("NO_COLOR", "1")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    // Read a little, then hang up while about a megabyte is still to come.
+    let mut stdout = child.stdout.take().expect("stdout");
+    let mut first = [0_u8; 16];
+    stdout.read_exact(&mut first).expect("first bytes");
+    drop(stdout);
+    let output = child.wait_with_output().expect("wait");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+}
+
+#[test]
 fn an_inactive_licence_exits_8_without_blaming_a_scope() {
     let env = Env::new();
     let mut server = mockito::Server::new();

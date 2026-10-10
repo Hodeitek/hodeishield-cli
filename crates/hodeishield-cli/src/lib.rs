@@ -47,7 +47,8 @@ pub fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
-        Err(failure) if failure.message.contains("Broken pipe") => ExitCode::SUCCESS,
+        // Decided on the I/O error kind, never on message text, which can come from the API.
+        Err(failure) if failure.closed_pipe => ExitCode::SUCCESS,
         Err(failure) => {
             // Messages can carry text from the API or the app: clean it like any other output.
             eprintln!("error: {}", output::clean(&failure.message));

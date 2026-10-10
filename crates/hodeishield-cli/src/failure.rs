@@ -48,6 +48,12 @@ pub struct Failure {
     pub message: String,
     pub hint: Option<String>,
     pub request_id: Option<String>,
+    /// Whether this failure came from an I/O error of kind [`std::io::ErrorKind::BrokenPipe`]
+    /// (the reader went away: `hodeishield ... | head -1`). It is set in one place, the conversion
+    /// from [`std::io::Error`], and never from message text, which can come from the API. It only
+    /// means "output pipe closed" because the commands write to standard output with `?` on
+    /// `io::Error` and nothing else does; keep it that way.
+    pub closed_pipe: bool,
 }
 
 impl Failure {
@@ -57,6 +63,7 @@ impl Failure {
             message: message.into(),
             hint: None,
             request_id: None,
+            closed_pipe: false,
         }
     }
 
@@ -79,7 +86,9 @@ impl fmt::Display for Failure {
 
 impl From<std::io::Error> for Failure {
     fn from(error: std::io::Error) -> Self {
-        Self::general(error.to_string())
+        let mut failure = Self::general(error.to_string());
+        failure.closed_pipe = error.kind() == std::io::ErrorKind::BrokenPipe;
+        failure
     }
 }
 
@@ -229,5 +238,23 @@ impl ApiContext<'_> {
             Some(framework) => scope.replace("<framework>", framework),
             None => scope.to_owned(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Error, ErrorKind};
+
+    #[test]
+    fn only_a_broken_pipe_io_error_marks_a_closed_pipe() {
+        assert!(Failure::from(Error::from(ErrorKind::BrokenPipe)).closed_pipe);
+        assert!(!Failure::from(Error::from(ErrorKind::NotFound)).closed_pipe);
+    }
+
+    #[test]
+    fn message_text_never_marks_a_closed_pipe() {
+        assert!(!Failure::general("Broken pipe").closed_pipe);
+        assert!(!Failure::from(Error::other("Broken pipe")).closed_pipe);
     }
 }
