@@ -90,7 +90,7 @@ x86_64 and arm64, and your system's normal upgrades keep the CLI current. The pa
 The repositories are signed with this key (RSA 4096); check its fingerprint before trusting it:
 
 ```text
-@@PACKAGES_KEY_FINGERPRINT@@
+AA2A F212 85A9 AB99 0833  9089 35D5 F941 71C1 CD0B
 ```
 
 #### Debian, Ubuntu (APT)

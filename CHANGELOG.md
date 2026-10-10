@@ -10,7 +10,7 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 - Signed APT and DNF repositories at `packages.hodeishield.com` for x86_64 and arm64, so `apt` and
   `dnf` install and upgrade the CLI. The repositories are signed with a key whose fingerprint is
-  `@@PACKAGES_KEY_FINGERPRINT@@`; the README has the setup steps for Debian and Ubuntu, and for Fedora,
+  `AA2A F212 85A9 AB99 0833  9089 35D5 F941 71C1 CD0B`; the README has the setup steps for Debian and Ubuntu, and for Fedora,
   RHEL, Rocky Linux and AlmaLinux (DNF 4 and 5).
 
 ### Fixed
