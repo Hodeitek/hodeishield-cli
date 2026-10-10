@@ -38,7 +38,7 @@ key=$3
 retries=${FRESHNESS_RETRIES:-3}
 status=0
 here=$(cd "$(dirname "$0")" && pwd)
-# shellcheck source=sigcheck.sh
+# shellcheck source=/dev/null
 . "$here/sigcheck.sh"
 
 die() {

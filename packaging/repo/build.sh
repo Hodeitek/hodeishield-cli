@@ -42,7 +42,7 @@ trap 'rm -rf "$rpmdb" "$check"' EXIT
 rpm --dbpath "$rpmdb" --import "$PUBLIC_KEY"
 gpg --batch --quiet --dearmor --output "$check/key.gpg" "$PUBLIC_KEY"
 primary=$(gpg --batch --with-colons --show-keys "$PUBLIC_KEY" | awk -F: '$1 == "fpr" { print $10; exit }')
-# shellcheck source=sigcheck.sh
+# shellcheck source=/dev/null
 . "$here/sigcheck.sh"
 
 die() {
