@@ -18,7 +18,20 @@ pub fn clean(text: &str) -> String {
 }
 
 /// Control characters (C0, DEL, C1) and the invisible or direction-changing format characters that
-/// can make text display as something it is not.
+/// can make text display as something it is not:
+///
+/// - U+00AD, U+061C, U+180E, U+200B..U+200F, U+202A..U+202E, U+2060..U+2064, U+2066..U+2069,
+///   U+FEFF and U+FFF9..U+FFFB: soft hyphen, zero-width and direction marks and embeddings,
+///   isolates, the word joiner and invisible operators, the zero-width no-break space and the
+///   interlinear annotation anchors, which hide text or reorder it.
+/// - U+2028 and U+2029: the line and paragraph separators, which some terminals and viewers treat
+///   as a line break although `\n` is what the caller checked for.
+/// - U+206A..U+206F: the deprecated format characters (symmetric swapping, Arabic shaping, digit
+///   shapes), which are invisible and which bidi-aware renderers still act on. With U+2066..U+2069
+///   they form one range; U+2065 is unassigned and stays out.
+/// - U+E0000..U+E0FFF: the tag characters and the variation selectors supplement (U+E0100..U+E01EF)
+///   inside the invisible block, which can carry hidden text. The variation selectors U+FE00..U+FE0F
+///   are left alone on purpose: U+FE0F selects the emoji presentation of visible text.
 fn is_unsafe(c: char) -> bool {
     c.is_control()
         || matches!(
@@ -27,11 +40,14 @@ fn is_unsafe(c: char) -> bool {
                 | '\u{061c}'
                 | '\u{180e}'
                 | '\u{200b}'..='\u{200f}'
+                | '\u{2028}'
+                | '\u{2029}'
                 | '\u{202a}'..='\u{202e}'
                 | '\u{2060}'..='\u{2064}'
-                | '\u{2066}'..='\u{2069}'
+                | '\u{2066}'..='\u{206f}'
                 | '\u{feff}'
                 | '\u{fff9}'..='\u{fffb}'
+                | '\u{e0000}'..='\u{e0fff}'
         )
 }
 
@@ -258,11 +274,48 @@ mod tests {
     }
 
     #[test]
+    fn separators_format_characters_and_tags_are_replaced() {
+        for c in [
+            '\u{2028}',
+            '\u{2029}',
+            '\u{206a}',
+            '\u{206f}',
+            '\u{feff}',
+            '\u{fff9}',
+            '\u{fffa}',
+            '\u{fffb}',
+            '\u{e0000}',
+            '\u{e0041}',
+            '\u{e007f}',
+            '\u{e0100}',
+            '\u{e01ef}',
+            '\u{e0fff}',
+        ] {
+            assert_eq!(
+                clean(&format!("a{c}b")),
+                "a\u{fffd}b",
+                "U+{:04X}",
+                u32::from(c)
+            );
+        }
+        // The neighbours of the ranges are visible or unassigned text and stay as they are.
+        let kept = "\u{2027}\u{202f}\u{2065}\u{2070}\u{fe0f}\u{e1000}";
+        assert_eq!(clean(kept), kept);
+        assert_eq!(
+            clean("caf\u{e9} \u{1f600} \u{4e2d}"),
+            "caf\u{e9} \u{1f600} \u{4e2d}"
+        );
+    }
+
+    #[test]
     fn json_escapes_what_could_drive_the_terminal_without_changing_the_value() {
-        let value = serde_json::json!({"name": "a\u{9b}31m\u{7f}\u{202e}b\u{1b}"});
+        let value = serde_json::json!({"name": "a\u{9b}31m\u{7f}\u{202e}b\u{1b}\u{e0041}\u{2028}"});
         let mut out = Vec::new();
         print_json(&mut out, &value).expect("print");
         let text = String::from_utf8(out).expect("utf8");
+        // A tag character outside the BMP is escaped as a surrogate pair.
+        assert!(text.contains("\\udb40\\udc41"), "{text:?}");
+        assert!(text.contains("\\u2028"), "{text:?}");
         assert!(text.chars().all(|c| !is_unsafe(c) || c == '\n'), "{text:?}");
         let back: Value = serde_json::from_str(&text).expect("still JSON");
         assert_eq!(back, value);

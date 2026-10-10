@@ -8,6 +8,10 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ### Fixed
 
+- Terminal output cleaning now also replaces the line and paragraph separators (U+2028, U+2029),
+  the deprecated format characters U+206A to U+206F and the tag characters and variation selectors supplement
+  (U+E0000 to U+E0FFF), which display differently from what they contain. This applies to tables,
+  detail views, CSV and the escaping of `--json` output. ([#106](https://github.com/Hodeitek/hodeishield-cli/issues/106))
 - `hodeishield login` now checks that the system keychain can keep a session before it opens the
   browser or shows a device code, and stops there with the usual pointer to API keys. If saving the
   session still fails after the app has issued tokens, the CLI revokes the refresh token and then
