@@ -71,6 +71,10 @@ scoop bucket add hodeishield https://github.com/Hodeitek/scoop-hodeishield
 scoop install hodeishield                                       # Windows, per user
 ```
 
+`scoop bucket add` needs Git: on a fresh Scoop, run `scoop install git` first. Scoop's own installer
+refuses an elevated (administrator) shell unless it is run with `-RunAsAdmin`; installing per user,
+from a normal shell, is the recommended way and needs no administrator rights.
+
 The [Homebrew tap](https://github.com/Hodeitek/homebrew-hodeishield) and the
 [Scoop bucket](https://github.com/Hodeitek/scoop-hodeishield) are updated from each release's own
 files and `SHA256SUMS` when it is published, and both check those hashes when installing. Homebrew
@@ -105,15 +109,20 @@ Silent installation, for Intune, Group Policy or any other deployment tool:
 $p = Start-Process msiexec -Wait -PassThru -ArgumentList '/i hodeishield-<version>-x86_64-pc-windows-msvc.msi /qn /norestart /l*v hodeishield-install.log'
 $p.ExitCode      # 0 = installed, 3010 = installed and a restart is pending
 # uninstall
-Start-Process msiexec -Wait -PassThru -ArgumentList '/x hodeishield-<version>-x86_64-pc-windows-msvc.msi /qn /norestart'
+$p = Start-Process msiexec -Wait -PassThru -ArgumentList '/x hodeishield-<version>-x86_64-pc-windows-msvc.msi /qn /norestart /l*v hodeishield-uninstall.log'
+$p.ExitCode
 ```
 
-Run `msiexec` through `Start-Process -Wait`: PowerShell does not wait for it when it is called
-directly, so `$LASTEXITCODE` would be set before the install finishes. From `cmd.exe`, use
-`start /wait msiexec /i ...`.
+Run `msiexec` through `Start-Process -Wait -PassThru` in PowerShell. Called directly, as
+`msiexec /i ...`, it returns at once while the installer keeps running, and `$LASTEXITCODE` is not
+updated (it keeps the value of an earlier command), so a script would carry on before the install
+is done and could not tell whether it worked. From `cmd.exe`, use `start /wait msiexec /i ...`. Deployment tools such as Intune and Group Policy
+run the installer themselves and wait for it as usual.
 
-- **Intune:** add it as a *Line-of-business app* (MSI), or as a *Windows app (Win32)* with the
-  commands above. Intune reads the product code from the MSI for detection.
+- **Intune:** add it as a *Line-of-business app* (MSI), or as a *Windows app (Win32)* whose install
+  command is the plain command line
+  `msiexec /i hodeishield-<version>-x86_64-pc-windows-msvc.msi /qn /norestart` (and the same with
+  `/x` to uninstall), not the PowerShell snippet above. Intune reads the product code from the MSI for detection.
 - **Group Policy:** *Computer Configuration → Policies → Software Settings → Software installation*,
   assign the MSI from a network share that the computers can read.
 - Every version shares the upgrade code `{32B34E35-7A3F-422A-AC44-59204CD0D59D}`, which detection
