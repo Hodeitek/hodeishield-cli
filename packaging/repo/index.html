@@ -40,11 +40,15 @@ sudo dnf install hodeishield     # dnf shows the key's fingerprint before import
 
 <h2>Updates and key renewal</h2>
 <p>Updates arrive with your system's normal upgrades. The signing key is extended before it expires and
-keeps the same fingerprint; if your system reports an expired key, refresh your copy:</p>
-<pre><code># Debian, Ubuntu (compare the fingerprint first, as above)
-curl -fsSL https://packages.hodeishield.com/gpg.key | sudo tee /etc/apt/keyrings/hodeishield.asc &gt; /dev/null
-# Fedora, RHEL, Rocky Linux, AlmaLinux
-sudo rpm --import https://packages.hodeishield.com/gpg.key</code></pre>
+keeps the same fingerprint; refresh your copy before the old expiry date, or when your system reports an
+expired key (clients that hold the old copy reject signatures made after it):</p>
+<pre><code># Debian, Ubuntu
+curl -fsSL https://packages.hodeishield.com/gpg.key -o hodeishield.asc
+gpg --show-keys --with-fingerprint hodeishield.asc     # compare the fingerprint with the one above
+sudo install -m 0644 hodeishield.asc /etc/apt/keyrings/hodeishield.asc &amp;&amp; rm hodeishield.asc
+
+# Fedora, RHEL, Rocky Linux, AlmaLinux: remove the old key first, since rpm keeps the old copy otherwise
+sudo rpm -e $(rpm -q gpg-pubkey --qf '%{NAME}-%{VERSION}-%{RELEASE} %{PACKAGER}\n' | awk '/HodeiShield Packages &lt;/ { print $1 }') &amp;&amp; sudo rpm --import https://packages.hodeishield.com/gpg.key</code></pre>
 
 <p>Release notes, other platforms and how to verify each release are in the
 <a href="https://github.com/Hodeitek/hodeishield-cli">CLI repository</a>.</p>

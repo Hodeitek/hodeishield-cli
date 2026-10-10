@@ -137,15 +137,21 @@ Upgrade with `sudo dnf upgrade hodeishield`. `sudo apt remove hodeishield` or
 #### When the repository key is renewed
 
 The signing key has an expiry date and is extended before it passes. The fingerprint stays the same, so
-only your copy of the public key needs refreshing. If `apt update` or `dnf` reports an expired key, run:
+only your copy of the public key needs refreshing, and it must be refreshed before the old expiry date:
+clients that still hold the old copy reject signatures made after it. If `apt update` or `dnf` reports an
+expired key, or the release notes announce a renewal, run:
 
 ```sh
-# Debian, Ubuntu: compare the fingerprint with the one above first (as in the install steps)
-curl -fsSL https://packages.hodeishield.com/gpg.key | sudo tee /etc/apt/keyrings/hodeishield.asc > /dev/null
+# Debian, Ubuntu
+curl -fsSL https://packages.hodeishield.com/gpg.key -o hodeishield.asc
+gpg --show-keys --with-fingerprint hodeishield.asc     # must show the fingerprint above
+sudo install -m 0644 hodeishield.asc /etc/apt/keyrings/hodeishield.asc && rm hodeishield.asc
 
-# Fedora, RHEL, Rocky Linux, AlmaLinux
-sudo rpm --import https://packages.hodeishield.com/gpg.key
+# Fedora, RHEL, Rocky Linux, AlmaLinux: remove the old key first, since rpm keeps the old copy otherwise
+sudo rpm -e $(rpm -q gpg-pubkey --qf '%{NAME}-%{VERSION}-%{RELEASE} %{PACKAGER}\n' | awk '/HodeiShield Packages </ { print $1 }') && sudo rpm --import https://packages.hodeishield.com/gpg.key
 ```
+
+The `rpm` command removes the old copy of the key and imports the current one.
 
 #### A single package file
 
