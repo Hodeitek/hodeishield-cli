@@ -252,7 +252,7 @@ Unblock-File .\hodeishield-0.1.1-x86_64-pc-windows-msvc.zip
 Expand-Archive .\hodeishield-0.1.1-x86_64-pc-windows-msvc.zip
 ```
 
-If you already unpacked it, run `Unblock-File` on `hodeishield.exe` instead. SmartScreen can also
+If you already unpacked it, run `Unblock-File` on `hodeishield.exe` instead. Windows PowerShell 5.1's `Expand-Archive` does not copy the download mark to the unpacked files, so unblocking matters when you unpack with File Explorer's "Extract All" or another tool that carries the mark over. SmartScreen can also
 warn about a signed file that is still new to it; in either case, if it shows "Windows protected
 your PC", choose **More info → Run anyway** («Más información → Ejecutar de todos modos» on a
 Spanish system).
