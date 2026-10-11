@@ -48,12 +48,18 @@ pub struct Failure {
     pub message: String,
     pub hint: Option<String>,
     pub request_id: Option<String>,
-    /// Whether this failure came from an I/O error of kind [`std::io::ErrorKind::BrokenPipe`]
-    /// (the reader went away: `hodeishield ... | head -1`). It is set in one place, the conversion
-    /// from [`std::io::Error`], and never from message text, which can come from the API. It only
-    /// means "output pipe closed" because the commands write to standard output with `?` on
-    /// `io::Error` and nothing else does; keep it that way.
+    /// Whether this failure is the reader of standard output going away
+    /// (`hodeishield ... | head -1`). Only [`Failure::closed_stdout`] sets it, and the caller does
+    /// that only for an `io::Error` of kind [`std::io::ErrorKind::BrokenPipe`] seen while writing
+    /// to standard output (see `output::Tracked`). The conversion from [`std::io::Error`] never
+    /// sets it: a broken pipe on a socket, a file or a config write is a real failure, and so is
+    /// message text, which can come from the API.
     pub closed_pipe: bool,
+    /// Whether this failure was converted from an `io::Error` of kind
+    /// [`std::io::ErrorKind::BrokenPipe`], wherever it came from. On its own it means nothing:
+    /// `main` treats the failure as a closed reader only when standard output also saw the
+    /// broken pipe, so an unrelated failure after the reader went away still fails.
+    pub(crate) broken_pipe: bool,
 }
 
 impl Failure {
@@ -64,11 +70,19 @@ impl Failure {
             hint: None,
             request_id: None,
             closed_pipe: false,
+            broken_pipe: false,
         }
     }
 
     pub fn general(message: impl Into<String>) -> Self {
         Self::new(Kind::General, message)
+    }
+
+    /// Marks this failure as the reader of standard output having gone away.
+    #[must_use]
+    pub fn closed_stdout(mut self) -> Self {
+        self.closed_pipe = true;
+        self
     }
 
     #[must_use]
@@ -87,7 +101,7 @@ impl fmt::Display for Failure {
 impl From<std::io::Error> for Failure {
     fn from(error: std::io::Error) -> Self {
         let mut failure = Self::general(error.to_string());
-        failure.closed_pipe = error.kind() == std::io::ErrorKind::BrokenPipe;
+        failure.broken_pipe = error.kind() == std::io::ErrorKind::BrokenPipe;
         failure
     }
 }
@@ -247,9 +261,14 @@ mod tests {
     use std::io::{Error, ErrorKind};
 
     #[test]
-    fn only_a_broken_pipe_io_error_marks_a_closed_pipe() {
-        assert!(Failure::from(Error::from(ErrorKind::BrokenPipe)).closed_pipe);
+    fn converting_an_io_error_never_marks_a_closed_pipe() {
+        assert!(!Failure::from(Error::from(ErrorKind::BrokenPipe)).closed_pipe);
         assert!(!Failure::from(Error::from(ErrorKind::NotFound)).closed_pipe);
+        assert!(
+            Failure::from(Error::from(ErrorKind::BrokenPipe))
+                .closed_stdout()
+                .closed_pipe
+        );
     }
 
     #[test]

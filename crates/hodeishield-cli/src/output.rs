@@ -10,6 +10,47 @@ use comfy_table::{ContentArrangement, Table, presets};
 use serde_json::Value;
 use std::io::Write;
 
+/// Standard output (or any writer) that remembers whether a write or flush failed with
+/// [`std::io::ErrorKind::BrokenPipe`], so the caller can tell "the reader of standard output went
+/// away" from a broken pipe anywhere else (a socket, a file), which must stay a failure.
+pub struct Tracked<W> {
+    inner: W,
+    closed: bool,
+}
+
+impl<W> Tracked<W> {
+    pub fn new(inner: W) -> Self {
+        Self {
+            inner,
+            closed: false,
+        }
+    }
+
+    /// Whether a write or flush hit a closed pipe.
+    pub fn closed(&self) -> bool {
+        self.closed
+    }
+
+    fn note<T>(&mut self, result: std::io::Result<T>) -> std::io::Result<T> {
+        if let Err(e) = &result {
+            self.closed |= e.kind() == std::io::ErrorKind::BrokenPipe;
+        }
+        result
+    }
+}
+
+impl<W: Write> Write for Tracked<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let result = self.inner.write(buf);
+        self.note(result)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        let result = self.inner.flush();
+        self.note(result)
+    }
+}
+
 /// Replaces control characters (escape sequences, carriage returns, …) with `�`.
 pub fn clean(text: &str) -> String {
     text.chars()
