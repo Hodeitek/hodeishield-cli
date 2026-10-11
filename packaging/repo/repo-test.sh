@@ -23,7 +23,12 @@
 #     index that is not the signed one, or a release that is not the hodeishield package, and then
 #     leave the bucket exactly as it was;
 #   - the clients must refuse a tampered index, a corrupt package and a package that is not signed
-#     with the repository key, and must install and upgrade from the untampered repository.
+#     with the repository key, and must install and upgrade from the untampered repository;
+#   - after a signing subkey is revoked and replaced (throwaway keys of their own), the builder must
+#     refuse the bucket's old signatures, resign.sh must refuse every unsafe run and leave the bucket as
+#     it was, and the one confirmed run must sign the RPM packages again (the old objects stay as
+#     versions), after which a new release publishes and apt and dnf install from the repository with
+#     the exported key, which carries no revoked subkey.
 
 set -eu
 
@@ -292,6 +297,11 @@ EOF
 group "Throwaway keys"
 tool sh /w/bin/keys.sh
 signing_key=$(cat "$work/signing_key")
+# The keyring, signing subkey and public key that publish() hands to the builder; the revocation cases
+# switch them.
+kh=$work/gnupg-sign
+ksign=$signing_key
+kpub=$work/pub.asc
 find "$work" -maxdepth 1 -type f | sort | tr '\n' ' '
 printf '\nsigning subkey %s\n' "$signing_key"
 endgroup
@@ -391,8 +401,8 @@ publish() {
   out=$(docker run --rm --network "$net" --user "$uid:$gid" --env HOME=/tmp \
     --env PACKAGES_S3_ENDPOINT="$srv" --env PACKAGES_S3_REGION=us-east-1 --env PACKAGES_S3_BUCKET="$1" \
     --env PACKAGES_S3_ACCESS_KEY_ID="$pubuser" --env PACKAGES_S3_SECRET_ACCESS_KEY="$pubpass" \
-    --env SIGNING_KEY="$signing_key" --env GNUPGHOME=/gnupg --env PUBLIC_KEY=/gpg.key \
-    --volume "$work/gnupg-sign:/gnupg" --volume "$work/pub.asc:/gpg.key:ro" \
+    --env SIGNING_KEY="$ksign" --env GNUPGHOME=/gnupg --env PUBLIC_KEY=/gpg.key \
+    --volume "$kh:/gnupg" --volume "$kpub:/gpg.key:ro" \
     --volume "$here:/repo:ro" --volume "$2:/new:ro" \
     "$builder" sh /repo/publish.sh /new 2>&1) || rc=$?
 }
@@ -420,7 +430,7 @@ must_refuse() {
   id=$1 desc=$2 bucket=$3 message=$4 newdir=${5:-$pk/v3}
   group "$id $desc"
   before=$(snap "$bucket")
-  publish "$bucket" "$newdir"
+  ${runner:-publish} "$bucket" "$newdir"
   after=$(snap "$bucket")
   verdict=PASS
   if [ "$rc" = 0 ]; then
@@ -776,3 +786,216 @@ client dnf C6 "dnf: unsigned rpm, gpgcheck=1" "install refused" refuse package "
   'is not signed|GPG check FAILED'
 client dnf C7 "dnf: rpm signed by another key, gpgcheck=1" "install refused" refuse package "$srv/rt-c7" \
   'Public key for .* is not installed|GPG check FAILED'
+
+# --- Recovery after a signing subkey revocation --------------------------------------------------------
+# A key of its own: a primary, a signing subkey that signs a release and is then revoked, and a new
+# signing subkey. The public key to publish is exported without the revoked subkey.
+cat > "$work/bin/rv-keys.sh" << 'EOF'
+set -eu
+export HOME=/tmp
+quiet() { gpg --batch --quiet --pinentry-mode loopback --passphrase '' "$@"; }
+# The signing subkeys of the key, one fingerprint per line.
+signers() {
+  gpg --batch --with-colons --list-keys "$1" |
+    awk -F: '$1 == "sub" { sign = ($12 ~ /s/) } $1 == "fpr" && sign { print $10; sign = 0 }'
+}
+GNUPGHOME=/w/gnupg-rv
+export GNUPGHOME
+mkdir -m 700 "$GNUPGHOME"
+quiet --quick-generate-key 'HodeiShield recovery test key <repo-test@example.invalid>' rsa4096 cert never
+primary=$(gpg --batch --with-colons --list-keys | awk -F: '$1 == "fpr" { print $10; exit }')
+quiet --quick-add-key "$primary" rsa4096 sign never
+old=$(signers "$primary")
+[ "$(printf '%s\n' "$old" | grep -c .)" = 1 ]
+printf '%s\n' "$primary" > /w/rv.primary
+printf '%s!\n' "$old" > /w/rv-old.key
+gpg --batch --armor --export "$primary" > /w/rv-pub-old.asc
+quiet --export-secret-subkeys "$old!" > /w/rv-old-secret.gpg
+GNUPGHOME=/w/gnupg-rv-old
+export GNUPGHOME
+mkdir -m 700 "$GNUPGHOME"
+gpg --batch --quiet --import /w/rv-old-secret.gpg
+gpgconf --kill all
+rm -f /w/rv-old-secret.gpg
+
+# The revocation (reason 1, key compromised), then the new subkey.
+GNUPGHOME=/w/gnupg-rv
+export GNUPGHOME
+printf 'key 1\nrevkey\ny\n1\nthrowaway test key\n\ny\nsave\n' |
+  quiet --command-fd 0 --edit-key "$primary" > /dev/null 2>&1 || true
+revoked=$(gpg --batch --with-colons --list-keys "$primary" | awk -F: '$1 == "sub" && $2 == "r"' | wc -l)
+[ "$revoked" = 1 ] || { echo "rv-keys.sh: the subkey was not revoked" >&2; exit 1; }
+quiet --quick-add-key "$primary" rsa4096 sign never
+new=$(signers "$primary" | grep -vx "$old")
+[ "$(printf '%s\n' "$new" | grep -c .)" = 1 ]
+printf '%s!\n' "$new" > /w/rv-new.key
+quiet --export-secret-subkeys "$new!" > /w/rv-new-secret.gpg
+# What would be published without the filter: it still carries the revoked subkey.
+gpg --batch --armor --export "$primary" > /w/rv-pub-revoked.asc
+sh /w/bin/export-public-key.sh "$primary" > /w/rv-pub-new.asc
+gpgconf --kill all
+GNUPGHOME=/w/gnupg-rv-new
+export GNUPGHOME
+mkdir -m 700 "$GNUPGHOME"
+gpg --batch --quiet --import /w/rv-new-secret.gpg
+gpgconf --kill all
+rm -f /w/rv-new-secret.gpg
+EOF
+cp "$here/export-public-key.sh" "$work/bin/export-public-key.sh"
+
+group "Throwaway keys: a signing subkey, its revocation and its replacement"
+tool sh /w/bin/rv-keys.sh
+rv_primary=$(cat "$work/rv.primary")
+endgroup
+
+# rvkeys <old|new|revoked-pub|old-sign-new-pub>: which keyring, signing subkey and public key publish() and resign_run() use.
+rvkeys() {
+  case $1 in
+    old) kh=$work/gnupg-rv-old ksign=$(cat "$work/rv-old.key") kpub=$work/rv-pub-old.asc ;;
+    new) kh=$work/gnupg-rv-new ksign=$(cat "$work/rv-new.key") kpub=$work/rv-pub-new.asc ;;
+    revoked-pub) kh=$work/gnupg-rv-new ksign=$(cat "$work/rv-new.key") kpub=$work/rv-pub-revoked.asc ;;
+    old-sign-new-pub) kh=$work/gnupg-rv-old ksign=$(cat "$work/rv-old.key") kpub=$work/rv-pub-new.asc ;;
+  esac
+}
+
+# resign_run <bucket> <verified packages dir>: runs resign.sh; $rflags is "--apply" or empty, $rconfirm
+# the confirmation. Sets $out and $rc.
+resign_run() {
+  rc=0
+  # shellcheck disable=SC2086
+  out=$(docker run --rm --network "$net" --user "$uid:$gid" --env HOME=/tmp \
+    --env PACKAGES_S3_ENDPOINT="$srv" --env PACKAGES_S3_REGION=us-east-1 --env PACKAGES_S3_BUCKET="$1" \
+    --env PACKAGES_S3_ACCESS_KEY_ID="$pubuser" --env PACKAGES_S3_SECRET_ACCESS_KEY="$pubpass" \
+    --env SIGNING_KEY="$ksign" --env GNUPGHOME=/gnupg --env PUBLIC_KEY=/gpg.key \
+    --env RESIGN_CONFIRM="${rconfirm-}" \
+    --volume "$kh:/gnupg" --volume "$kpub:/gpg.key:ro" \
+    --volume "$here:/repo:ro" --volume "$2:/new:ro" \
+    "$builder" sh /repo/resign.sh ${rflags-} /new 2>&1) || rc=$?
+}
+
+# rv_subkeys <file in /w> <validity letter>: the number of subkeys of a public key file with that validity.
+rv_subkeys() {
+  tool sh -c "gpg --batch --with-colons --show-keys '$1' | awk -F: '\$1 == \"sub\" && \$2 == \"$2\"' | wc -l"
+}
+
+# The release is published with the subkey that will be revoked, into a bucket that keeps old versions.
+newbucket rt-rv1
+if mcx version enable r/rt-rv1 > /dev/null 2>&1; then
+  record "R0 bucket versioning is on" enabled enabled PASS
+else
+  record "R0 bucket versioning is on" enabled "cannot enable" FAIL
+fi
+rvkeys old
+must_publish R0 "release 0.2.0 signed by the subkey that is revoked later" rt-rv1 "$pk/v1"
+
+# The subkey is revoked and replaced: the old signatures no longer count.
+rvkeys new
+must_refuse R1 "release 0.2.1 after the revocation: the old index and rpm signatures are not accepted" \
+  rt-rv1 "build.sh: the published InRelease does not verify" "$pk/v2"
+clone rt-rv1 rt-rv2
+del rt-rv2 apt/dists/stable/InRelease
+del rt-rv2 apt/pool/main/h/hodeishield/hodeishield_0.2.0-1_amd64.deb
+del rt-rv2 apt/pool/main/h/hodeishield/hodeishield_0.2.0-1_arm64.deb
+must_refuse R2 "an rpm signed by the revoked subkey is not accepted" rt-rv2 \
+  "build.sh: .* is not signed with the repository key" "$pk/v2"
+
+# The exported key.
+revoked_in_export=$(rv_subkeys /w/rv-pub-new.asc r)
+revoked_in_control=$(rv_subkeys /w/rv-pub-revoked.asc r)
+if [ "$revoked_in_export" = 0 ] && [ "$revoked_in_control" = 1 ]; then
+  record "R3 the exported key has no revoked subkey" "0 revoked (1 without the filter)" "0 (1 without the filter)" PASS
+else
+  record "R3 the exported key has no revoked subkey" "0 revoked (1 without the filter)" \
+    "$revoked_in_export ($revoked_in_control without the filter)" FAIL
+fi
+
+# resign.sh must refuse these, and change nothing.
+runner=resign_run
+rflags=
+rconfirm=
+mkdir -p "$work/rv-missing" "$work/rv-other"
+cp "$pk"/v1/* "$work/rv-missing/"
+rm "$work/rv-missing/hodeishield-0.2.0-1.aarch64.rpm"
+mkpkgs "$pk/v1-other" hodeishield 0.2.0 "hodeishield 0.2.0 with another payload"
+cp "$pk"/v1/* "$work/rv-other/"
+cp "$pk/v1-other/hodeishield-0.2.0-1.x86_64.rpm" "$work/rv-other/"
+mkdir -p "$work/rv-otherdeb"
+cp "$pk"/v1/* "$work/rv-otherdeb/"
+cp "$pk/v1-other/hodeishield_0.2.0-1_amd64.deb" "$work/rv-otherdeb/"
+
+rvkeys old-sign-new-pub
+must_refuse R4 "resign: the old subkey's signature does not verify against the new key" rt-rv1 \
+  "resign.sh: a signature made with .* does not verify" "$pk/v1"
+rvkeys revoked-pub
+must_refuse R5 "resign: the public key still carries the revoked subkey" rt-rv1 \
+  "resign.sh: .* carries a revoked subkey" "$pk/v1"
+rvkeys new
+rflags=--apply
+must_refuse R6 "resign: --apply without the confirmation" rt-rv1 "resign.sh: --apply needs RESIGN_CONFIRM" "$pk/v1"
+rconfirm=$(cat "$work/evil.fpr")
+must_refuse R7 "resign: --apply with another fingerprint" rt-rv1 "resign.sh: --apply needs RESIGN_CONFIRM" "$pk/v1"
+rconfirm=$rv_primary
+must_refuse R8 "resign: a package of the bucket is missing from the verified ones" rt-rv1 \
+  "publish.sh: the packages in the bucket .* differ" "$work/rv-missing"
+must_refuse R9 "resign: a bucket rpm is not the verified release's package" rt-rv1 \
+  "publish.sh: .* is not the package of the verified release" "$work/rv-other"
+must_refuse R10 "resign: a bucket deb differs from the verified one" rt-rv1 \
+  "build.sh: .* is in the bucket but neither in the signed index" "$work/rv-otherdeb"
+
+# The dry run reads and builds, and uploads nothing.
+rflags=
+rconfirm=
+group "R11 resign dry run"
+before=$(snap rt-rv1)
+resign_run rt-rv1 "$pk/v1"
+printf '%s\n' "$out" | tail -n 12
+endgroup
+if [ "$rc" = 0 ] && [ "$before" = "$(snap rt-rv1)" ] &&
+  printf '%s\n' "$out" | grep -q '^Dry run: nothing was uploaded' &&
+  printf '%s\n' "$out" | grep -q '^Repository built and verified'; then
+  record "R11 resign dry run" "builds and verifies, uploads nothing" "built, verified, bucket unchanged" PASS
+else
+  record "R11 resign dry run" "builds and verifies, uploads nothing" "exit $rc" FAIL
+  printf '%s\n' "$out"
+fi
+
+# The confirmed run.
+rflags=--apply
+rconfirm=$rv_primary
+group "R12 resign --apply"
+before=$(snap rt-rv1)
+resign_run rt-rv1 "$pk/v1"
+printf '%s\n' "$out" | tail -n 25
+endgroup
+after=$(snap rt-rv1)
+rpm_versions=$(mcx ls --versions --json r/rt-rv1/rpm/x86_64/hodeishield-0.2.0-1.x86_64.rpm | wc -l | tr -d ' ')
+if [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q '^Re-signed RPM packages uploaded and read back' &&
+  [ "$(printf '%s\n' "$before" | grep '^apt/pool/')" = "$(printf '%s\n' "$after" | grep '^apt/pool/')" ] &&
+  [ "$(printf '%s\n' "$before" | grep -c '^rpm/[^/]*/[^/]*\.rpm')" = 2 ] &&
+  [ "$(printf '%s\n' "$before" | grep '^rpm/[^/]*/[^/]*\.rpm' | cut -f3)" != \
+    "$(printf '%s\n' "$after" | grep '^rpm/[^/]*/[^/]*\.rpm' | cut -f3)" ] &&
+  [ "$rpm_versions" = 2 ]; then
+  record "R12 resign --apply" "rpms replaced, debs untouched, old rpm versions kept" \
+    "rpms replaced, debs untouched, $rpm_versions versions" PASS
+else
+  record "R12 resign --apply" "rpms replaced, debs untouched, old rpm versions kept" \
+    "exit $rc, $rpm_versions versions of an rpm" FAIL
+  printf '%s\n' "$out"
+fi
+
+# After the recovery the builder accepts the bucket, and the clients accept it.
+runner=publish
+rflags=
+rconfirm=
+clone rt-rv1 rt-rv3
+must_publish R13 "release 0.2.1 with the new subkey on top of the recovered repository" rt-rv3 "$pk/v2"
+get rt-rv3 gpg.key "$work/t/rv.gpg.key"
+if cmp -s "$work/t/rv.gpg.key" "$work/rv-pub-new.asc"; then
+  record "R13 the published key is the export without the revoked subkey" same same PASS
+else
+  record "R13 the published key is the export without the revoked subkey" same DIFFERENT FAIL
+fi
+client apt R14 "apt installs from the recovered repository and upgrades" "installs and upgrades" \
+  ok "$srv/rt-rv1" "$srv/rt-rv3" 0.2.0 0.2.1
+client dnf R15 "dnf (rockylinux:9) installs from the recovered repository and upgrades" "installs and upgrades" \
+  ok "$srv/rt-rv1" "$srv/rt-rv3" 0.2.0 0.2.1
