@@ -36,6 +36,11 @@ commands, `--json` output and exit codes. Each release's notes start with its se
   "Broken pipe". The CLI now treats a failure as a closed output pipe (`hodeishield ... | head -1`,
   which still exits 0 silently) only when writing to standard output fails with that I/O error,
   never because of the text of a message. ([#105](https://github.com/Hodeitek/hodeishield-cli/issues/105))
+- A broken pipe from anything other than standard output (a network connection, a file, the
+  configuration being saved) no longer ends a command with exit code 0 and no message. Only a write
+  to standard output that fails because the reader went away is treated as a closed pipe; any other
+  broken pipe is reported as an error with a non-zero exit code.
+  ([#105](https://github.com/Hodeitek/hodeishield-cli/issues/105))
 - A stalled or slow local connection can no longer keep the browser sign-in listener busy past its
   timeout. Each connection now has a total time limit for its request, and no read waits beyond the
   overall sign-in deadline, and the deadline is checked before every connection is accepted, so a
