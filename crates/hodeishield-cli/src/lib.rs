@@ -42,15 +42,16 @@ pub fn main() -> ExitCode {
 }
 
 /// Reports the outcome and maps it to the exit code. `stdout_closed` says that writing to
-/// standard output failed with a broken pipe (`hodeishield vendors list | head -1`): that is not
-/// an error. A broken pipe from anywhere else is, and the exit code says so.
+/// standard output failed with a broken pipe (`hodeishield vendors list | head -1`): a failure
+/// that is that broken pipe is not an error. A broken pipe from anywhere else is, and so is any
+/// other failure, even after the reader of standard output went away.
 fn exit_code(
     result: failure::Result<()>,
     flushed: std::io::Result<()>,
     stdout_closed: bool,
 ) -> ExitCode {
     let result = result.map_err(|failure| {
-        if stdout_closed {
+        if stdout_closed && failure.broken_pipe {
             failure.closed_stdout()
         } else {
             failure
@@ -59,7 +60,9 @@ fn exit_code(
     match result {
         Ok(()) => match flushed {
             Ok(()) => ExitCode::SUCCESS,
-            Err(_) if stdout_closed => ExitCode::SUCCESS,
+            Err(e) if stdout_closed && e.kind() == std::io::ErrorKind::BrokenPipe => {
+                ExitCode::SUCCESS
+            }
             Err(e) => {
                 eprintln!("error: {e}");
                 ExitCode::FAILURE
@@ -106,6 +109,14 @@ mod tests {
         assert!(!is_success(exit_code(Err(failure), Ok(()), false)));
         let flush = Err(Error::from(ErrorKind::BrokenPipe));
         assert!(!is_success(exit_code(Ok(()), flush, false)));
+    }
+
+    #[test]
+    fn another_failure_after_standard_output_closed_is_still_a_failure() {
+        let failure = failure::Failure::general("the API said no");
+        assert!(!is_success(exit_code(Err(failure), Ok(()), true)));
+        let flush = Err(Error::from(ErrorKind::StorageFull));
+        assert!(!is_success(exit_code(Ok(()), flush, true)));
     }
 
     #[test]

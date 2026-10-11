@@ -55,6 +55,11 @@ pub struct Failure {
     /// sets it: a broken pipe on a socket, a file or a config write is a real failure, and so is
     /// message text, which can come from the API.
     pub closed_pipe: bool,
+    /// Whether this failure was converted from an `io::Error` of kind
+    /// [`std::io::ErrorKind::BrokenPipe`], wherever it came from. On its own it means nothing:
+    /// `main` treats the failure as a closed reader only when standard output also saw the
+    /// broken pipe, so an unrelated failure after the reader went away still fails.
+    pub(crate) broken_pipe: bool,
 }
 
 impl Failure {
@@ -65,6 +70,7 @@ impl Failure {
             hint: None,
             request_id: None,
             closed_pipe: false,
+            broken_pipe: false,
         }
     }
 
@@ -94,7 +100,9 @@ impl fmt::Display for Failure {
 
 impl From<std::io::Error> for Failure {
     fn from(error: std::io::Error) -> Self {
-        Self::general(error.to_string())
+        let mut failure = Self::general(error.to_string());
+        failure.broken_pipe = error.kind() == std::io::ErrorKind::BrokenPipe;
+        failure
     }
 }
 
