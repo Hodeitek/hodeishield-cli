@@ -6,6 +6,8 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-12
+
 ### Added
 
 - Each release now includes a Windows on Arm build, `hodeishield-<version>-aarch64-pc-windows-msvc.zip`.
@@ -210,7 +212,8 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 - Profiles (`config`), shell completions, and release archives for Linux, macOS and Windows signed
   with Sigstore and with SLSA provenance.
 
-[Unreleased]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.1.1...v0.2.0
