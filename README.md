@@ -49,6 +49,7 @@ section), and put `hodeishield` (`hodeishield.exe` on Windows) somewhere on your
 | Linux arm64 | `hodeishield-<version>-aarch64-unknown-linux-musl.tar.gz` |
 | macOS (Apple silicon and Intel) | `hodeishield-<version>-universal-apple-darwin.tar.gz` |
 | Windows x86_64 | `hodeishield-<version>-x86_64-pc-windows-msvc.zip` |
+| Windows arm64 | `hodeishield-<version>-aarch64-pc-windows-msvc.zip` (from the first release after 0.3.1) |
 
 `<version>` has no leading `v`: release `v0.3.1` ships `hodeishield-0.3.1-…`. The Linux binaries are
 statically linked and run on any distribution. Homebrew and Scoop packages are also available
@@ -78,8 +79,9 @@ from a normal shell, is the recommended way and needs no administrator rights.
 The [Homebrew tap](https://github.com/Hodeitek/homebrew-hodeishield) and the
 [Scoop bucket](https://github.com/Hodeitek/scoop-hodeishield) are updated from each release's own
 files and `SHA256SUMS` when it is published, and both check those hashes when installing. Homebrew
-also installs the man pages and shell completions. A winget package has been submitted and is
-waiting for review by the winget community repository; it is not available yet.
+also installs the man pages and shell completions. Scoop picks the arm64 build on Windows on Arm
+automatically. A winget package has been submitted and is waiting for review by the winget community
+repository; it is not available yet.
 
 ### Debian, Ubuntu, Fedora, RHEL and other Linux distributions
 

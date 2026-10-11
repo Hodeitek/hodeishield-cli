@@ -85,7 +85,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # windows-11-arm is the GitHub-hosted native Windows on Arm runner: the aarch64 Windows
+        # build is tested where it runs, not only cross-compiled.
+        os: [ubuntu-latest, macos-latest, windows-latest, windows-11-arm]
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
@@ -107,6 +109,10 @@ jobs:
       - name: cargo test
         run: cargo test --workspace --locked
 
+      - name: cargo clippy (Windows on Arm)
+        if: matrix.os == 'windows-11-arm'
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
       # The Visual C++ runtime is not part of Windows: the executable must not import it (see
       # .cargo/config.toml).
       - name: Build the executable (Windows)
@@ -120,7 +126,10 @@ jobs:
           $ErrorActionPreference = "Stop"
           $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
           if (-not (Test-Path -LiteralPath $vswhere)) { throw "vswhere.exe not found at $vswhere" }
-          $dumpbin = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -find "VC\Tools\MSVC\**\bin\Hostx64\x64\dumpbin.exe" | Select-Object -First 1
+          # The host's own toolset first (exactly what the x64 leg always used), any host otherwise.
+          $arch = if ($env:RUNNER_ARCH -eq "ARM64") { "arm64" } else { "x64" }
+          $dumpbin = & $vswhere -latest -products * -find "VC\Tools\MSVC\**\bin\Host$arch\$arch\dumpbin.exe" | Select-Object -First 1
+          if (-not $dumpbin) { $dumpbin = & $vswhere -latest -products * -find "VC\Tools\MSVC\**\bin\Host*\*\dumpbin.exe" | Select-Object -First 1 }
           if (-not $dumpbin -or -not (Test-Path -LiteralPath $dumpbin)) { throw "dumpbin.exe not found through vswhere" }
           $exes = @(Get-ChildItem -LiteralPath target/debug -File -Filter hodeishield.exe)
           if ($exes.Count -eq 0) { throw "No .exe found to inspect in target/debug" }
@@ -138,6 +147,26 @@ jobs:
             }
           }
           if ($failed) { exit 1 }
+
+      # The leg must build the architecture it is named after, not the host's by accident.
+      - name: Check the executable targets the runner's architecture (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          EXPECTED: ${{ matrix.os == 'windows-11-arm' && 'AA64 machine (ARM64)' || '8664 machine (x64)' }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+          # The host's own toolset first (exactly what the x64 leg always used), any host otherwise.
+          $arch = if ($env:RUNNER_ARCH -eq "ARM64") { "arm64" } else { "x64" }
+          $dumpbin = & $vswhere -latest -products * -find "VC\Tools\MSVC\**\bin\Host$arch\$arch\dumpbin.exe" | Select-Object -First 1
+          if (-not $dumpbin) { $dumpbin = & $vswhere -latest -products * -find "VC\Tools\MSVC\**\bin\Host*\*\dumpbin.exe" | Select-Object -First 1 }
+          if (-not $dumpbin -or -not (Test-Path -LiteralPath $dumpbin)) { throw "dumpbin.exe not found through vswhere" }
+          $headers = & $dumpbin /nologo /headers target/debug/hodeishield.exe
+          if ($LASTEXITCODE -ne 0) { throw "dumpbin /headers failed" }
+          if (-not ($headers | Select-String -SimpleMatch $env:EXPECTED -Quiet)) {
+            throw "hodeishield.exe is not a '$env:EXPECTED' executable"
+          }
 
   deny:
     name: deny
