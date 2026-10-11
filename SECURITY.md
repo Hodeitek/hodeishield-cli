@@ -15,7 +15,110 @@ what you expected, and a proof of concept if you have one. **Never include a rea
 if one was exposed, revoke it in the app first.
 
 We will acknowledge your report, keep you informed while we investigate, and credit you in the
-advisory unless you prefer otherwise.
+advisory if you want to be credited.
+
+- Encrypted email: not offered at the moment.
+- Bug bounty: there is no bounty programme; we credit reporters publicly in the advisory.
+
+## What happens after you report
+
+A report made through GitHub opens a draft security advisory that only you and the maintainers can
+see; we talk to you there. A report made by email is answered by email.
+
+| Step | What you get | When |
+|---|---|---|
+| Acknowledgement | Confirmation that we received the report | Within 3 business days |
+| First assessment | Whether it is a vulnerability, its severity, and whether we know of it being exploited | Within 10 business days |
+| Status updates | Progress on the fix and the expected release, until the advisory is published | At least every 14 days |
+| Fix | A release that fixes it, and the published advisory | See the targets below |
+
+### Severity and fix targets
+
+We rate severity with [CVSS v3.1](https://www.first.org/cvss/v3.1/specification-document) and use
+its qualitative ratings. You can comment on the rating in the advisory or by email. The targets
+below are for shipping a fixed release, counted from the first assessment.
+
+| Severity | CVSS v3.1 base score | Target to ship a fix |
+|---|---|---|
+| Critical | 9.0 – 10.0 | 7 days |
+| High | 7.0 – 8.9 | 30 days |
+| Medium | 4.0 – 6.9 | 90 days |
+| Low | 0.1 – 3.9 | The next release |
+
+### Coordinated disclosure
+
+We ask you to keep the vulnerability confidential until the advisory is published, and we agree
+the publication date with you. The coordinated disclosure period is 90 days from your report. If
+a fix is not released by then, we publish the advisory with the workarounds we know of, unless we
+agree a short extension with you. If the vulnerability is being actively exploited,
+we may publish earlier, with workarounds (see [Security notices](#security-notices)).
+
+### Safe harbour
+
+We will not take legal action against you, or ask anyone else to, for research that follows this
+policy in good faith: you report to us privately and give us reasonable time to fix the issue before
+you disclose it; you access only the data you need to show the vulnerability, and do not keep,
+change or share anyone else's data; you do not degrade the service or harm its users; and you test
+only against accounts and tenants you own or are allowed to use. If in doubt, ask us first.
+
+## Security notices
+
+If a release is affected by a vulnerability that is being actively exploited, or by a severe
+incident (for example a compromised release or release pipeline), we tell users in these places,
+in this order:
+
+1. **The GitHub security advisory** for this repository, under
+   [Security → Advisories](https://github.com/Hodeitek/hodeishield-cli/security/advisories). It is
+   published or updated first, before a fix is available if necessary, and says which versions are
+   affected, what to do in the meantime, and whether a fix is in progress.
+2. **A short notice at the top of [README.md](README.md)**, linking to the advisory. The README
+   keeps an empty block for it between the markers `<!-- security-notice:start -->` and
+   `<!-- security-notice:end -->`; the notice goes between them, as a quote with a blank line
+   before and after it:
+
+   ```markdown
+   <!-- security-notice:start -->
+
+   > **Security notice:** versions 0.x.y to 0.x.z are affected by GHSA-xxxx-xxxx-xxxx. Update to
+   > 0.x.w; until then, see the advisory for a workaround.
+
+   <!-- security-notice:end -->
+   ```
+
+   The notice is updated when the fix ships and removed when it no longer applies, leaving the
+   block empty. The README inside a release archive is a copy taken when that release was built:
+   check the repository's README, not the copy you downloaded.
+3. **The release notes of the release that fixes it**, under `### Security` in that release's
+   section of [CHANGELOG.md](CHANGELOG.md), which the release workflow uses as the release notes.
+   Each entry links to the advisory.
+
+To be told, watch this repository's releases on GitHub (*Watch → Custom → Releases*) or follow
+[its releases feed](https://github.com/Hodeitek/hodeishield-cli/releases.atom), and check the
+advisories page. The CLI's own [new-version notice](README.md#new-version-notice) tells you on an
+interactive terminal that a newer release exists, but not whether it fixes a vulnerability.
+
+## How advisories are published
+
+Every fixed vulnerability gets a GitHub security advisory in this repository, written from
+[docs/security-advisory-template.md](docs/security-advisory-template.md) so that every advisory has
+the same fields:
+
+- a description of the vulnerability and its impact;
+- who is affected: which commands, configurations and install channels;
+- the affected versions and the fixed versions;
+- the severity, with its CVSS v3.1 vector;
+- workarounds, how to check whether you are affected, and how to update;
+- the timeline (reported, fixed, published), the credit, and references.
+
+The advisory is published when the fixed release is out, or earlier as described in
+[Security notices](#security-notices).
+
+Each advisory has a GHSA identifier. Its machine-readable form is the advisory record that GitHub's
+REST API returns, for example
+`https://api.github.com/repos/Hodeitek/hodeishield-cli/security-advisories?state=published`, which
+lists the identifiers, affected and patched versions, CVSS vector and credits as JSON. Advisories
+are published on GitHub. When a vulnerability needs a CVE identifier, we request it through the
+advisory, with GitHub as the CVE Numbering Authority.
 
 ## Supported versions
 

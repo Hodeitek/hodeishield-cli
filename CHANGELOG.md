@@ -56,6 +56,9 @@ commands, `--json` output and exit codes. Each release's notes start with its se
   TLS inspection ([#25](https://github.com/Hodeitek/hodeishield-cli/issues/25), [#89](https://github.com/Hodeitek/hodeishield-cli/pull/89)); the beta programme and its terms
   ([#52](https://github.com/Hodeitek/hodeishield-cli/issues/52), [#90](https://github.com/Hodeitek/hodeishield-cli/pull/90)); defining a profile before signing in to it, and waiting for
   `msiexec` in a silent install ([#87](https://github.com/Hodeitek/hodeishield-cli/pull/87)).
+  `SECURITY.md` now says what happens after a vulnerability report, where a notice about an affected
+  release appears (the README has an empty place for it), and how advisories are published, from
+  a template kept in `docs/` ([#120](https://github.com/Hodeitek/hodeishield-cli/issues/120)).
 
 ### Fixed
 
