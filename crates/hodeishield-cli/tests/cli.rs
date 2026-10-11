@@ -1025,6 +1025,7 @@ mod file_store {
     /// asked for anything (exit 1), commands that need a credential are "not authenticated"
     /// (exit 3), and nothing is repaired or deleted.
     fn assert_refused(env: &Env, app: &App, reason: &str) {
+        let before = snapshot(env);
         let mut login_api = mockito::Server::new();
         let mut login_app = mockito::Server::new();
         let calls: Vec<_> = [&mut login_api, &mut login_app]
@@ -1069,6 +1070,18 @@ mod file_store {
             .code(1)
             .stderr(predicate::str::contains(reason));
         assert!(app.revoked.lock().expect("lock").is_empty());
+        assert_eq!(snapshot(env), before, "a refused file is never touched");
+    }
+
+    /// Every file in the sessions directory with its bytes.
+    fn snapshot(env: &Env) -> Vec<(PathBuf, Vec<u8>)> {
+        kept(env)
+            .into_iter()
+            .map(|path| {
+                let bytes = std::fs::read(&path).expect("read");
+                (path, bytes)
+            })
+            .collect()
     }
 
     #[test]
@@ -1212,6 +1225,27 @@ mod file_store {
         // And the other way round: with the opt-in the keychain is never asked, which here would
         // be an error.
         signed_in(&env, &app);
+    }
+
+    /// The other direction of "no fallback": a valid session file is not used by the default store.
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn a_session_file_is_not_used_when_the_keychain_is_selected() {
+        let env = Env::new();
+        let app = app();
+        let file = signed_in(&env, &app);
+        let before = std::fs::read(&file).expect("read");
+        app.with(env.cmd())
+            .arg("whoami")
+            .assert()
+            .code(3)
+            .stdout(predicate::str::is_empty())
+            .stderr(predicate::str::contains("keychain is not available"));
+        app.with(env.cmd())
+            .args(["vendors", "list"])
+            .assert()
+            .code(3);
+        assert_eq!(std::fs::read(&file).expect("read"), before);
     }
 }
 

@@ -107,16 +107,27 @@ pub trait TokenStore {
 #[derive(Debug, Default)]
 pub struct Keychain;
 
-/// The store the settings choose, looked up when it is used: the environment and the
-/// configuration file are read at that point, so a command that never needs a token never fails
-/// on them. A value that is not a store, or a platform that cannot have it, is an error at the
-/// first use, and nothing falls back to the other store.
+/// The store the settings choose. The choice is made at the first use and kept for the rest of
+/// the process, so one command checks, reads and saves in the same store even if the environment
+/// or the configuration file changed meanwhile. The environment and the configuration file are
+/// read at that point, so a command that never needs a token never fails on them. A value that is
+/// not a store, or a platform that cannot have it, is an error at the first use, and nothing
+/// falls back to the other store.
 #[derive(Debug, Default)]
-pub struct Configured;
+pub struct Configured {
+    kind: OnceLock<crate::config::TokenStoreKind>,
+}
 
 impl Configured {
     fn chosen(&self) -> Result<Box<dyn TokenStore>> {
-        Ok(match crate::config::token_store()? {
+        let kind = match self.kind.get() {
+            Some(kind) => *kind,
+            None => {
+                let chosen = crate::config::token_store()?;
+                *self.kind.get_or_init(|| chosen)
+            }
+        };
+        Ok(match kind {
             crate::config::TokenStoreKind::Keychain => Box::new(Keychain),
             crate::config::TokenStoreKind::PlaintextFile => {
                 Box::new(super::file_store::FileStore::platform()?)

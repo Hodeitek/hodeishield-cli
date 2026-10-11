@@ -7,8 +7,8 @@
 //! `HODEISHIELD_TOKEN_STORE=plaintext-file` or the global `token_store` setting says so. There is
 //! no fallback in either direction (see `docs/decisions/0001-sign-in-without-a-keychain.md`).
 //!
-//! Files live in the platform's state directory (`$XDG_STATE_HOME/hodeishield/sessions/` on Linux),
-//! not in the configuration directory, so a copied or synced configuration never carries a token.
+//! Files live in the platform's state directory (`$XDG_STATE_HOME/hodeishield/sessions/` on Linux, a
+//! sibling of the application support folder on macOS), not in the configuration directory, so a copied or synced configuration never carries a token.
 //! The file name is a hash of the profile name, which may contain `/` or `..`.
 //!
 //! On every read and write the CLI refuses, and never repairs, a file or directory that is a
@@ -41,11 +41,20 @@ pub fn sessions_dir() -> Result<PathBuf> {
             Failure::general("Cannot find a state directory for this user.")
                 .hint("Use the system keychain or a tenant API key instead.")
         })?;
-    // `state_dir` exists on Linux and the BSDs; macOS has only the application support directory.
-    Ok(dirs
-        .state_dir()
-        .unwrap_or_else(|| dirs.data_local_dir())
-        .join("sessions"))
+    if let Some(state) = dirs.state_dir() {
+        return Ok(state.join("sessions"));
+    }
+    // macOS has no state directory, and its configuration and data directories are the same one.
+    // A sibling of it, not a folder inside it, keeps the sessions out of the configuration
+    // directory, which people copy, sync and back up.
+    let data = dirs.data_local_dir();
+    let name = data.file_name().map_or_else(
+        || "com.Hodeitek.HodeiShield".into(),
+        std::ffi::OsStr::to_os_string,
+    );
+    let mut sibling = name;
+    sibling.push(".sessions");
+    Ok(data.parent().unwrap_or(data).join(sibling))
 }
 
 /// The file name for a profile: the hex SHA-256 of its name, so no profile name can leave the
@@ -161,126 +170,159 @@ mod unix {
     use super::{FileStore, Record, io_failure, refused};
     use crate::auth::store::StoredToken;
     use crate::failure::{Failure, Result};
-    use std::fs::{File, Metadata, OpenOptions};
+    use rustix::fs::{AtFlags, Dir, FileType, Mode, OFlags, Stat};
+    use rustix::io::Errno;
+    use std::fs::File;
     use std::io::{Read, Write};
-    use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
-    use std::path::{Path, PathBuf};
+    use std::os::fd::OwnedFd;
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    use std::path::Path;
 
     /// Biggest file read: a token payload is well under a kilobyte.
     const MAX_BYTES: u64 = 64 * 1024;
+
+    /// A temporary file this old is a leftover of a crashed write, not one being written.
+    const STALE_SECONDS: i64 = 60;
 
     /// The effective user id of this process.
     fn euid() -> u32 {
         rustix::process::geteuid().as_raw()
     }
 
-    /// What is wrong with a file or directory, judged from its own metadata (never a followed
-    /// link): `None` when it can be trusted.
-    pub(super) fn problem(meta: &Metadata, want_dir: bool, euid: u32) -> Option<(String, String)> {
-        let kind = if want_dir { "directory" } else { "file" };
+    fn io_error(errno: Errno) -> std::io::Error {
+        std::io::Error::from(errno)
+    }
+
+    /// What is wrong with a file or directory, judged from its own `stat` (never a followed
+    /// link): `None` when it can be trusted. The second string says how to fix a mode.
+    pub(super) fn problem(stat: &Stat, want_dir: bool, euid: u32) -> Option<(String, String)> {
+        let kind = FileType::from_raw_mode(stat.st_mode);
+        let noun = if want_dir { "directory" } else { "file" };
         let fix_mode = if want_dir { "700" } else { "600" };
-        if meta.file_type().is_symlink() {
+        if kind == FileType::Symlink {
             return Some((
                 "is a symbolic link, which is never followed".into(),
                 String::new(),
             ));
         }
         let right_type = if want_dir {
-            meta.is_dir()
+            kind == FileType::Directory
         } else {
-            meta.is_file()
+            kind == FileType::RegularFile
         };
         if !right_type {
-            return Some((format!("is not a regular {kind}"), String::new()));
+            return Some((format!("is not a regular {noun}"), String::new()));
         }
-        if meta.uid() != euid {
+        if stat.st_uid != euid {
             return Some((
-                format!("belongs to another user (uid {}), not to you", meta.uid()),
+                format!("belongs to another user (uid {}), not to you", stat.st_uid),
                 String::new(),
             ));
         }
-        let mode = meta.mode() & 0o777;
+        let mode = Mode::from_raw_mode(stat.st_mode).bits() & 0o777;
         if mode & 0o077 != 0 {
             return Some((
-                format!("is accessible to other users (mode {mode:03o}); it must be {fix_mode}"),
                 format!(
-                    "If you own it and nobody else read it, `chmod {fix_mode}` fixes it; a token that may have been read should be revoked from the app."
+                    "is accessible to other users (mode {mode:03o}); group and others must have \
+                     no access"
+                ),
+                format!(
+                    "If you own it and nobody else read it, `chmod {fix_mode}` fixes it; a token \
+                     that may have been read should be revoked from the app."
                 ),
             ));
         }
         None
     }
 
-    fn check(path: &Path, meta: &Metadata, want_dir: bool) -> Result<()> {
-        match problem(meta, want_dir, euid()) {
+    fn check(path: &Path, stat: &Stat, want_dir: bool) -> Result<()> {
+        match problem(stat, want_dir, euid()) {
             None => Ok(()),
             Some((reason, fix)) => Err(refused(path, &reason, Some(fix).filter(|f| !f.is_empty()))),
         }
     }
 
-    /// Looks at a path without following a link at its end. `None` when it is absent.
-    fn look(path: &Path) -> Result<Option<Metadata>> {
-        match std::fs::symlink_metadata(path) {
-            Ok(meta) => Ok(Some(meta)),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(io_failure("Cannot look at", path, &e)),
+    /// The sessions directory as an open handle, checked with `fstat` on the handle itself. Every
+    /// later operation is relative to it, so replacing the path afterwards cannot redirect them.
+    /// `None` when absent and `create` is false; created with mode 0700 otherwise.
+    pub(super) fn open_dir(store: &FileStore, create: bool) -> Result<Option<OwnedFd>> {
+        let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+        let mut created = false;
+        loop {
+            match rustix::fs::open(&store.dir, flags, Mode::empty()) {
+                Ok(fd) => {
+                    let stat = rustix::fs::fstat(&fd)
+                        .map_err(|e| io_failure("Cannot look at", &store.dir, &io_error(e)))?;
+                    check(&store.dir, &stat, true)?;
+                    return Ok(Some(fd));
+                }
+                Err(Errno::NOENT) if create && !created => {
+                    std::fs::DirBuilder::new()
+                        .recursive(true)
+                        .mode(0o700)
+                        .create(&store.dir)
+                        .map_err(|e| io_failure("Cannot create", &store.dir, &e))?;
+                    created = true;
+                }
+                Err(Errno::NOENT) => return Ok(None),
+                Err(e @ (Errno::LOOP | Errno::NOTDIR)) => {
+                    // A link or something that is not a directory: say which.
+                    let stat =
+                        rustix::fs::statat(rustix::fs::CWD, &store.dir, AtFlags::SYMLINK_NOFOLLOW)
+                            .map_err(|e| io_failure("Cannot look at", &store.dir, &io_error(e)))?;
+                    check(&store.dir, &stat, true)?;
+                    return Err(io_failure("Cannot open", &store.dir, &io_error(e)));
+                }
+                Err(e) => return Err(io_failure("Cannot open", &store.dir, &io_error(e))),
+            }
         }
     }
 
-    /// The sessions directory, checked. `None` when absent and `create` is false; created with
-    /// mode 0700 otherwise.
-    fn dir(store: &FileStore, create: bool) -> Result<Option<()>> {
-        if let Some(meta) = look(&store.dir)? {
-            check(&store.dir, &meta, true)?;
-            return Ok(Some(()));
+    /// Looks at an entry of the directory without following a link. `None` when it is absent.
+    fn look(dir: &OwnedFd, name: &str, path: &Path) -> Result<Option<Stat>> {
+        match rustix::fs::statat(dir, name, AtFlags::SYMLINK_NOFOLLOW) {
+            Ok(stat) => Ok(Some(stat)),
+            Err(Errno::NOENT) => Ok(None),
+            Err(e) => Err(io_failure("Cannot look at", path, &io_error(e))),
         }
-        if !create {
-            return Ok(None);
-        }
-        std::fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(&store.dir)
-            .map_err(|e| io_failure("Cannot create", &store.dir, &e))?;
-        // Whatever the umask or a concurrent creator did, it is judged like an existing one.
-        let meta = look(&store.dir)?.ok_or_else(|| {
-            Failure::general(format!(
-                "{} disappeared while it was created.",
-                store.dir.display()
-            ))
-        })?;
-        check(&store.dir, &meta, true)?;
-        Ok(Some(()))
     }
 
     /// Opens a file for reading and judges the opened handle, which must be the very file that
-    /// was looked at (a swap in between is refused).
-    fn open_checked(path: &Path) -> Result<Option<File>> {
-        let Some(seen) = look(path)? else {
+    /// was looked at (a swap in between is refused). A link, a FIFO or a device is never opened
+    /// for long: `O_NOFOLLOW` refuses the first and `O_NONBLOCK` keeps the others from blocking.
+    fn open_checked(dir: &OwnedFd, name: &str, path: &Path) -> Result<Option<File>> {
+        let Some(seen) = look(dir, name, path)? else {
             return Ok(None);
         };
         check(path, &seen, false)?;
-        let file = match File::open(path) {
-            Ok(file) => file,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(e) => return Err(io_failure("Cannot read", path, &e)),
+        let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
+        let fd = match rustix::fs::openat(dir, name, flags, Mode::empty()) {
+            Ok(fd) => fd,
+            Err(Errno::NOENT) => return Ok(None),
+            Err(Errno::LOOP) => {
+                return Err(refused(
+                    path,
+                    "is a symbolic link, which is never followed",
+                    None,
+                ));
+            }
+            Err(e) => return Err(io_failure("Cannot read", path, &io_error(e))),
         };
-        let opened = file
-            .metadata()
-            .map_err(|e| io_failure("Cannot read", path, &e))?;
-        if (opened.dev(), opened.ino()) != (seen.dev(), seen.ino()) {
+        let opened =
+            rustix::fs::fstat(&fd).map_err(|e| io_failure("Cannot read", path, &io_error(e)))?;
+        if (opened.st_dev, opened.st_ino) != (seen.st_dev, seen.st_ino) {
             return Err(refused(path, "changed while it was being opened", None));
         }
         check(path, &opened, false)?;
-        Ok(Some(file))
+        Ok(Some(File::from(fd)))
     }
 
     pub(super) fn load(store: &FileStore, profile: &str) -> Result<Option<StoredToken>> {
-        if dir(store, false)?.is_none() {
+        let Some(dir) = open_dir(store, false)? else {
             return Ok(None);
-        }
+        };
         let path = store.path_for(profile);
-        let Some(file) = open_checked(&path)? else {
+        let Some(file) = open_checked(&dir, &super::file_name(profile), &path)? else {
             return Ok(None);
         };
         let mut text = String::new();
@@ -304,69 +346,120 @@ mod unix {
         Ok(Some(StoredToken::from_payload(record.payload)))
     }
 
+    /// The first 16 hex digits of the profile's hash: what its temporary files start with.
+    fn prefix(profile: &str) -> String {
+        super::file_name(profile)[..16].to_owned()
+    }
+
+    fn temp_name(profile: &str) -> Result<String> {
+        let mut random = [0u8; 8];
+        getrandom::fill(&mut random)
+            .map_err(|e| Failure::general(format!("cannot get random bytes: {e}")))?;
+        let suffix: String = random.iter().map(|b| format!("{b:02x}")).collect();
+        Ok(format!(".{}.{suffix}.tmp", prefix(profile)))
+    }
+
+    /// Whether `name` is `.<prefix>.<16 hex digits>.tmp`, exactly what [`temp_name`] makes.
+    fn is_temp_of(name: &str, profile: &str) -> bool {
+        name.strip_prefix('.')
+            .and_then(|rest| rest.strip_prefix(prefix(profile).as_str()))
+            .and_then(|rest| rest.strip_prefix('.'))
+            .and_then(|rest| rest.strip_suffix(".tmp"))
+            .is_some_and(|random| {
+                random.len() == 16
+                    && random
+                        .bytes()
+                        .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+            })
+    }
+
+    /// Removes the profile's temporary files left by a write that crashed between creating the
+    /// file and renaming it: they hold live tokens. Only regular files of this user that are old
+    /// enough not to be a write in progress by another process. Best effort.
+    fn remove_leftovers(dir: &OwnedFd, profile: &str) {
+        let Ok(entries) = Dir::read_from(dir) else {
+            return;
+        };
+        let now = i64::try_from(crate::auth::now()).unwrap_or(i64::MAX);
+        let names: Vec<String> = entries
+            .filter_map(|entry| entry.ok())
+            .filter_map(|entry| entry.file_name().to_str().ok().map(str::to_owned))
+            .filter(|name| is_temp_of(name, profile))
+            .collect();
+        for name in names {
+            let Ok(stat) = rustix::fs::statat(dir, name.as_str(), AtFlags::SYMLINK_NOFOLLOW) else {
+                continue;
+            };
+            if FileType::from_raw_mode(stat.st_mode) == FileType::RegularFile
+                && stat.st_uid == euid()
+                && now.saturating_sub(stat.st_mtime) >= STALE_SECONDS
+            {
+                let _ = rustix::fs::unlinkat(dir, name.as_str(), AtFlags::empty());
+            }
+        }
+    }
+
     /// Removes the temporary file unless it was renamed into place.
     struct Temp<'a> {
-        path: &'a Path,
+        dir: &'a OwnedFd,
+        name: String,
         armed: bool,
     }
 
     impl Drop for Temp<'_> {
         fn drop(&mut self) {
             if self.armed {
-                let _ = std::fs::remove_file(self.path);
+                let _ = rustix::fs::unlinkat(self.dir, self.name.as_str(), AtFlags::empty());
             }
         }
     }
 
-    fn temp_path(store: &FileStore, profile: &str) -> Result<PathBuf> {
-        let mut random = [0u8; 8];
-        getrandom::fill(&mut random)
-            .map_err(|e| Failure::general(format!("cannot get random bytes: {e}")))?;
-        let suffix: String = random.iter().map(|b| format!("{b:02x}")).collect();
-        Ok(store.dir.join(format!(
-            ".{}.{suffix}.tmp",
-            &super::file_name(profile)[..16]
-        )))
+    fn create_new(dir: &OwnedFd, name: &str, path: &Path) -> Result<File> {
+        let flags =
+            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+        rustix::fs::openat(dir, name, flags, Mode::RUSR | Mode::WUSR)
+            .map(File::from)
+            .map_err(|e| io_failure("Cannot create", path, &io_error(e)))
     }
 
-    /// Writes `bytes` to a new 0600 file next to `path` and renames it over `path`.
-    fn write_atomically(store: &FileStore, profile: &str, path: &Path, bytes: &[u8]) -> Result<()> {
-        let temp = temp_path(store, profile)?;
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&temp)
-            .map_err(|e| io_failure("Cannot create", &temp, &e))?;
+    /// Writes `bytes` to a new 0600 file in the directory and renames it over `name`.
+    pub(super) fn write_atomically(
+        store: &FileStore,
+        dir: &OwnedFd,
+        profile: &str,
+        bytes: &[u8],
+    ) -> Result<()> {
+        let temp = temp_name(profile)?;
+        let temp_path = store.dir.join(&temp);
+        let mut file = create_new(dir, &temp, &temp_path)?;
         let mut guard = Temp {
-            path: &temp,
+            dir,
+            name: temp.clone(),
             armed: true,
         };
         // The umask can only remove bits from 0600; say 0600 whatever it was.
         file.set_permissions(std::fs::Permissions::from_mode(0o600))
             .and_then(|()| file.write_all(bytes))
             .and_then(|()| file.sync_all())
-            .map_err(|e| io_failure("Cannot write", &temp, &e))?;
+            .map_err(|e| io_failure("Cannot write", &temp_path, &e))?;
         drop(file);
-        std::fs::rename(&temp, path).map_err(|e| io_failure("Cannot replace", path, &e))?;
+        let target = store.path_for(profile);
+        rustix::fs::renameat(dir, temp.as_str(), dir, super::file_name(profile).as_str())
+            .map_err(|e| io_failure("Cannot replace", &target, &io_error(e)))?;
         guard.armed = false;
-        sync_dir(&store.dir);
+        // Makes the rename durable. Best effort: not every file system allows it.
+        let _ = rustix::fs::fsync(dir);
         Ok(())
     }
 
-    /// Makes a rename or removal durable. Best effort: not every file system allows it.
-    fn sync_dir(dir: &Path) {
-        if let Ok(handle) = File::open(dir) {
-            let _ = handle.sync_all();
-        }
-    }
-
     pub(super) fn save(store: &FileStore, profile: &str, token: &StoredToken) -> Result<()> {
-        dir(store, true)?;
+        let dir = open_dir(store, true)?
+            .ok_or_else(|| Failure::general(format!("Cannot create {}.", store.dir.display())))?;
+        remove_leftovers(&dir, profile);
         let path = store.path_for(profile);
         // An existing file is judged before it is replaced, even though it will not be read.
-        if let Some(meta) = look(&path)? {
-            check(&path, &meta, false)?;
+        if let Some(stat) = look(&dir, &super::file_name(profile), &path)? {
+            check(&path, &stat, false)?;
         }
         let record = Record {
             profile: profile.to_owned(),
@@ -375,25 +468,27 @@ mod unix {
         let mut text = serde_json::to_string(&record)
             .map_err(|e| Failure::general(format!("cannot encode the sign-in: {e}")))?;
         text.push('\n');
-        write_atomically(store, profile, &path, text.as_bytes())
+        write_atomically(store, &dir, profile, text.as_bytes())
     }
 
     pub(super) fn delete(store: &FileStore, profile: &str) -> Result<bool> {
-        if dir(store, false)?.is_none() {
-            return Ok(false);
-        }
-        let path = store.path_for(profile);
-        let Some(meta) = look(&path)? else {
+        let Some(dir) = open_dir(store, false)? else {
             return Ok(false);
         };
-        check(&path, &meta, false)?;
-        match std::fs::remove_file(&path) {
+        remove_leftovers(&dir, profile);
+        let name = super::file_name(profile);
+        let path = store.path_for(profile);
+        let Some(stat) = look(&dir, &name, &path)? else {
+            return Ok(false);
+        };
+        check(&path, &stat, false)?;
+        match rustix::fs::unlinkat(&dir, name.as_str(), AtFlags::empty()) {
             Ok(()) => {
-                sync_dir(&store.dir);
+                let _ = rustix::fs::fsync(&dir);
                 Ok(true)
             }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
-            Err(e) => Err(io_failure("Cannot remove", &path, &e)),
+            Err(Errno::NOENT) => Ok(false),
+            Err(e) => Err(io_failure("Cannot remove", &path, &io_error(e))),
         }
     }
 
@@ -401,25 +496,23 @@ mod unix {
     /// created if absent), the profile's file, if any, is trustworthy, and an empty file can be
     /// created and removed there. No token is written.
     pub(super) fn check_available(store: &FileStore, profile: &str) -> Result<()> {
-        dir(store, true)?;
+        let dir = open_dir(store, true)?
+            .ok_or_else(|| Failure::general(format!("Cannot create {}.", store.dir.display())))?;
         let path = store.path_for(profile);
-        if let Some(meta) = look(&path)? {
-            check(&path, &meta, false)?;
+        if let Some(stat) = look(&dir, &super::file_name(profile), &path)? {
+            check(&path, &stat, false)?;
         }
-        let probe = temp_path(store, profile)?;
-        OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&probe)
-            .map_err(|e| {
-                Failure::general(format!(
-                    "the plain-text token store cannot be used: cannot write in {}: {e}",
-                    store.dir.display()
-                ))
-                .hint("Use the system keychain or a tenant API key in HODEISHIELD_API_KEY.")
-            })?;
-        let _ = std::fs::remove_file(&probe);
+        let probe = temp_name(profile)?;
+        create_new(&dir, &probe, &store.dir.join(&probe)).map_err(|e| {
+            Failure::general(format!(
+                "{}: cannot write in {}: {}",
+                super::TOKEN_FILE_REFUSED,
+                store.dir.display(),
+                e.message
+            ))
+            .hint("Use the system keychain or a tenant API key in HODEISHIELD_API_KEY.")
+        })?;
+        let _ = rustix::fs::unlinkat(&dir, probe.as_str(), AtFlags::empty());
         if let Some(fs) = super::network_file_system(&store.dir) {
             eprintln!(
                 "Warning: {} is on {fs}. A file there can be read by the server's administrator \
@@ -599,10 +692,10 @@ mod tests {
             let (_tmp, store) = saved();
             std::fs::set_permissions(&store.dir, std::fs::Permissions::from_mode(bits))
                 .expect("chmod");
-            refused_with(store.load("p"), "must be 700");
-            refused_with(store.save("p", &token()), "must be 700");
-            refused_with(store.delete("p"), "must be 700");
-            refused_with(store.check_available("p"), "must be 700");
+            refused_with(store.load("p"), "no access");
+            refused_with(store.save("p", &token()), "no access");
+            refused_with(store.delete("p"), "no access");
+            refused_with(store.check_available("p"), "no access");
             assert_eq!(mode(&store.dir), bits);
             std::fs::set_permissions(&store.dir, std::fs::Permissions::from_mode(0o700))
                 .expect("chmod back");
@@ -614,14 +707,73 @@ mod tests {
         // Another user's files cannot be made in a test, so the judgement is exercised with the
         // effective uid replaced: the same file is then someone else's.
         let (_tmp, store) = saved();
-        let meta = std::fs::symlink_metadata(store.path_for("p")).expect("meta");
-        let me = meta.uid();
-        assert!(unix::problem(&meta, false, me).is_none());
-        let (reason, _) = unix::problem(&meta, false, me.wrapping_add(1)).expect("another owner");
+        let stat = rustix::fs::lstat(store.path_for("p")).expect("stat");
+        let me = stat.st_uid;
+        assert!(unix::problem(&stat, false, me).is_none());
+        let (reason, _) = unix::problem(&stat, false, me.wrapping_add(1)).expect("another owner");
         assert!(reason.contains("belongs to another user"), "{reason}");
-        let dir_meta = std::fs::symlink_metadata(&store.dir).expect("meta");
-        assert!(unix::problem(&dir_meta, true, me.wrapping_add(1)).is_some());
+        let dir_stat = rustix::fs::lstat(&store.dir).expect("stat");
+        assert!(unix::problem(&dir_stat, true, me.wrapping_add(1)).is_some());
         assert_eq!(rustix::process::geteuid().as_raw(), me);
+    }
+
+    fn tmp_files(store: &FileStore) -> Vec<String> {
+        std::fs::read_dir(&store.dir)
+            .expect("dir")
+            .filter_map(|e| e.ok().map(|e| e.file_name().to_string_lossy().into_owned()))
+            .filter(|n| n.ends_with(".tmp"))
+            .collect()
+    }
+
+    #[test]
+    fn a_failed_rename_removes_the_temporary_file() {
+        let (_tmp, store) = saved();
+        // A non-empty directory where the file belongs makes the rename fail after the temporary
+        // file was written.
+        let target = store.path_for("q");
+        std::fs::create_dir(&target).expect("blocker");
+        std::fs::write(target.join("x"), "x").expect("fill");
+        let dir = unix::open_dir(&store, false)
+            .expect("open")
+            .expect("exists");
+        let err = unix::write_atomically(&store, &dir, "q", b"secret").expect_err("rename fails");
+        assert!(err.message.starts_with("Cannot replace"), "{}", err.message);
+        assert!(tmp_files(&store).is_empty(), "{:?}", tmp_files(&store));
+    }
+
+    #[test]
+    fn leftover_temporary_files_of_the_profile_are_removed_when_stale() {
+        for deleting in [false, true] {
+            let (_tmp, store) = saved();
+            let prefix = &file_name("p")[..16];
+            let stale = store.dir.join(format!(".{prefix}.0123456789abcdef.tmp"));
+            let fresh = store.dir.join(format!(".{prefix}.fedcba9876543210.tmp"));
+            let other = store
+                .dir
+                .join(format!(".{}.0123456789abcdef.tmp", &file_name("q")[..16]));
+            let odd = store.dir.join(format!(".{prefix}.not-hex.tmp"));
+            for path in [&stale, &fresh, &other, &odd] {
+                std::fs::write(path, "token").expect("write");
+            }
+            let old = std::time::SystemTime::now() - std::time::Duration::from_secs(600);
+            for path in [&stale, &other] {
+                std::fs::File::options()
+                    .write(true)
+                    .open(path)
+                    .expect("open")
+                    .set_modified(old)
+                    .expect("age it");
+            }
+            if deleting {
+                store.delete("p").expect("delete");
+            } else {
+                store.save("p", &token()).expect("save");
+            }
+            assert!(!stale.exists(), "a stale leftover of this profile goes");
+            assert!(fresh.exists(), "a recent one may be a write in progress");
+            assert!(other.exists(), "another profile's is not touched");
+            assert!(odd.exists(), "only the exact pattern is matched");
+        }
     }
 
     #[test]
@@ -706,13 +858,18 @@ mod tests {
     }
 
     #[test]
-    fn the_state_directory_is_not_the_configuration_directory() {
-        let dir = sessions_dir().expect("dir");
-        assert!(dir.ends_with("sessions"));
+    fn the_sessions_directory_is_outside_the_configuration_directory() {
+        let sessions = sessions_dir().expect("dir");
+        let config = crate::config::path().expect("config path");
+        let config_dir = config.parent().expect("config dir");
         assert!(
-            !dir.to_string_lossy().contains("/.config/"),
-            "{}",
-            dir.display()
+            sessions.ends_with("sessions") || sessions.to_string_lossy().ends_with(".sessions")
+        );
+        assert!(
+            !sessions.starts_with(config_dir),
+            "{} is inside {}",
+            sessions.display(),
+            config_dir.display()
         );
     }
 }
