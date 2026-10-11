@@ -389,8 +389,9 @@ beta    Beta Corp   Beta Group    client  active  grace     22222222-2222-4222-8
 
 It takes `--json`, `--csv`, `--page` and `--all` like any list, sorted by name. It includes your
 own organisation's tenants (`TYPE` `own` for the internal one) and clients that are inactive or have
-no licence in force, which the `STATUS` and `LICENCE` columns tell apart. The list is read from the API
-each time: a client added to or removed from your portfolio shows up on the next command.
+no licence in force, which the `STATUS` and `LICENCE` columns tell apart. A key that was limited to
+some tenants when it was created lists and reads only those. The list is read from the API each
+time: a client added to or removed from your portfolio shows up on the next command.
 
 **3. Select the client a read command reads.** The selection goes with the command and is never
 remembered, so a later command cannot read another client by surprise.
