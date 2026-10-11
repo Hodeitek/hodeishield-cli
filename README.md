@@ -2,6 +2,9 @@
 
 # HodeiShield CLI
 
+<!-- security-notice:start -->
+<!-- security-notice:end -->
+
 [![Latest release](https://img.shields.io/github/v/release/Hodeitek/hodeishield-cli?sort=semver)](https://github.com/Hodeitek/hodeishield-cli/releases/latest)
 [![CI](https://github.com/Hodeitek/hodeishield-cli/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Hodeitek/hodeishield-cli/actions/workflows/ci.yml?query=branch%3Amain)
 [![License: Apache-2.0](https://img.shields.io/github/license/Hodeitek/hodeishield-cli)](LICENSE)
@@ -10,6 +13,8 @@
 The official command-line client for [HodeiShield](https://hodeishield.com), by
 [Hodeitek](https://hodeitek.com). HodeiShield covers third-party risk, supply-chain security and
 compliance (NIS2, DORA, ISO 27001, ENS).
+
+Security policy, how to report a vulnerability and where advisories appear: [SECURITY.md](SECURITY.md).
 
 ## Quick start
 
@@ -527,7 +532,9 @@ TLS-inspecting proxy; macOS and Windows have not been verified yet.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md). To report a vulnerability,
 use [GitHub private reporting](https://github.com/Hodeitek/hodeishield-cli/security/advisories/new)
-or email [security@hodeitek.com](mailto:security@hodeitek.com), never a public issue.
+or email [security@hodeitek.com](mailto:security@hodeitek.com), never a public issue. Security
+advisories are published under
+[Security → Advisories](https://github.com/Hodeitek/hodeishield-cli/security/advisories).
 
 ## License
 
