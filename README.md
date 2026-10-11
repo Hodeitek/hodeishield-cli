@@ -536,6 +536,11 @@ or email [security@hodeitek.com](mailto:security@hodeitek.com), never a public i
 advisories are published under
 [Security → Advisories](https://github.com/Hodeitek/hodeishield-cli/security/advisories).
 
+From 1.0.0, each major version is supported with security fixes for five years; during 0.x, fixes go
+into the latest 0.x release ([Supported versions](SECURITY.md#supported-versions)).
+[docs/user-information.md](docs/user-information.md) gathers the manufacturer's contact details, the
+support period, secure use, how to update and remove the CLI, and where the SBOM is published.
+
 ## License
 
 Licensed under the [Apache License, Version 2.0](LICENSE). Copyright 2026 Hodeitek S.L.; see
