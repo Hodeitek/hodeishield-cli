@@ -5,6 +5,8 @@ name: Re-sign package repository
 # with the new subkey and regenerates the indexes, with packaging/repo/resign.sh. Started by hand only.
 # It runs in the packaging environment, so it needs the same approval as a release's repository
 # publication. A dry run (the default) reads the bucket and checks everything but uploads nothing.
+# It shares the concurrency group of the other packaging workflows, so a pending run here and a pending
+# release can displace each other: start it when no release is pending.
 on:
   workflow_dispatch:
     inputs:
@@ -65,14 +67,17 @@ jobs:
             echo "::error::The packaging environment lacks:$missing"
             exit 1
           fi
-          # Only version numbers reach the commands below.
+          # Only stable version numbers reach the commands below (the same pattern as package-managers).
           for v in $VERSIONS; do
-            if ! [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
-              echo "::error::'$v' is not a release version."
+            if ! [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::'$v' is not a stable release version."
               exit 1
             fi
           done
           [ -n "${VERSIONS// /}" ] || { echo "::error::No version given."; exit 1; }
+          # Not the security boundary: a run can be started from any branch, and a branch can change this
+          # file. What keeps an apply from a branch away from the secrets is the packaging environment's
+          # deployment-branch rule (CONTRIBUTING.md); this check only fails early and clearly.
           if [ "$APPLY" = true ] && [ "$REF" != "$DEFAULT_REF" ]; then
             echo "::error::Only a dry run may run from $REF; apply from $DEFAULT_REF."
             exit 1
@@ -81,6 +86,20 @@ jobs:
             echo "::error::apply needs the primary key fingerprint in confirm."
             exit 1
           fi
+          # What the approver of the packaging environment is asked to approve.
+          {
+            if [ "$APPLY" = true ]; then
+              echo "## Re-sign package repository: APPLY (the bucket will be changed)"
+            else
+              echo "## Re-sign package repository: dry run (nothing is uploaded)"
+            fi
+            echo
+            echo "Ref: \`$REF\`"
+            echo
+            echo "Releases whose packages are re-signed, and which must be every release in the bucket:"
+            echo
+            for v in $VERSIONS; do echo "- \`$v\`"; done
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -110,6 +129,13 @@ jobs:
           set -euo pipefail
           mkdir verified
           for VERSION in $VERSIONS; do
+            # A published, final release only: a draft or a prerelease is not in the bucket.
+            state=$(gh release view "v$VERSION" -R "$GITHUB_REPOSITORY" --json isPrerelease,isDraft \
+              --jq '"\(.isPrerelease) \(.isDraft)"')
+            if [ "$state" != "false false" ]; then
+              echo "::error::Release v$VERSION is a prerelease or a draft (or cannot be read)."
+              exit 1
+            fi
             packages=(
               "hodeishield_${VERSION}-1_amd64.deb"
               "hodeishield_${VERSION}-1_arm64.deb"
@@ -130,6 +156,25 @@ jobs:
             for p in "${packages[@]}"; do cp "rel-$VERSION/$p" verified/; done
           done
           ls verified
+
+      # Before an apply: the old RPM objects are kept only if the bucket keeps versions. Reading that
+      # needs s3:GetBucketVersioning; a credential that lacks it stops the run here, by design.
+      - name: Check the bucket keeps old versions
+        if: ${{ inputs.apply }}
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.PACKAGES_S3_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.PACKAGES_S3_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ vars.PACKAGES_S3_REGION }}
+          ENDPOINT: ${{ vars.PACKAGES_S3_ENDPOINT }}
+          BUCKET: ${{ vars.PACKAGES_S3_BUCKET }}
+        run: |
+          set -euo pipefail
+          status=$(aws s3api get-bucket-versioning --endpoint-url "$ENDPOINT" --bucket "$BUCKET" \
+            --query Status --output text 2> /dev/null) || status=unreadable
+          if [ "$status" != Enabled ]; then
+            echo "::error::Versioning of the bucket is '$status', not Enabled (or the credential may not read it: it needs s3:GetBucketVersioning). Re-signing replaces the RPM objects, so nothing is applied."
+            exit 1
+          fi
 
       - name: Build the repository image
         run: |
