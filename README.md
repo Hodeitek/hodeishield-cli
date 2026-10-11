@@ -335,8 +335,16 @@ a code. You have two options, in this order of preference:
 2. **A plain-text token file, if you want to sign in as yourself** on a machine you control, such as
    a jump host. You opt in explicitly, and the trade-off is that the tokens are stored
    **unencrypted** in a file that only your user can read. Anyone who can read your files, such as
-   `root`, a backup, a snapshot or a copy of your home directory, can use the refresh token until it
-   is revoked.
+   `root`, a backup, a snapshot or a copy of your home directory, can use the refresh token:
+   - **How long.** Today, up to 30 days after the CLI last refreshed the session (every refresh
+     starts a new 30 days), unless you end it earlier with `hodeishield logout` or by revoking the
+     access in the app under **Account › Applications**. The service is adding an absolute limit of
+     90 days from the sign-in, and will also end these sessions when you change your password; this
+     section will say so once that is in place.
+   - **Reuse is detected.** Each refresh replaces the refresh token. If someone refreshes with a
+     copy of your file, the next refresh by your own CLI is seen as a reuse of an old token and
+     ends the session for both. An unexpected "sign in again" is a reason to revoke the access in
+     the app and check who could read the file.
 
    ```sh
    export HODEISHIELD_TOKEN_STORE=plaintext-file   # or: hodeishield config set token_store plaintext-file

@@ -146,9 +146,22 @@ the following rules. Containers and CI keep using API keys.
 - **Migration between stores.** Deliberately absent; switching is sign out, change the setting, sign
   in.
 
-## Open question
+## Server-side lifetimes
 
-To be confirmed with the API provider: the refresh token's lifetime, rotation and idle expiry on the
-server side. They decide how long a copy of a token file stays useful, and whether the exposure of a
-leaked file can be bounded by something other than revocation. Nothing in this decision depends on the
-answer, but the README's wording about exposure should be revisited once it is known.
+How long a copy of a token file stays useful is set by the service, not by the CLI:
+
+- The access token lives 15 minutes and is checked by the service on every use.
+- The refresh token lives 30 days and is replaced on every refresh, which starts a new 30 days, so
+  today a session has no absolute limit while it keeps being refreshed. There is no idle expiry
+  beyond those 30 days.
+- Replaying a refresh token that was already replaced ends the whole session. If an attacker
+  refreshes with a copied file, the legitimate CLI's next refresh ends both.
+- A session ends with `hodeishield logout` (token revocation), with a revocation in the app under
+  Account › Applications, and when the account or the organisation is suspended. Today it does not
+  end when the password is changed.
+
+The service is adding an absolute limit of 90 days from the original sign-in and will end these
+sessions when the password is changed or an administrator revokes them. From then on, the exposure of
+a leaked file is at most 90 days, ended earlier by `hodeishield logout`, a password change or a
+revocation under Account › Applications. Until then it is up to 30 days after the last refresh. The
+README states the current figure and is updated when the limit is in place.
