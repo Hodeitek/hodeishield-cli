@@ -3,8 +3,8 @@ name: Re-sign package repository
 # Recovery after the signing subkey of the APT and DNF repositories has been revoked and replaced
 # (CONTRIBUTING.md, "The repository signing key"): signs the RPM packages already in the bucket again
 # with the new subkey and regenerates the indexes, with packaging/repo/resign.sh. Started by hand only.
-# It runs in the packaging environment, so it needs the same approval as a release's repository
-# publication. A dry run (the default) reads the bucket and checks everything but uploads nothing.
+# It runs in the packaging-resign environment (default branch only; one maintainer approves), whose
+# secrets are set only during a recovery. A dry run (the default) reads the bucket and checks everything but uploads nothing.
 # It shares the concurrency group of the other packaging workflows, so a pending run here and a pending
 # release can displace each other: start it when no release is pending.
 on:
@@ -36,7 +36,9 @@ jobs:
     name: re-sign the RPM packages and rebuild the indexes
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    environment: packaging
+    # A separate environment from the release's `packaging`: it accepts deployments from the default
+    # branch only, and its secrets stay empty outside a recovery (see CONTRIBUTING.md).
+    environment: packaging-resign
     permissions:
       contents: read
     steps:
@@ -64,7 +66,7 @@ jobs:
           [ -n "$SECRET_ACCESS_KEY" ] || missing="$missing PACKAGES_S3_SECRET_ACCESS_KEY"
           [ -n "$SIGNING_KEY" ] || missing="$missing PACKAGES_GPG_SIGNING_KEY"
           if [ -n "$missing" ]; then
-            echo "::error::The packaging environment lacks:$missing"
+            echo "::error::The packaging-resign environment lacks:$missing (its secrets are set only for a recovery, see CONTRIBUTING.md)"
             exit 1
           fi
           # Only stable version numbers reach the commands below (the same pattern as package-managers).
@@ -76,7 +78,7 @@ jobs:
           done
           [ -n "${VERSIONS// /}" ] || { echo "::error::No version given."; exit 1; }
           # Not the security boundary: a run can be started from any branch, and a branch can change this
-          # file. What keeps an apply from a branch away from the secrets is the packaging environment's
+          # file. What keeps an apply from a branch away from the secrets is the packaging-resign environment's
           # deployment-branch rule (CONTRIBUTING.md); this check only fails early and clearly.
           if [ "$APPLY" = true ] && [ "$REF" != "$DEFAULT_REF" ]; then
             echo "::error::Only a dry run may run from $REF; apply from $DEFAULT_REF."
@@ -86,7 +88,7 @@ jobs:
             echo "::error::apply needs the primary key fingerprint in confirm."
             exit 1
           fi
-          # What the approver of the packaging environment is asked to approve.
+          # What the approver of the packaging-resign environment is asked to approve.
           {
             if [ "$APPLY" = true ]; then
               echo "## Re-sign package repository: APPLY (the bucket will be changed)"
