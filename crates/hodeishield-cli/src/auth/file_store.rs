@@ -539,7 +539,7 @@ fn network_file_system(_: &Path) -> Option<&'static str> {
 }
 
 /// Linux `statfs` `f_type` values of file systems served by another machine.
-#[cfg(any(test, all(unix, target_os = "linux")))]
+#[cfg(all(unix, any(test, target_os = "linux")))]
 fn network_file_system_for(f_type: u64) -> Option<&'static str> {
     match f_type {
         0x6969 => Some("NFS"),
