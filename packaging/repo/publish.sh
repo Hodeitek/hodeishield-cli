@@ -26,6 +26,12 @@
 #       the entry points, which must never be served stale or out of step with each other
 #   everything else (Packages*, per-architecture Release, .repo, gpg.key, index.html)
 #       public, max-age=60
+#
+# With RESIGN=1 (set by resign.sh, never by a release) it does the one-off recovery after a signing
+# subkey revocation instead: <new-packages-dir> holds the verified copy of every package in the bucket,
+# the RPM packages are signed again from it and uploaded over the old ones (the bucket's versioning
+# keeps those), and the indexes are rebuilt without reading the published InRelease. DRY_RUN=1 stops
+# before anything is uploaded.
 
 set -eu
 
@@ -57,10 +63,43 @@ trap 'rm -rf "$repo" "$published"' EXIT
 # downloaded, so that build.sh sees (and refuses) anything that the signed index does not vouch for.
 rclone copy "$bucket" "$repo" --include '/apt/pool/**' --include '/rpm/*/*.rpm'
 
+resign=${RESIGN:-}
+if [ -n "$resign" ]; then
+  # The bucket and the verified copy hold the same packages, each .rpm is the same package (the header
+  # digest does not change when a signature is added), and the old signatures are not looked at.
+  aux=$(mktemp -d)
+  trap 'rm -rf "$repo" "$published" "$aux"' EXIT
+  die() {
+    printf 'publish.sh: %s\n' "$*" >&2
+    exit 1
+  }
+  headerdigest() { rpm --dbpath "$aux/db" -qp --qf '%{SHA256HEADER}' "$1" 2> /dev/null; }
+  (cd "$repo" && find . -type f \( -name '*.deb' -o -name '*.rpm' \) -exec basename {} \;) | sort > "$aux/bucket"
+  (cd "$new" && find . -type f -exec basename {} \;) | sort > "$aux/verified"
+  [ -s "$aux/bucket" ] || die "the bucket holds no package; there is nothing to sign again"
+  comm -3 "$aux/bucket" "$aux/verified" > "$aux/differ"
+  [ ! -s "$aux/differ" ] || {
+    cat "$aux/differ" >&2
+    die "the packages in the bucket (left) and in the verified directory (right, indented) differ"
+  }
+  mkdir "$aux/db"
+  : > "$aux/old.sums"
+  for rpm in "$repo"/rpm/*/*.rpm; do
+    [ -e "$rpm" ] || continue
+    want=$(headerdigest "$new/$(basename "$rpm")")
+    [ -n "$want" ] && [ "$(headerdigest "$rpm")" = "$want" ] ||
+      die "$(basename "$rpm") in the bucket is not the package of the verified release"
+    (cd "$repo" && sha256sum "${rpm#"$repo"/}") >> "$aux/old.sums"
+  done
+  # Only the local copy: build.sh signs them again from the verified files.
+  rm -f "$repo"/rpm/*/*.rpm
+fi
+
 # The signed APT index as published (none before the first release), and the Packages files it lists,
 # by hash: what build.sh checks the downloaded packages against. The hashes are read here before the
 # signature is checked, only to know what to download; build.sh checks both.
-rclone copy "$bucket" "$published" --include /apt/dists/stable/InRelease
+# (Not in a recovery: that InRelease was signed by the revoked subkey and is not trusted.)
+[ -n "$resign" ] || rclone copy "$bucket" "$published" --include /apt/dists/stable/InRelease
 if [ -e "$published/apt/dists/stable/InRelease" ]; then
   for arch in amd64 arm64; do
     hash=$(awk -v f="main/binary-$arch/Packages" \
@@ -77,9 +116,27 @@ fi
 
 sh "$here/build.sh" "$repo" "$new" "$published/apt/dists/stable"
 
-# Packages first. --immutable makes a published package that differs from the local copy an error.
-rclone copy "$repo" "$bucket" --immutable --header-upload "$forever" \
-  --include '/apt/pool/**' --include '/rpm/*/*.rpm'
+if [ -n "$resign" ]; then
+  printf 'RPM packages signed again (build.sh verified each one against the new key):\n'
+  (cd "$repo" && sha256sum rpm/*/*.rpm) | while read -r sum file; do
+    printf '  %s\n    before %s\n    after  %s\n' "$file" \
+      "$(awk -v f="$file" '$2 == f { print $1 }' "$aux/old.sums")" "$sum"
+  done
+  if [ -n "${DRY_RUN:-}" ]; then
+    printf 'Dry run: nothing was uploaded.\n'
+    exit 0
+  fi
+fi
+
+# Packages first. --immutable makes a published package that differs from the local copy an error;
+# in a recovery that holds for the .deb files, and the re-signed .rpm files go over the old ones.
+if [ -n "$resign" ]; then
+  rclone copy "$repo" "$bucket" --immutable --header-upload "$forever" --include '/apt/pool/**'
+  rclone copy "$repo" "$bucket" --ignore-times --header-upload "$short" --include '/rpm/*/*.rpm'
+else
+  rclone copy "$repo" "$bucket" --immutable --header-upload "$forever" \
+    --include '/apt/pool/**' --include '/rpm/*/*.rpm'
+fi
 
 # Then the indexes that are named by their hash: the by-hash copies of the APT indexes and the
 # hashed repodata files of DNF (createrepo_c names them <sha256 of the file>-<type>.xml.gz, so a name
@@ -104,3 +161,13 @@ for file in rpm/x86_64/repodata/repomd.xml rpm/x86_64/repodata/repomd.xml.asc \
   apt/dists/stable/Release apt/dists/stable/Release.gpg apt/dists/stable/InRelease; do
   rclone copyto "$repo/$file" "$bucket/$file" --ignore-times --header-upload "$nocache"
 done
+
+# A recovery reads the RPM packages back from the bucket: they must be the re-signed files.
+if [ -n "$resign" ]; then
+  rclone copy "$bucket" "$aux/after" --include '/rpm/*/*.rpm'
+  for rpm in "$repo"/rpm/*/*.rpm; do
+    cmp -s "$rpm" "$aux/after/${rpm#"$repo"/}" ||
+      die "${rpm#"$repo"/} in the bucket is not the re-signed file"
+  done
+  printf 'Re-signed RPM packages uploaded and read back from the bucket.\n'
+fi
