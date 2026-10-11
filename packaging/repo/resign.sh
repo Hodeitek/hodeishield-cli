@@ -20,7 +20,8 @@
 # Environment: the same as publish.sh (PACKAGES_S3_*, GNUPGHOME, SIGNING_KEY, PUBLIC_KEY). PUBLIC_KEY
 # is the new public key, exported without the revoked subkey (export-public-key.sh).
 #
-# It refuses to run when PUBLIC_KEY carries a revoked subkey, or when a signature made with SIGNING_KEY
+# It refuses to run when PUBLIC_KEY carries a revoked subkey, when it does not carry exactly one usable
+# signing subkey (the one named by SIGNING_KEY), or when a signature made with SIGNING_KEY
 # does not verify against PUBLIC_KEY (the same check build.sh applies). The old signatures and the
 # published InRelease, made by the revoked subkey, are not trusted and not read. The RPM files are
 # uploaded under their own names: the bucket's versioning keeps the previous objects, nothing is
@@ -61,14 +62,14 @@ trap 'rm -rf "$tmp"' EXIT
 primary=$(gpg --batch --with-colons --show-keys "$PUBLIC_KEY" | awk -F: '$1 == "fpr" { print $10; exit }')
 [ -n "$primary" ] || die "cannot read the fingerprint of $PUBLIC_KEY"
 
-# The key to publish must be one that rpm on RHEL and Rocky Linux 8 and 9 can import.
-if gpg --batch --with-colons --show-keys "$PUBLIC_KEY" | awk -F: '$1 == "sub" && $2 == "r" { bad = 1 } END { exit !bad }'; then
-  die "$PUBLIC_KEY carries a revoked subkey; export it with export-public-key.sh (CONTRIBUTING.md)"
-fi
-
-# A signature made with the new subkey must verify against the public key, as build.sh will require.
+# The key to publish must be one that rpm on RHEL and Rocky Linux 8 and 9 can import (no revoked
+# subkey), and must carry exactly one usable signing subkey: the one that signs, SIGNING_KEY.
 # shellcheck source=/dev/null
 . "$here/sigcheck.sh"
+problem=$(public_key_problem "$PUBLIC_KEY" "$SIGNING_KEY")
+[ -z "$problem" ] || die "$PUBLIC_KEY $problem"
+
+# A signature made with the new subkey must verify against the public key, as build.sh will require.
 gpg --batch --quiet --dearmor --output "$tmp/key.gpg" "$PUBLIC_KEY"
 printf 'resign.sh preflight\n' > "$tmp/probe"
 gpg --batch --yes --local-user "$SIGNING_KEY" --digest-algo SHA512 --armor --detach-sign \

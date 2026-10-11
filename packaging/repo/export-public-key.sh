@@ -10,12 +10,24 @@
 # rpm on RHEL and Rocky Linux 8 and 9 refuses to import a public key that carries a revoked subkey, so
 # the key published as /gpg.key and committed as packaging/gpg.key must not. The keyring only needs the
 # public part of the primary key, the new signing subkey and the revocation of the old one. The output
-# is checked before it is printed: no revoked subkey, and at least one usable signing subkey.
+# is checked before it is printed: exactly one primary key, no revoked subkey, and exactly one signing
+# subkey that is neither revoked nor expired (and, when SIGNING_KEY is set, that is the one it names).
 
 set -eu
 
 primary=${1:?usage: export-public-key.sh <primary-fingerprint>}
 : "${GNUPGHOME:?}"
+case $primary in
+  *[!0-9A-Fa-f]* | '') fail=1 ;;
+  *) [ ${#primary} = 40 ] || fail=1 ;;
+esac
+[ -z "${fail-}" ] || {
+  printf 'export-public-key.sh: the argument must be a 40-digit primary key fingerprint\n' >&2
+  exit 2
+}
+here=$(cd "$(dirname "$0")" && pwd)
+# shellcheck source=/dev/null
+. "$here/sigcheck.sh"
 
 # The fingerprints of the revoked subkeys in the keyring: a "sub" record with validity "r", and the
 # "fpr" record that follows it.
@@ -40,13 +52,15 @@ fi
   exit 1
 }
 
-# What is about to be published: no revoked subkey left, and a signing subkey that is neither revoked
-# nor expired.
-if ! gpg --batch --with-colons --show-keys "$out" | awk -F: '
-  $1 == "sub" && $2 == "r" { bad = 1 }
-  $1 == "sub" && $2 != "r" && $2 != "e" && $12 ~ /s/ { usable++ }
-  END { exit (bad || usable < 1) }'; then
-  printf 'export-public-key.sh: the export carries a revoked subkey or has no usable signing subkey\n' >&2
+# What is about to be published: one primary key, no revoked subkey, and one signing subkey that is
+# neither revoked nor expired.
+[ "$(gpg --batch --with-colons --show-keys "$out" | grep -c '^pub:')" = 1 ] || {
+  printf 'export-public-key.sh: the export does not hold exactly one primary key\n' >&2
+  exit 1
+}
+problem=$(public_key_problem "$out" "${SIGNING_KEY-}")
+if [ -n "$problem" ]; then
+  printf 'export-public-key.sh: the export %s\n' "$problem" >&2
   exit 1
 fi
 cat "$out"

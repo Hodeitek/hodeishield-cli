@@ -31,7 +31,9 @@
 # subkey revocation instead: <new-packages-dir> holds the verified copy of every package in the bucket,
 # the RPM packages are signed again from it and uploaded over the old ones (the bucket's versioning
 # keeps those), and the indexes are rebuilt without reading the published InRelease. DRY_RUN=1 stops
-# before anything is uploaded.
+# before anything is uploaded. The re-signed RPM files get max-age=60 where a new package is immutable,
+# deliberately: they replace objects that caches may hold as immutable under the same URL, and a short
+# lifetime lets the CDN purge and the clients' own caches converge instead of pinning the replacement.
 
 set -eu
 
@@ -86,7 +88,8 @@ if [ -n "$resign" ]; then
   : > "$aux/old.sums"
   for rpm in "$repo"/rpm/*/*.rpm; do
     [ -e "$rpm" ] || continue
-    want=$(headerdigest "$new/$(basename "$rpm")")
+    want=$(headerdigest "$new/$(basename "$rpm")") ||
+      die "cannot read the header digest of $(basename "$rpm") in the verified directory"
     [ -n "$want" ] && [ "$(headerdigest "$rpm")" = "$want" ] ||
       die "$(basename "$rpm") in the bucket is not the package of the verified release"
     (cd "$repo" && sha256sum "${rpm#"$repo"/}") >> "$aux/old.sums"
@@ -138,6 +141,17 @@ else
     --include '/apt/pool/**' --include '/rpm/*/*.rpm'
 fi
 
+# A recovery reads the RPM packages back from the bucket before any index is uploaded: they must be
+# the re-signed files, and a failure leaves the published indexes as they were.
+if [ -n "$resign" ]; then
+  rclone copy "$bucket" "$aux/after" --include '/rpm/*/*.rpm'
+  for rpm in "$repo"/rpm/*/*.rpm; do
+    cmp -s "$rpm" "$aux/after/${rpm#"$repo"/}" ||
+      die "${rpm#"$repo"/} in the bucket is not the re-signed file"
+  done
+  printf 'Re-signed RPM packages uploaded and read back from the bucket.\n'
+fi
+
 # Then the indexes that are named by their hash: the by-hash copies of the APT indexes and the
 # hashed repodata files of DNF (createrepo_c names them <sha256 of the file>-<type>.xml.gz, so a name
 # never has other content). A file that is already there is skipped rather than checked with
@@ -161,13 +175,3 @@ for file in rpm/x86_64/repodata/repomd.xml rpm/x86_64/repodata/repomd.xml.asc \
   apt/dists/stable/Release apt/dists/stable/Release.gpg apt/dists/stable/InRelease; do
   rclone copyto "$repo/$file" "$bucket/$file" --ignore-times --header-upload "$nocache"
 done
-
-# A recovery reads the RPM packages back from the bucket: they must be the re-signed files.
-if [ -n "$resign" ]; then
-  rclone copy "$bucket" "$aux/after" --include '/rpm/*/*.rpm'
-  for rpm in "$repo"/rpm/*/*.rpm; do
-    cmp -s "$rpm" "$aux/after/${rpm#"$repo"/}" ||
-      die "${rpm#"$repo"/} in the bucket is not the re-signed file"
-  done
-  printf 'Re-signed RPM packages uploaded and read back from the bucket.\n'
-fi
