@@ -81,22 +81,30 @@ the following rules. Containers and CI keep using API keys.
   moved between stores: sign out, change the setting, sign in again.
 - **Location.** The platform's state directory, not the configuration directory:
   `$XDG_STATE_HOME/hodeishield/sessions/` (by default `~/.local/state/hodeishield/sessions/`) on
-  Linux, and the application support directory on macOS. One file per profile, named by the SHA-256
-  of the profile name (names may contain `/` or `..`). The configuration file stays free of
-  credentials, so copying or syncing it never copies a token.
+  Linux, and on macOS a sibling of the application support folder
+  (`~/Library/Application Support/com.Hodeitek.HodeiShield.sessions/`), because there the
+  configuration and data directories are the same folder. One file per profile, named by the SHA-256
+  of the profile name (names may contain `/` or `..`; the hash is not a way to hide a guessable
+  name). The configuration file stays free of credentials, so copying or syncing it never copies a
+  token. The parents of the sessions directory are not walked or checked, because that would refuse
+  legitimate setups; the README says they must not be writable by other users.
 - **Checks on every read and write.** The CLI refuses, and never repairs, a file or directory that is
   a symbolic link, is not owned by the current user, or has any group or other permission bit. It
-  creates the directory with mode 700 and the files with mode 600. The opened file is checked again
-  after it is opened, so a file swapped in between is refused. A corrupt file is an error that names
+  creates the directory with mode 700 and the files with mode 600. The directory is opened once
+  without following links and checked on the open handle; every later operation is relative to that
+  handle, so replacing the path afterwards cannot redirect it. Files are opened without following
+  links and without blocking, and checked again after they are opened. Running as `root` for a
+  user's home is not special-cased: a directory of another owner is refused in both directions. A corrupt file is an error that names
   it; a file written for another profile is not accepted.
 - **Atomic writes.** The CLI writes a new file created with mode 600 in the same directory, flushes it
   to disk, renames it over the target and flushes the directory. A temporary file is removed when
-  anything fails, and no token is ever in a file that others can read.
+  anything fails, and no token is ever in a file that others can read. Leftovers of a crash (a
+  temporary file of that profile older than a minute) are removed on the next save or logout.
 - **Behaviour of #101 is unchanged.** `login` checks that the selected store is usable before it
   opens a browser or shows a code. If saving fails after the exchange, the refresh token and then the
   access token are revoked and the command exits non-zero. `logout` revokes, then deletes the file.
-  No new exit codes: `login` failures are 1, other commands that need a credential and find the file
-  refused are 3, a corrupt file is 1.
+  No new exit codes: `login` and `logout` failures are 1, other commands that need a credential and
+  find the file refused are 3, a corrupt file is 1.
 - **Windows is deferred.** There are no permission bits to check, and setting and checking an ACL
   needs platform calls that the workspace's `unsafe_code = "forbid"` rules out without a vetted
   wrapper. Selecting the file store on Windows is refused with exit code 1, before anything is asked

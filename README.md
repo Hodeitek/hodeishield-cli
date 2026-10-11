@@ -347,13 +347,22 @@ a code. You have two options, in this order of preference:
 
    - **Where.** One file per profile in the sessions directory of your state directory:
      `$XDG_STATE_HOME/hodeishield/sessions/` (by default `~/.local/state/hodeishield/sessions/`) on
-     Linux, and `~/Library/Application Support/com.Hodeitek.HodeiShield/sessions/` on macOS. The
-     configuration file never holds a token, and the file names do not reveal profile names.
+     Linux, and `~/Library/Application Support/com.Hodeitek.HodeiShield.sessions/` on macOS (next to,
+     not inside, the folder that holds the configuration file). The configuration file never holds
+     a token, and the file names are a hash of the profile name, not the name itself (a hash of a
+     guessable name can be reversed, so do not treat it as hiding the profile). The parents of that
+     directory, such as your state directory, must not be writable by other users.
    - **Checks.** The directory is created with mode 700 and the files with mode 600, written by
      replacing the file atomically. On every read and write the CLI refuses, and does not repair, a
      file or directory that is a symbolic link, belongs to another user, or is open to group or
-     others. Commands then stop with exit code 3 (`login`: 1) and tell you what is wrong; fix it
-     yourself (`chmod`), and revoke the tokens in the app if someone else could have read them.
+     others. Commands that need a credential then stop with exit code 3 (`login` and `logout`: 1) and
+     tell you what is wrong; fix it yourself (`chmod`), and revoke the tokens in the app if someone
+     else could have read them. Temporary files left by a write that was interrupted are removed
+     the next time that profile is saved or signed out.
+   - **Do not run it as `root` or with `sudo` for your user.** A run as `root` that uses your home
+     directory can create root-owned directories there, which your own runs then refuse (and
+     `root` refuses yours, since they belong to another user). Sign in with the user that will run
+     the commands.
    - **No fallback.** The setting must be the same on every command, and the CLI never switches
      between the keychain and the file on its own. Tokens are not moved when you change it: sign out,
      change the setting, sign in again. The values are `plaintext-file` and `keychain` (the default);
@@ -429,7 +438,7 @@ hodeishield vendors list --all --csv > vendors.csv
 | 0 | Success |
 | 1 | Error (invalid input, configuration, unexpected answer) |
 | 2 | Invalid command line |
-| 3 | Not authenticated: no credential (also when the system keychain cannot be reached in this session, or the opt-in token file is refused as unsafe), or the API rejected it |
+| 3 | Not authenticated: no credential (also when the system keychain cannot be reached in this session, or the opt-in token file is refused as unsafe; `login` and `logout` exit 1 for that), or the API rejected it |
 | 4 | The credential lacks the scope the command needs |
 | 5 | Not found (or not in your organisation) |
 | 6 | Rate limit exhausted (the CLI already retried short waits) |

@@ -15,7 +15,8 @@ commands, `--json` output and exit codes. Each release's notes start with its se
   (`$XDG_STATE_HOME/hodeishield/sessions/` on Linux). The keychain stays the default, nothing ever
   falls back from one store to the other, and the file store is not available on Windows yet. Every
   read and write refuses a file or directory that is a symbolic link, belongs to another user or is
-  open to group or others; files are replaced atomically with mode 600. `logout` revokes the tokens
+  open to group or others (exit code 3 for commands that need a credential, 1 for `login` and
+  `logout`); files are replaced atomically with mode 600. `logout` revokes the tokens
   and deletes the file. The README has a new section, "Servers, containers and remote sessions",
   with the trade-off and the advice for containers and CI (a tenant API key); ADR 0001 records the
   decision. A configuration file that contains `token_store` is refused by older CLIs.
