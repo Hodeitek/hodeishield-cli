@@ -1125,7 +1125,9 @@ mod file_store {
         let env = Env::new();
         let app = app();
         signed_in(&env, &app);
-        let moved = env.state().join("moved");
+        // Next to the sessions directory, which exists on every platform (the state directory is
+        // not used on macOS).
+        let moved = env.sessions().parent().expect("parent").join("moved");
         std::fs::rename(env.sessions(), &moved).expect("move");
         symlink(&moved, env.sessions()).expect("link");
         assert_refused(&env, &app, "symbolic link");
