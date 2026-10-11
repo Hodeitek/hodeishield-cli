@@ -54,16 +54,16 @@ section), and put `hodeishield` (`hodeishield.exe` on Windows) somewhere on your
 | Linux arm64 | `hodeishield-<version>-aarch64-unknown-linux-musl.tar.gz` |
 | macOS (Apple silicon and Intel) | `hodeishield-<version>-universal-apple-darwin.tar.gz` |
 | Windows x86_64 | `hodeishield-<version>-x86_64-pc-windows-msvc.zip` |
-| Windows arm64 | `hodeishield-<version>-aarch64-pc-windows-msvc.zip` (from the first release after 0.3.1) |
+| Windows arm64 | `hodeishield-<version>-aarch64-pc-windows-msvc.zip` (from 0.4.0) |
 
-`<version>` has no leading `v`: release `v0.3.1` ships `hodeishield-0.3.1-…`. The Linux binaries are
-statically linked and run on any distribution. Homebrew and Scoop packages are also available
-(next section).
+`<version>` has no leading `v`: release `v0.4.0` ships `hodeishield-0.4.0-…`. The Linux binaries are
+statically linked and run on any distribution. Homebrew and Scoop packages (next section) and a
+[container image](#container-image) are also available.
 
 From source, with the Rust toolchain installed (pin the release tag you want):
 
 ```sh
-cargo install --locked --git https://github.com/Hodeitek/hodeishield-cli --tag v0.3.1 hodeishield-cli
+cargo install --locked --git https://github.com/Hodeitek/hodeishield-cli --tag v0.4.0 hodeishield-cli
 ```
 
 ### Homebrew and Scoop
@@ -159,9 +159,9 @@ that check (the checksum still runs). `sh install.sh --help` lists the options (
 
 ### Container image
 
-From the first release after 0.3.0, each stable release also publishes a multi-architecture
-(`linux/amd64`, `linux/arm64`) image at `ghcr.io/hodeitek/hodeishield-cli`, for CI jobs and container
-pipelines. It holds only the release's own `hodeishield` binary on a
+From 0.4.0, each stable release also publishes a multi-architecture (`linux/amd64`, `linux/arm64`)
+image at `ghcr.io/hodeitek/hodeishield-cli`, for CI jobs and container pipelines. It holds only the
+release's own `hodeishield` binary on a
 [distroless](https://github.com/GoogleContainerTools/distroless) static base (no shell, no package
 manager, CA certificates included) and runs as a non-root user. There is no `latest` tag: use the
 exact version, or better its digest.
@@ -218,9 +218,9 @@ Each release has a `SHA256SUMS` file, a Sigstore bundle (`*.sigstore.json`) for 
 ```sh
 sha256sum --ignore-missing -c SHA256SUMS
 
-cosign verify-blob hodeishield-0.3.1-x86_64-unknown-linux-musl.tar.gz \
-  --bundle hodeishield-0.3.1-x86_64-unknown-linux-musl.tar.gz.sigstore.json \
-  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.3.1 \
+cosign verify-blob hodeishield-0.4.0-x86_64-unknown-linux-musl.tar.gz \
+  --bundle hodeishield-0.4.0-x86_64-unknown-linux-musl.tar.gz.sigstore.json \
+  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.4.0 \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --certificate-github-workflow-trigger push
 ```
@@ -248,7 +248,7 @@ xattr -d com.apple.quarantine ./hodeishield   # "No such xattr" means there was 
 Or download with `curl`, which does not set that attribute in the first place:
 
 ```sh
-curl -LO https://github.com/Hodeitek/hodeishield-cli/releases/download/v0.3.1/hodeishield-0.3.1-universal-apple-darwin.tar.gz
+curl -LO https://github.com/Hodeitek/hodeishield-cli/releases/download/v0.4.0/hodeishield-0.4.0-universal-apple-darwin.tar.gz
 ```
 
 **Windows, before 0.2.0.** Unblock the archive before unpacking it, so the executable does not
