@@ -4,7 +4,8 @@
 //! Configuration file and profiles.
 //!
 //! The file holds URLs and OAuth client settings per profile. It never holds a credential: tokens
-//! live in the system keychain and API keys in the environment.
+//! live in the system keychain (or, if the person opts in, in a separate token file) and API keys
+//! in the environment.
 
 use crate::failure::{Failure, Result};
 use serde::{Deserialize, Serialize};
@@ -28,6 +29,10 @@ pub struct ConfigFile {
     /// Whether to look for a newer release once a day. Global, not per profile. Unset: yes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub update_check: Option<bool>,
+    /// Where sign-in tokens are kept: `keychain` (unset means this) or `plaintext-file`. Global,
+    /// not per profile. `HODEISHIELD_TOKEN_STORE` takes precedence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_store: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub profiles: BTreeMap<String, Profile>,
 }
@@ -49,20 +54,83 @@ pub struct Profile {
     pub oauth_scopes: Option<Vec<String>>,
 }
 
-/// The keys `config set` and `config unset` accept. `update_check` is global; the rest belong to a
-/// profile.
+/// The keys `config set` and `config unset` accept. `update_check` and `token_store` are global;
+/// the rest belong to a profile.
 pub const KEYS: &[&str] = &[
     "api_url",
     "app_url",
     "oauth_client_id",
     "oauth_scopes",
     UPDATE_CHECK,
+    TOKEN_STORE,
 ];
 
-/// The one global key.
+/// A global key: whether to look for a newer release.
 pub const UPDATE_CHECK: &str = "update_check";
 
+/// A global key: where sign-in tokens are kept.
+pub const TOKEN_STORE: &str = "token_store";
+
+/// The environment variable that overrides [`TOKEN_STORE`].
+pub const TOKEN_STORE_ENV: &str = "HODEISHIELD_TOKEN_STORE";
+
+/// Where sign-in tokens are kept.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum TokenStoreKind {
+    /// The system keychain. The default.
+    #[default]
+    Keychain,
+    /// A plain-text file only the user can read. Opt-in.
+    PlaintextFile,
+}
+
+impl TokenStoreKind {
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Keychain => "keychain",
+            Self::PlaintextFile => "plaintext-file",
+        }
+    }
+
+    /// Parses a setting. `source` says where the value came from, for the error.
+    pub fn parse(value: &str, source: &str) -> Result<Self> {
+        match value.trim() {
+            "keychain" => Ok(Self::Keychain),
+            "plaintext-file" => Ok(Self::PlaintextFile),
+            other => Err(Failure::general(format!(
+                "{source}: `{}` is not a token store.",
+                crate::output::clean(other)
+            ))
+            .hint("Use `keychain` (the default) or `plaintext-file`.")),
+        }
+    }
+}
+
+/// The token store in effect: the environment, then the configuration file, then the keychain.
+pub fn token_store() -> Result<TokenStoreKind> {
+    let config = load(&path()?)?;
+    choose_token_store(&config, |name| std::env::var(name).ok())
+}
+
+fn choose_token_store(
+    config: &ConfigFile,
+    env: impl Fn(&str) -> Option<String>,
+) -> Result<TokenStoreKind> {
+    if let Some(value) = env(TOKEN_STORE_ENV).filter(|v| !v.trim().is_empty()) {
+        return TokenStoreKind::parse(&value, TOKEN_STORE_ENV);
+    }
+    match &config.token_store {
+        Some(value) => TokenStoreKind::parse(value, TOKEN_STORE),
+        None => Ok(TokenStoreKind::Keychain),
+    }
+}
+
 impl ConfigFile {
+    pub fn set_token_store(&mut self, value: &str) -> Result<()> {
+        self.token_store = Some(TokenStoreKind::parse(value, TOKEN_STORE)?.name().to_owned());
+        Ok(())
+    }
+
     pub fn set_update_check(&mut self, value: &str) -> Result<()> {
         self.update_check = Some(match value.trim().to_ascii_lowercase().as_str() {
             "true" => true,
@@ -179,7 +247,7 @@ pub fn save(path: &Path, config: &ConfigFile) -> Result<()> {
         .map_err(|e| Failure::general(format!("Cannot write the configuration: {e}.")))?;
     let body = format!(
         "# HodeiShield CLI configuration. It holds no credential: tokens live in the system\n\
-         # keychain and API keys in HODEISHIELD_API_KEY.\n\n{text}"
+         # keychain (or the token file you opted in to) and API keys in HODEISHIELD_API_KEY.\n\n{text}"
     );
     write_private(path, body.as_bytes())
         .map_err(|e| Failure::general(format!("Cannot write {}: {e}.", path.display())))
@@ -212,6 +280,7 @@ pub struct Settings {
     pub app_url: Url,
     pub oauth_client_id: String,
     pub oauth_scopes: Option<Vec<String>>,
+    pub token_store: TokenStoreKind,
     pub config_path: PathBuf,
 }
 
@@ -272,6 +341,7 @@ pub fn resolve_with(
         app_url,
         oauth_client_id,
         oauth_scopes: profile.oauth_scopes,
+        token_store: choose_token_store(config, |name| env(name))?,
         config_path,
     })
 }
@@ -386,6 +456,69 @@ mod tests {
         assert_eq!(config.update_check, Some(false));
         let text = toml::to_string_pretty(&config).expect("toml");
         assert_eq!(text.trim(), "update_check = false");
+    }
+
+    #[test]
+    fn the_token_store_is_the_keychain_unless_the_environment_or_the_file_says_otherwise() {
+        let none = |_: &str| None;
+        let from_env = |_: &str| Some("plaintext-file".to_owned());
+        let mut config = ConfigFile::default();
+        assert_eq!(
+            choose_token_store(&config, none).expect("default"),
+            TokenStoreKind::Keychain
+        );
+        config.set_token_store(" plaintext-file ").expect("set");
+        assert_eq!(config.token_store.as_deref(), Some("plaintext-file"));
+        assert_eq!(
+            choose_token_store(&config, none).expect("file"),
+            TokenStoreKind::PlaintextFile
+        );
+        // The environment wins, in both directions; an empty variable does not count.
+        config.token_store = Some("keychain".to_owned());
+        assert_eq!(
+            choose_token_store(&config, from_env).expect("env"),
+            TokenStoreKind::PlaintextFile
+        );
+        config.token_store = Some("plaintext-file".to_owned());
+        let keychain = |_: &str| Some("keychain".to_owned());
+        assert_eq!(
+            choose_token_store(&config, keychain).expect("env"),
+            TokenStoreKind::Keychain
+        );
+        let empty = |_: &str| Some("  ".to_owned());
+        assert_eq!(
+            choose_token_store(&config, empty).expect("empty"),
+            TokenStoreKind::PlaintextFile
+        );
+    }
+
+    #[test]
+    fn any_other_token_store_is_an_error_naming_where_it_came_from() {
+        let mut config = ConfigFile::default();
+        assert!(config.set_token_store("file").is_err());
+        assert!(config.set_token_store("").is_err());
+        assert!(config.token_store.is_none());
+        config.token_store = Some("Keychain".to_owned());
+        let err = choose_token_store(&config, |_| None).expect_err("not a store");
+        assert!(
+            err.message.starts_with("token_store: `Keychain`"),
+            "{}",
+            err.message
+        );
+        let err = choose_token_store(&ConfigFile::default(), |_| Some("file\u{1b}[2J".to_owned()))
+            .expect_err("not a store");
+        assert!(
+            err.message.starts_with("HODEISHIELD_TOKEN_STORE:"),
+            "{}",
+            err.message
+        );
+        assert!(!err.message.contains('\u{1b}'));
+        // Settings resolution reports it too, so no command runs on a misspelt setting.
+        let bad = ConfigFile {
+            token_store: Some("plain".to_owned()),
+            ..ConfigFile::default()
+        };
+        assert!(resolve_with(&bad, PathBuf::new(), &Overrides::default(), no_env).is_err());
     }
 
     #[test]

@@ -80,7 +80,7 @@ pub fn run(cli: Cli, out: &mut dyn Write) -> Result<()> {
         },
         json: cli.json,
         verbose: cli.verbose,
-        store: Arc::new(auth::store::Keychain),
+        store: Arc::new(auth::store::Configured),
     };
     match cli.command {
         Command::Vendors(command) => resources::vendors(&ctx, command, out),

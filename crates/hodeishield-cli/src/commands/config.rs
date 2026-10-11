@@ -29,6 +29,7 @@ pub fn run(ctx: &Context, command: ConfigCommand, out: &mut dyn Write) -> Result
                 "oauth_client_id": settings.oauth_client_id,
                 "oauth_scopes": settings.oauth_scopes,
                 "update_check": update_check,
+                "token_store": settings.token_store.name(),
             });
             if ctx.json {
                 return Ok(print_json(out, &value)?);
@@ -43,6 +44,7 @@ pub fn run(ctx: &Context, command: ConfigCommand, out: &mut dyn Write) -> Result
             writeln!(out, "oauth_client_id  {}", settings.oauth_client_id)?;
             writeln!(out, "oauth_scopes     {scopes}")?;
             writeln!(out, "update_check     {update_check}")?;
+            writeln!(out, "token_store      {}", settings.token_store.name())?;
             Ok(())
         }
         ConfigCommand::Set { key, value } if key == config::UPDATE_CHECK => {
@@ -50,6 +52,13 @@ pub fn run(ctx: &Context, command: ConfigCommand, out: &mut dyn Write) -> Result
         }
         ConfigCommand::Unset { key } if key == config::UPDATE_CHECK => edit_global(&path, |file| {
             file.update_check = None;
+            Ok(())
+        }),
+        ConfigCommand::Set { key, value } if key == config::TOKEN_STORE => {
+            edit_global(&path, |file| file.set_token_store(&value))
+        }
+        ConfigCommand::Unset { key } if key == config::TOKEN_STORE => edit_global(&path, |file| {
+            file.token_store = None;
             Ok(())
         }),
         ConfigCommand::Set { key, value } => edit(ctx, &path, |profile| profile.set(&key, &value)),

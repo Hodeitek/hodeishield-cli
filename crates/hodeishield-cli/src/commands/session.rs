@@ -130,6 +130,13 @@ fn login_with(
         .ok()
         .flatten()
         .and_then(|info| user_label(&info));
+    if let Some(path) = store.location(&settings.profile) {
+        eprintln!(
+            "The sign-in is stored unencrypted in {}, protected only by its permissions. \
+             `hodeishield logout` revokes it and deletes the file.",
+            path.display()
+        );
+    }
     eprintln!(
         "Signed in to {}{} (profile {}).",
         settings.app_url.host_str().unwrap_or("the app"),
@@ -263,7 +270,7 @@ fn whoami_with(
                 "Credential",
                 source.map_or_else(
                     || "none".to_owned(),
-                    |s| auth::describe_source(s).to_owned(),
+                    |s| auth::describe_source(s, store.location(&settings.profile).as_deref()),
                 ),
             ),
         ];

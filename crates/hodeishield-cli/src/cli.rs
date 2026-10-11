@@ -17,7 +17,8 @@ use std::str::FromStr;
 const AFTER_HELP: &str = "\
 Credentials:
   HODEISHIELD_API_KEY   A tenant API key. When set, it is used for every API call.
-  hodeishield login     Otherwise, sign in to the app; the token is kept in the system keychain.
+  hodeishield login     Otherwise, sign in to the app; the token is kept in the system keychain
+                        (or, only if you opt in, in a plain-text file).
 
 Exit codes:
   0 ok · 1 error · 2 usage · 3 not authenticated · 4 missing scope · 5 not found
@@ -101,7 +102,10 @@ pub enum Command {
 
 const LOGIN_ABOUT: &str = "\
 Sign in to the HodeiShield app. The token is kept in the system keychain (macOS Keychain, Windows \
-Credential Manager, Secret Service on Linux), never in a file, and is refreshed when it expires.
+Credential Manager, Secret Service on Linux) and is refreshed when it expires. Only if you opt in \
+with HODEISHIELD_TOKEN_STORE=plaintext-file (Linux and macOS), it is kept instead in a file in your \
+state directory, unencrypted and readable only by you. The CLI never switches between the two on \
+its own.
 
 By default a browser window opens and the app redirects back to a one-shot listener on 127.0.0.1. \
 With --device, you get a short code to type in on any other device instead.

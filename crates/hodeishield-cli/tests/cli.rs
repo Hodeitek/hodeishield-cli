@@ -33,6 +33,7 @@ impl Env {
             "HODEISHIELD_APP_URL",
             "HODEISHIELD_PROFILE",
             "HODEISHIELD_OAUTH_CLIENT_ID",
+            "HODEISHIELD_TOKEN_STORE",
         ] {
             cmd.env_remove(var);
         }
@@ -41,8 +42,36 @@ impl Env {
                 "DBUS_SESSION_BUS_ADDRESS",
                 "unix:path=/nonexistent/hodeishield-test",
             )
+            .env("XDG_STATE_HOME", self.state())
             .env("NO_COLOR", "1");
         cmd
+    }
+
+    /// Where the state directory is for this test.
+    fn state(&self) -> PathBuf {
+        self._dir.path().join("state")
+    }
+
+    /// The binary with the opt-in plain-text token store, and a home that is the test's own, so
+    /// the platform's state directory is inside the test's directory on every system.
+    #[cfg(unix)]
+    fn cmd_file(&self) -> Command {
+        let mut cmd = self.cmd();
+        cmd.env("HODEISHIELD_TOKEN_STORE", "plaintext-file")
+            .env("HOME", self._dir.path().join("home"));
+        cmd
+    }
+
+    /// The sessions directory of the opt-in store, where the platform keeps it.
+    #[cfg(unix)]
+    fn sessions(&self) -> PathBuf {
+        if cfg!(target_os = "macos") {
+            self._dir
+                .path()
+                .join("home/Library/Application Support/com.Hodeitek.HodeiShield/sessions")
+        } else {
+            self.state().join("hodeishield/sessions")
+        }
     }
 
     fn api(&self, server: &mockito::Server) -> Command {
@@ -769,5 +798,454 @@ fn free_form_filters_are_sent_as_typed_without_a_warning() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(!stderr.contains("warning:"), "{args:?}: {stderr}");
         mock.assert();
+    }
+}
+
+/// The opt-in plain-text token store, end to end. Unix only: Windows refuses it (last test).
+#[cfg(unix)]
+mod file_store {
+    use super::*;
+    use serde_json::json;
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    use std::sync::{Arc, Mutex};
+
+    /// An app that offers the device flow and issues `at-new` / `rt-new`; revocation requests are
+    /// recorded in arrival order.
+    struct App {
+        api: mockito::ServerGuard,
+        app: mockito::ServerGuard,
+        revoked: Arc<Mutex<Vec<String>>>,
+        _mocks: Vec<mockito::Mock>,
+    }
+
+    fn app() -> App {
+        let mut api = mockito::Server::new();
+        let mut app = mockito::Server::new();
+        let revoked = Arc::new(Mutex::new(Vec::new()));
+        let seen = Arc::clone(&revoked);
+        let url = app.url();
+        let mocks = vec![
+            api.mock("GET", "/.well-known/oauth-protected-resource")
+                .with_status(404)
+                .create(),
+            app.mock("GET", "/.well-known/oauth-authorization-server")
+                .with_body(
+                    json!({
+                        "issuer": url,
+                        "token_endpoint": format!("{url}/token"),
+                        "device_authorization_endpoint": format!("{url}/device/code"),
+                        "revocation_endpoint": format!("{url}/revoke"),
+                        "scopes_supported": ["offline_access"],
+                    })
+                    .to_string(),
+                )
+                .create(),
+            app.mock("POST", "/device/code")
+                .with_body(
+                    json!({
+                        "device_code": "dc", "user_code": "ABCD-EFGH",
+                        "verification_uri": format!("{url}/device"),
+                        "expires_in": 600, "interval": 1,
+                    })
+                    .to_string(),
+                )
+                .create(),
+            app.mock("POST", "/token")
+                .with_body(
+                    json!({
+                        "access_token": "at-new", "refresh_token": "rt-new",
+                        "token_type": "Bearer", "expires_in": 3600,
+                    })
+                    .to_string(),
+                )
+                .create(),
+            app.mock("POST", "/revoke")
+                .with_body_from_request(move |request| {
+                    let form: Vec<(String, String)> =
+                        url::form_urlencoded::parse(request.body().expect("body"))
+                            .into_owned()
+                            .collect();
+                    let get = |key: &str| {
+                        form.iter()
+                            .find(|(k, _)| k == key)
+                            .map(|(_, v)| v.clone())
+                            .unwrap_or_default()
+                    };
+                    seen.lock().expect("lock").push(format!(
+                        "{}={}",
+                        get("token_type_hint"),
+                        get("token")
+                    ));
+                    Vec::new()
+                })
+                .create(),
+        ];
+        App {
+            api,
+            app,
+            revoked,
+            _mocks: mocks,
+        }
+    }
+
+    impl App {
+        fn with(&self, mut cmd: Command) -> Command {
+            cmd.env("HODEISHIELD_API_URL", self.api.url())
+                .env("HODEISHIELD_APP_URL", self.app.url());
+            cmd
+        }
+    }
+
+    fn mode(path: &std::path::Path) -> u32 {
+        use std::os::unix::fs::MetadataExt;
+        std::fs::metadata(path).expect("metadata").mode() & 0o777
+    }
+
+    /// The files in the sessions directory.
+    fn kept(env: &Env) -> Vec<PathBuf> {
+        let mut found: Vec<PathBuf> = std::fs::read_dir(env.sessions())
+            .map(|dir| dir.map(|e| e.expect("entry").path()).collect())
+            .unwrap_or_default();
+        found.sort();
+        found
+    }
+
+    fn signed_in(env: &Env, app: &App) -> PathBuf {
+        app.with(env.cmd_file())
+            .args(["login", "--device"])
+            .assert()
+            .success();
+        let files = kept(env);
+        assert_eq!(files.len(), 1, "{files:?}");
+        files[0].clone()
+    }
+
+    fn all_output(output: &std::process::Output) -> String {
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
+    }
+
+    #[test]
+    fn login_whoami_and_logout_use_a_private_file_and_never_show_a_token() {
+        let env = Env::new();
+        let app = app();
+        let login = app
+            .with(env.cmd_file())
+            .args(["login", "--device"])
+            .output()
+            .expect("run");
+        assert!(login.status.success(), "{}", all_output(&login));
+        assert!(login.stdout.is_empty());
+        assert!(
+            String::from_utf8_lossy(&login.stderr).contains("stored unencrypted"),
+            "{}",
+            all_output(&login)
+        );
+
+        let files = kept(&env);
+        assert_eq!(files.len(), 1, "{files:?}");
+        let file = &files[0];
+        assert_eq!(mode(file), 0o600);
+        assert_eq!(mode(&env.sessions()), 0o700);
+        assert!(file.to_string_lossy().ends_with(".json"));
+        let text = std::fs::read_to_string(file).expect("file");
+        assert!(text.contains("at-new") && text.contains("rt-new"));
+
+        let whoami = app
+            .with(env.cmd_file())
+            .arg("whoami")
+            .output()
+            .expect("run");
+        assert!(whoami.status.success(), "{}", all_output(&whoami));
+        let shown = all_output(&whoami);
+        assert!(shown.contains("plain-text file"), "{shown}");
+        assert!(
+            !shown.contains("at-new") && !shown.contains("rt-new"),
+            "{shown}"
+        );
+
+        let logout = app
+            .with(env.cmd_file())
+            .arg("logout")
+            .output()
+            .expect("run");
+        assert!(logout.status.success(), "{}", all_output(&logout));
+        assert_eq!(
+            *app.revoked.lock().expect("lock"),
+            ["refresh_token=rt-new", "access_token=at-new"]
+        );
+        assert!(kept(&env).is_empty());
+        assert!(!all_output(&logout).contains("-new"));
+    }
+
+    #[test]
+    fn two_profiles_are_kept_in_two_files() {
+        let env = Env::new();
+        let app = app();
+        env.cmd()
+            .args(["config", "set", "--profile", "client-b", "api_url"])
+            .arg(app.api.url())
+            .assert()
+            .success();
+        signed_in(&env, &app);
+        app.with(env.cmd_file())
+            .args(["--profile", "client-b", "login", "--device"])
+            .assert()
+            .success();
+        assert_eq!(kept(&env).len(), 2);
+        app.with(env.cmd_file())
+            .args(["--profile", "client-b", "logout"])
+            .assert()
+            .success();
+        assert_eq!(kept(&env).len(), 1);
+        app.with(env.cmd_file()).arg("whoami").assert().success();
+    }
+
+    #[test]
+    fn a_corrupt_file_is_an_error_that_names_it() {
+        let env = Env::new();
+        let app = app();
+        let file = signed_in(&env, &app);
+        std::fs::write(&file, "{ not json").expect("corrupt it");
+        for args in [&["whoami"][..], &["vendors", "list"][..]] {
+            app.with(env.cmd_file())
+                .args(args)
+                .assert()
+                .code(1)
+                .stdout(predicate::str::is_empty())
+                .stderr(predicate::str::contains("is unreadable"))
+                .stderr(predicate::str::contains(file.to_string_lossy().as_ref()));
+        }
+    }
+
+    /// Every way the store refuses a file or directory: signing in is refused before the app is
+    /// asked for anything (exit 1), commands that need a credential are "not authenticated"
+    /// (exit 3), and nothing is repaired or deleted.
+    fn assert_refused(env: &Env, app: &App, reason: &str) {
+        let mut login_api = mockito::Server::new();
+        let mut login_app = mockito::Server::new();
+        let calls: Vec<_> = [&mut login_api, &mut login_app]
+            .into_iter()
+            .flat_map(|server| {
+                ["GET", "POST"].map(|method| {
+                    server
+                        .mock(method, mockito::Matcher::Any)
+                        .expect(0)
+                        .create()
+                })
+            })
+            .collect();
+        env.cmd_file()
+            .env("HODEISHIELD_API_URL", login_api.url())
+            .env("HODEISHIELD_APP_URL", login_app.url())
+            .args(["login", "--device"])
+            .assert()
+            .code(1)
+            .stdout(predicate::str::is_empty())
+            .stderr(predicate::str::contains(
+                "plain-text token store cannot be used",
+            ))
+            .stderr(predicate::str::contains(reason));
+        for call in &calls {
+            call.assert();
+        }
+        for args in [&["whoami"][..], &["vendors", "list"][..]] {
+            app.with(env.cmd_file())
+                .args(args)
+                .assert()
+                .code(3)
+                .stdout(predicate::str::is_empty())
+                .stderr(predicate::str::contains(reason));
+        }
+        // Nothing was sent to the app that signed in, and logout does not revoke what it cannot
+        // trust.
+        app.revoked.lock().expect("lock").clear();
+        app.with(env.cmd_file())
+            .arg("logout")
+            .assert()
+            .code(1)
+            .stderr(predicate::str::contains(reason));
+        assert!(app.revoked.lock().expect("lock").is_empty());
+    }
+
+    #[test]
+    fn a_file_open_to_group_or_others_is_refused_and_left_alone() {
+        for bits in [0o644, 0o640] {
+            let env = Env::new();
+            let app = app();
+            let file = signed_in(&env, &app);
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(bits)).expect("chmod");
+            assert_refused(&env, &app, "accessible to other users");
+            assert_eq!(mode(&file), bits);
+        }
+    }
+
+    #[test]
+    fn a_directory_open_to_group_or_others_is_refused_and_left_alone() {
+        let env = Env::new();
+        let app = app();
+        signed_in(&env, &app);
+        std::fs::set_permissions(env.sessions(), std::fs::Permissions::from_mode(0o755))
+            .expect("chmod");
+        assert_refused(&env, &app, "accessible to other users");
+        assert_eq!(mode(&env.sessions()), 0o755);
+    }
+
+    #[test]
+    fn a_symlinked_file_is_refused_and_left_alone() {
+        let env = Env::new();
+        let app = app();
+        let file = signed_in(&env, &app);
+        let real = env.sessions().join("elsewhere");
+        std::fs::rename(&file, &real).expect("move");
+        symlink(&real, &file).expect("link");
+        assert_refused(&env, &app, "symbolic link");
+        assert!(std::fs::symlink_metadata(&file).expect("meta").is_symlink());
+        assert!(real.exists());
+    }
+
+    #[test]
+    fn a_symlinked_directory_is_refused_and_left_alone() {
+        let env = Env::new();
+        let app = app();
+        signed_in(&env, &app);
+        let moved = env.state().join("moved");
+        std::fs::rename(env.sessions(), &moved).expect("move");
+        symlink(&moved, env.sessions()).expect("link");
+        assert_refused(&env, &app, "symbolic link");
+        assert!(
+            std::fs::symlink_metadata(env.sessions())
+                .expect("meta")
+                .is_symlink()
+        );
+        assert_eq!(std::fs::read_dir(&moved).expect("dir").count(), 1);
+    }
+
+    #[test]
+    fn an_invalid_setting_is_an_error_before_anything_else_happens() {
+        let env = Env::new();
+        let mut server = mockito::Server::new();
+        let calls = server.mock("GET", mockito::Matcher::Any).expect(0).create();
+        // Even with an API key, which would otherwise never look at the token store.
+        for value in ["file", "Keychain", "plaintext"] {
+            env.api(&server)
+                .env("HODEISHIELD_TOKEN_STORE", value)
+                .args(["vendors", "list"])
+                .assert()
+                .code(1)
+                .stderr(predicate::str::contains("not a token store"))
+                .stderr(predicate::str::contains("plaintext-file"));
+        }
+        env.cmd()
+            .args(["config", "set", "token_store", "file"])
+            .assert()
+            .code(1)
+            .stderr(predicate::str::contains("not a token store"));
+        std::fs::write(&env.config, "token_store = \"nope\"\n").expect("config");
+        env.api(&server)
+            .args(["vendors", "list"])
+            .assert()
+            .code(1)
+            .stderr(predicate::str::contains(
+                "token_store: `nope` is not a token store",
+            ));
+        calls.assert();
+        assert!(!env.sessions().exists());
+    }
+
+    #[test]
+    fn the_setting_can_come_from_the_configuration_file_and_the_environment_wins() {
+        let env = Env::new();
+        env.cmd()
+            .args(["config", "set", "token_store", "plaintext-file"])
+            .assert()
+            .success();
+        env.cmd()
+            .args(["config", "show"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("token_store      plaintext-file"));
+        env.cmd()
+            .env("HODEISHIELD_TOKEN_STORE", "keychain")
+            .args(["config", "show"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("token_store      keychain"));
+        let app = app();
+        // From the file alone, and without the environment variable, the file store is used.
+        app.with(env.cmd())
+            .env("HOME", env._dir.path().join("home"))
+            .args(["login", "--device"])
+            .assert()
+            .success();
+        assert_eq!(kept(&env).len(), 1);
+        env.cmd()
+            .args(["config", "unset", "token_store"])
+            .assert()
+            .success();
+        env.cmd()
+            .args(["config", "show"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("token_store      keychain"));
+    }
+
+    /// Only on Linux, where the tests make the Secret Service unreachable.
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn there_is_no_fallback_to_a_file_without_the_opt_in() {
+        let env = Env::new();
+        let app = app();
+        app.with(env.cmd())
+            .args(["login", "--device"])
+            .assert()
+            .code(1)
+            .stderr(predicate::str::contains("system keychain is not available"))
+            .stderr(predicate::str::contains(
+                "HODEISHIELD_TOKEN_STORE=plaintext-file",
+            ))
+            .stderr(predicate::str::contains("HODEISHIELD_API_KEY"));
+        assert!(!env.state().exists(), "no file or directory is made");
+        // And the other way round: with the opt-in the keychain is never asked, which here would
+        // be an error.
+        signed_in(&env, &app);
+    }
+}
+
+/// Windows has no mode bits to check, so the opt-in is refused there, before the app is asked for
+/// anything.
+#[cfg(windows)]
+#[test]
+fn the_plain_text_token_store_is_refused_on_windows() {
+    let env = Env::new();
+    let mut api = mockito::Server::new();
+    let mut app = mockito::Server::new();
+    let calls: Vec<_> = [&mut api, &mut app]
+        .into_iter()
+        .flat_map(|server| {
+            ["GET", "POST"].map(|method| {
+                server
+                    .mock(method, mockito::Matcher::Any)
+                    .expect(0)
+                    .create()
+            })
+        })
+        .collect();
+    for args in [&["login"][..], &["login", "--device"][..]] {
+        env.cmd()
+            .env("HODEISHIELD_TOKEN_STORE", "plaintext-file")
+            .env("HODEISHIELD_API_URL", api.url())
+            .env("HODEISHIELD_APP_URL", app.url())
+            .args(args)
+            .assert()
+            .code(1)
+            .stdout(predicate::str::is_empty())
+            .stderr(predicate::str::contains("not supported on Windows"));
+    }
+    for call in &calls {
+        call.assert();
     }
 }
