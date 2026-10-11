@@ -503,10 +503,11 @@ client() {
   case $kind in
     apt) image=rt-apt-client ;;
     dnf) image=rockylinux:9 ;;
+    dnf8) image=rockylinux:8 ;;
   esac
   group "$id $desc"
   rc=0
-  out=$(docker run --rm --network "$net" --volume "$work/bin:/b:ro" "$image" sh "/b/$kind-client.sh" "$@" 2>&1) || rc=$?
+  out=$(docker run --rm --network "$net" --volume "$work/bin:/b:ro" "$image" sh "/b/${kind%8}-client.sh" "$@" 2>&1) || rc=$?
   printf '%s\n' "$out" | tail -n 40
   endgroup
   line=$(printf '%s\n' "$out" | grep -E '^(OK|REFUSED):' | tail -n 1 || true)
@@ -811,6 +812,10 @@ printf '%s\n' "$primary" > /w/rv.primary
 printf '%s!\n' "$old" > /w/rv-old.key
 gpg --batch --armor --export "$primary" > /w/rv-pub-old.asc
 quiet --export-secret-subkeys "$old!" > /w/rv-old-secret.gpg
+# A second signing subkey, revoked together with the first: the export must drop both.
+quiet --quick-add-key "$primary" rsa4096 sign never
+old2=$(signers "$primary" | grep -vx "$old")
+[ "$(printf '%s\n' "$old2" | grep -c .)" = 1 ]
 GNUPGHOME=/w/gnupg-rv-old
 export GNUPGHOME
 mkdir -m 700 "$GNUPGHOME"
@@ -818,15 +823,15 @@ gpg --batch --quiet --import /w/rv-old-secret.gpg
 gpgconf --kill all
 rm -f /w/rv-old-secret.gpg
 
-# The revocation (reason 1, key compromised), then the new subkey.
+# The revocation of both subkeys (reason 1, key compromised), then the new subkey.
 GNUPGHOME=/w/gnupg-rv
 export GNUPGHOME
-printf 'key 1\nrevkey\ny\n1\nthrowaway test key\n\ny\nsave\n' |
+printf 'key 1\nkey 2\nrevkey\ny\n1\nthrowaway test key\n\ny\nsave\n' |
   quiet --command-fd 0 --edit-key "$primary" > /dev/null 2>&1 || true
 revoked=$(gpg --batch --with-colons --list-keys "$primary" | awk -F: '$1 == "sub" && $2 == "r"' | wc -l)
-[ "$revoked" = 1 ] || { echo "rv-keys.sh: the subkey was not revoked" >&2; exit 1; }
+[ "$revoked" = 2 ] || { echo "rv-keys.sh: the two subkeys were not revoked" >&2; exit 1; }
 quiet --quick-add-key "$primary" rsa4096 sign never
-new=$(signers "$primary" | grep -vx "$old")
+new=$(signers "$primary" | grep -vx -e "$old" -e "$old2")
 [ "$(printf '%s\n' "$new" | grep -c .)" = 1 ]
 printf '%s!\n' "$new" > /w/rv-new.key
 quiet --export-secret-subkeys "$new!" > /w/rv-new-secret.gpg
@@ -841,7 +846,7 @@ gpg --batch --quiet --import /w/rv-new-secret.gpg
 gpgconf --kill all
 rm -f /w/rv-new-secret.gpg
 EOF
-cp "$here/export-public-key.sh" "$work/bin/export-public-key.sh"
+cp "$here/export-public-key.sh" "$here/sigcheck.sh" "$work/bin/"
 
 group "Throwaway keys: a signing subkey, its revocation and its replacement"
 tool sh /w/bin/rv-keys.sh
@@ -890,22 +895,28 @@ must_publish R0 "release 0.2.0 signed by the subkey that is revoked later" rt-rv
 
 # The subkey is revoked and replaced: the old signatures no longer count.
 rvkeys new
-must_refuse R1 "release 0.2.1 after the revocation: the old index and rpm signatures are not accepted" \
+must_refuse R1 "release 0.2.1 with the new key, whose published index was signed by a subkey it no longer carries" \
   rt-rv1 "build.sh: the published InRelease does not verify" "$pk/v2"
 clone rt-rv1 rt-rv2
 del rt-rv2 apt/dists/stable/InRelease
 del rt-rv2 apt/pool/main/h/hodeishield/hodeishield_0.2.0-1_amd64.deb
 del rt-rv2 apt/pool/main/h/hodeishield/hodeishield_0.2.0-1_arm64.deb
-must_refuse R2 "an rpm signed by the revoked subkey is not accepted" rt-rv2 \
+must_refuse R2 "an rpm signed by a subkey the new key no longer carries is not accepted" rt-rv2 \
   "build.sh: .* is not signed with the repository key" "$pk/v2"
+# The public key that still carries the revoked subkeys: the builder refuses it before it looks at the
+# old signatures, which gpgv would report as made by a revoked key in any case.
+rvkeys revoked-pub
+must_refuse R2b "release 0.2.1 with the public key that still carries the revoked subkeys" \
+  rt-rv1 "build.sh: .* carries a revoked subkey" "$pk/v2"
+rvkeys new
 
 # The exported key.
 revoked_in_export=$(rv_subkeys /w/rv-pub-new.asc r)
 revoked_in_control=$(rv_subkeys /w/rv-pub-revoked.asc r)
-if [ "$revoked_in_export" = 0 ] && [ "$revoked_in_control" = 1 ]; then
-  record "R3 the exported key has no revoked subkey" "0 revoked (1 without the filter)" "0 (1 without the filter)" PASS
+if [ "$revoked_in_export" = 0 ] && [ "$revoked_in_control" = 2 ]; then
+  record "R3 the exported key has no revoked subkey" "0 revoked (2 without the filter)" "0 (2 without the filter)" PASS
 else
-  record "R3 the exported key has no revoked subkey" "0 revoked (1 without the filter)" \
+  record "R3 the exported key has no revoked subkey" "0 revoked (2 without the filter)" \
     "$revoked_in_export ($revoked_in_control without the filter)" FAIL
 fi
 
@@ -942,6 +953,12 @@ must_refuse R9 "resign: a bucket rpm is not the verified release's package" rt-r
 must_refuse R10 "resign: a bucket deb differs from the verified one" rt-rv1 \
   "build.sh: .* is in the bucket but neither in the signed index" "$work/rv-otherdeb"
 
+# More packages in the verified set than in the bucket is refused too: the sets must be identical.
+mkdir -p "$work/rv-extra"
+cp "$pk"/v1/* "$pk"/v2/* "$work/rv-extra/"
+must_refuse R10b "resign: the verified set holds packages that are not in the bucket" rt-rv1 \
+  "publish.sh: the packages in the bucket .* differ" "$work/rv-extra"
+
 # The dry run reads and builds, and uploads nothing.
 rflags=
 rconfirm=
@@ -969,17 +986,22 @@ printf '%s\n' "$out" | tail -n 25
 endgroup
 after=$(snap rt-rv1)
 rpm_versions=$(mcx ls --versions --json r/rt-rv1/rpm/x86_64/hodeishield-0.2.0-1.x86_64.rpm | wc -l | tr -d ' ')
+# Every rpm has another ETag after the run, none of the other objects of the pool has.
+rpm_each_changed=yes
+for key in $(printf '%s\n' "$before" | cut -f1 | grep '^rpm/[^/]*/[^/]*\.rpm$'); do
+  [ "$(printf '%s\n' "$before" | awk -F'\t' -v k="$key" '$1 == k { print $3 }')" != \
+    "$(printf '%s\n' "$after" | awk -F'\t' -v k="$key" '$1 == k { print $3 }')" ] || rpm_each_changed=no
+done
 if [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q '^Re-signed RPM packages uploaded and read back' &&
   [ "$(printf '%s\n' "$before" | grep '^apt/pool/')" = "$(printf '%s\n' "$after" | grep '^apt/pool/')" ] &&
   [ "$(printf '%s\n' "$before" | grep -c '^rpm/[^/]*/[^/]*\.rpm')" = 2 ] &&
-  [ "$(printf '%s\n' "$before" | grep '^rpm/[^/]*/[^/]*\.rpm' | cut -f3)" != \
-    "$(printf '%s\n' "$after" | grep '^rpm/[^/]*/[^/]*\.rpm' | cut -f3)" ] &&
+  [ "$rpm_each_changed" = yes ] &&
   [ "$rpm_versions" = 2 ]; then
   record "R12 resign --apply" "rpms replaced, debs untouched, old rpm versions kept" \
     "rpms replaced, debs untouched, $rpm_versions versions" PASS
 else
   record "R12 resign --apply" "rpms replaced, debs untouched, old rpm versions kept" \
-    "exit $rc, $rpm_versions versions of an rpm" FAIL
+    "exit $rc, every rpm changed: $rpm_each_changed, $rpm_versions versions of an rpm" FAIL
   printf '%s\n' "$out"
 fi
 
@@ -998,4 +1020,6 @@ fi
 client apt R14 "apt installs from the recovered repository and upgrades" "installs and upgrades" \
   ok "$srv/rt-rv1" "$srv/rt-rv3" 0.2.0 0.2.1
 client dnf R15 "dnf (rockylinux:9) installs from the recovered repository and upgrades" "installs and upgrades" \
+  ok "$srv/rt-rv1" "$srv/rt-rv3" 0.2.0 0.2.1
+client dnf8 R16 "dnf (rockylinux:8) installs from the recovered repository and upgrades" "installs and upgrades" \
   ok "$srv/rt-rv1" "$srv/rt-rv3" 0.2.0 0.2.1
