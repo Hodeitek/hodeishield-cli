@@ -12,7 +12,9 @@ Writes under <out-dir>:
 
 Every URL points at an asset of the release and every hash comes from its SHA256SUMS, so a file
 missing from the release is an error. The winget installer is the MSI when the release has one
-(its product code must then be given), otherwise the zip with the portable exe inside.
+(its product code must then be given), otherwise the zip with the portable exe inside. The Scoop
+manifest also lists the arm64 zip when the release has one; winget stays x64 only until there is an
+arm64 MSI.
 
 Uses only the standard library.
 """
@@ -48,6 +50,9 @@ def main():
     x86_url, x86_sha = asset("x86_64-unknown-linux-musl", "tar.gz")
     arm_url, arm_sha = asset("aarch64-unknown-linux-musl", "tar.gz")
     zip_url, zip_sha = asset("x86_64-pc-windows-msvc", "zip")
+    # Releases before the Windows arm64 build do not have this zip: Scoop then lists 64bit only.
+    has_arm64_zip = f"hodeishield-{version}-aarch64-pc-windows-msvc.zip" in sums
+    arm64_zip_url, arm64_zip_sha = asset("aarch64-pc-windows-msvc", "zip") if has_arm64_zip else (None, None)
     msi_name = f"hodeishield-{version}-x86_64-pc-windows-msvc.msi"
     has_msi = msi_name in sums
     if has_msi and not (product_code and re.fullmatch(r"\{[0-9A-F-]{36}\}", product_code)):
@@ -98,18 +103,25 @@ end
 
     manifest = out / "scoop" / "bucket" / "hodeishield.json"
     manifest.parent.mkdir(parents=True, exist_ok=True)
+    scoop_arch = {"64bit": {"url": zip_url, "hash": zip_sha}}
+    scoop_autoupdate = {"64bit": {
+        "url": f"https://github.com/{REPO}/releases/download/v$version/hodeishield-$version-x86_64-pc-windows-msvc.zip"
+    }}
+    if has_arm64_zip:
+        scoop_arch["arm64"] = {"url": arm64_zip_url, "hash": arm64_zip_sha}
+        scoop_autoupdate["arm64"] = {
+            "url": f"https://github.com/{REPO}/releases/download/v$version/hodeishield-$version-aarch64-pc-windows-msvc.zip"
+        }
     manifest.write_text(json.dumps({
         "version": version,
         "description": DESCRIPTION,
         "homepage": "https://hodeishield.com",
         "license": "Apache-2.0",
-        "architecture": {"64bit": {"url": zip_url, "hash": zip_sha}},
+        "architecture": scoop_arch,
         "bin": "hodeishield.exe",
         "checkver": {"github": f"https://github.com/{REPO}"},
         "autoupdate": {
-            "architecture": {"64bit": {
-                "url": f"https://github.com/{REPO}/releases/download/v$version/hodeishield-$version-x86_64-pc-windows-msvc.zip"
-            }},
+            "architecture": scoop_autoupdate,
             "hash": {"url": "$baseurl/SHA256SUMS"},
         },
     }, indent=4) + "\n")

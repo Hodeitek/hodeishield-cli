@@ -6,6 +6,16 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ## [Unreleased]
 
+### Added
+
+- Each release now includes a Windows on Arm build, `hodeishield-<version>-aarch64-pc-windows-msvc.zip`.
+  It is built natively on a Windows on Arm runner, its `hodeishield.exe` is signed with Authenticode
+  like the x64 one and checked to need no Visual C++ runtime, and the archive is listed in
+  `SHA256SUMS`, signed with Sigstore, covered by the build provenance and has its own SBOM. The
+  Scoop manifest offers it to Windows on Arm; the MSI and winget package remain x64 only. CI now
+  runs the tests, clippy and the import check on Windows on Arm too.
+  ([#37](https://github.com/Hodeitek/hodeishield-cli/issues/37))
+
 ### Fixed
 
 - Terminal output cleaning now also replaces the line and paragraph separators (U+2028, U+2029),

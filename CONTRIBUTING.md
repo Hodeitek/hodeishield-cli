@@ -39,8 +39,8 @@ cargo xtask man target/man        # generate man pages
 cargo deny check && cargo audit   # dependency policy and advisories
 ```
 
-CI runs the tests on Linux, macOS and Windows and the other checks on Linux; a pull request needs
-them all green.
+CI runs the tests on Linux, macOS, Windows and Windows on Arm and the other checks on Linux; a pull
+request needs them all green.
 
 ### The scripting surface is tested
 
