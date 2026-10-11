@@ -122,7 +122,26 @@ advisory, with GitHub as the CVE Numbering Authority.
 
 ## Supported versions
 
-Only the latest release receives fixes.
+From 1.0.0, each major version of `hodeishield` is supported for five years, counted from the
+release of its first version (1.0.0 for version 1). A supported major version receives security
+fixes. They ship in a new release of that major version: to get them, update to the latest release
+of your major version.
+
+Security fixes stay available to you while your version is supported, even if your HodeiShield
+subscription has ended: every release is a public download, and installing or updating the CLI
+never requires a subscription.
+
+**Before 1.0.** While the 0.x series is current, security fixes go into the latest 0.x release.
+The 0.x series has no end-of-support date until 1.0.0 is released.
+
+| Version | Supported | Security fixes until |
+|---|---|---|
+| 0.x | Yes, in the latest 0.x release | No end date until 1.0.0 is released |
+
+The end-of-support date of each major version is published in this table and in the release
+notes. Twelve months before a major version's support ends, an end-of-support notice is published
+here, in the security notice block at the top of [README.md](README.md) (see
+[Security notices](#security-notices)) and in the release notes.
 
 ## What is in scope
 

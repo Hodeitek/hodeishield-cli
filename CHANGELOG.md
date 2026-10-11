@@ -59,6 +59,11 @@ commands, `--json` output and exit codes. Each release's notes start with its se
   `SECURITY.md` now says what happens after a vulnerability report, where a notice about an affected
   release appears (the README has an empty place for it), and how advisories are published, from
   a template kept in `docs/` ([#120](https://github.com/Hodeitek/hodeishield-cli/issues/120)).
+  `SECURITY.md` now states the support period (from 1.0.0, five years of security fixes per major
+  version; until then, the latest 0.x release), and `docs/user-information.md` gathers the contact
+  details, secure use, updating, removal and where the SBOM is published
+  ([#127](https://github.com/Hodeitek/hodeishield-cli/issues/127),
+  [#128](https://github.com/Hodeitek/hodeishield-cli/issues/128)).
 
 ### Fixed
 
