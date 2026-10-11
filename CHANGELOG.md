@@ -16,6 +16,47 @@ commands, `--json` output and exit codes. Each release's notes start with its se
   runs the tests, clippy and the import check on Windows on Arm too.
   ([#37](https://github.com/Hodeitek/hodeishield-cli/issues/37))
 
+- On an interactive terminal, the CLI now tells you in one line on standard error when a newer
+  release exists. It asks GitHub's public releases API (no credential or identifier is sent) at most
+  once a day, stays silent with `--json`, `--csv`, `completions`, when standard error is not a
+  terminal and when `CI` is set, and never changes a command's output or exit code. Turn it off with
+  `HODEISHIELD_NO_UPDATE_CHECK=1` or `hodeishield config set update_check false`; the README's
+  "New-version notice" section lists exactly what is sent.
+  ([#38](https://github.com/Hodeitek/hodeishield-cli/issues/38))
+- A container image, `ghcr.io/hodeitek/hodeishield-cli`, for `linux/amd64` and `linux/arm64`, built
+  for each stable release: the release's own binary on a distroless base, running as a non-root
+  user, tagged with the exact version only. It is signed by digest with Sigstore and carries the
+  release's SBOM as a signed attestation. ([#36](https://github.com/Hodeitek/hodeishield-cli/issues/36))
+
+### Changed (scripting surface)
+
+- In a session where the system keychain cannot be reached (a Windows SSH or other network logon,
+  or a Secret Service on Linux that is locked or does not answer) and no API key is set, commands
+  such as `whoami` no longer fail with a raw platform error and exit code 1. They now say that the
+  system keychain is not available in this session, suggest `HODEISHIELD_API_KEY` for remote and
+  automated sessions, and exit with 3, the code for "not authenticated". With the key set, nothing
+  changes. What to do: treat exit 3 as "this session cannot keep a login, use an API key", and do
+  not rely on exit 1 for this case. ([#111](https://github.com/Hodeitek/hodeishield-cli/issues/111))
+- A failed command no longer exits 0 when the API's error message happens to contain the words
+  "Broken pipe". The CLI now treats a failure as a closed output pipe (`hodeishield ... | head -1`,
+  which still exits 0 silently) only when writing to standard output fails with that I/O error,
+  never because of the text of a message. What to do: a script that relied on exit 0 after such a
+  failed command must now handle the documented non-zero code (see "Exit codes" in the README).
+  ([#105](https://github.com/Hodeitek/hodeishield-cli/issues/105))
+- A broken pipe from anything other than standard output (a network connection, a file, the
+  configuration being saved) no longer ends a command with exit code 0 and no message. Only a write
+  to standard output that fails because the reader went away is treated as a closed pipe; any other
+  broken pipe is reported as an error with a non-zero exit code. What to do: as above, handle the
+  non-zero code instead of expecting exit 0. ([#105](https://github.com/Hodeitek/hodeishield-cli/issues/105))
+
+### Changed
+
+- The README documents more of how to use and depend on the CLI: the interface stability policy,
+  with what a script can rely on ([#58](https://github.com/Hodeitek/hodeishield-cli/issues/58), [#92](https://github.com/Hodeitek/hodeishield-cli/pull/92)); using the CLI behind a proxy or
+  TLS inspection ([#25](https://github.com/Hodeitek/hodeishield-cli/issues/25), [#89](https://github.com/Hodeitek/hodeishield-cli/pull/89)); the beta programme and its terms
+  ([#52](https://github.com/Hodeitek/hodeishield-cli/issues/52), [#90](https://github.com/Hodeitek/hodeishield-cli/pull/90)); defining a profile before signing in to it, and waiting for
+  `msiexec` in a silent install ([#87](https://github.com/Hodeitek/hodeishield-cli/pull/87)).
+
 ### Fixed
 
 - Terminal output cleaning now also replaces the line and paragraph separators (U+2028, U+2029),
@@ -30,47 +71,18 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 - `install.sh` now looks up the latest release over HTTPS only, with TLS 1.2 or newer, as the
   download already did, so a redirect cannot lead that lookup to another protocol.
   ([#106](https://github.com/Hodeitek/hodeishield-cli/issues/106))
-- In a session where the system keychain cannot be reached (a Windows SSH or other network logon,
-  or a Secret Service on Linux that is locked or does not answer) and no API key is set, commands
-  such as `whoami` no longer fail with a raw platform error and exit code 1. They now say that the system keychain is not available in
-  this session, suggest `HODEISHIELD_API_KEY` for remote and automated sessions, and exit with 3,
-  the code for "not authenticated". With the key set, nothing changes.
-  ([#111](https://github.com/Hodeitek/hodeishield-cli/issues/111))
 - `hodeishield login` now checks that the system keychain can keep a session before it opens the
   browser or shows a device code, and stops there with the usual pointer to API keys. If saving the
   session still fails after the app has issued tokens, the CLI revokes the refresh token and then
   the access token, says so on standard error and exits non-zero, instead of leaving an active
   grant that nothing holds. The hint for a missing keychain now names the one for your system
   (Secret Service, the Keychain prompt, or Credential Manager). ([#101](https://github.com/Hodeitek/hodeishield-cli/issues/101))
-- A failed command no longer exits 0 when the API's error message happens to contain the words
-  "Broken pipe". The CLI now treats a failure as a closed output pipe (`hodeishield ... | head -1`,
-  which still exits 0 silently) only when writing to standard output fails with that I/O error,
-  never because of the text of a message. ([#105](https://github.com/Hodeitek/hodeishield-cli/issues/105))
-- A broken pipe from anything other than standard output (a network connection, a file, the
-  configuration being saved) no longer ends a command with exit code 0 and no message. Only a write
-  to standard output that fails because the reader went away is treated as a closed pipe; any other
-  broken pipe is reported as an error with a non-zero exit code.
-  ([#105](https://github.com/Hodeitek/hodeishield-cli/issues/105))
 - A stalled or slow local connection can no longer keep the browser sign-in listener busy past its
   timeout. Each connection now has a total time limit for its request, and no read waits beyond the
   overall sign-in deadline, and the deadline is checked before every connection is accepted, so a
   process sending a byte every few seconds, or connecting over and over, cannot block the real
   redirect or stop `hodeishield login` from timing out. A client that resets its connection before
   it is accepted no longer ends the sign-in. ([#104](https://github.com/Hodeitek/hodeishield-cli/issues/104))
-
-### Added
-
-- On an interactive terminal, the CLI now tells you in one line on standard error when a newer
-  release exists. It asks GitHub's public releases API (no credential or identifier is sent) at most
-  once a day, stays silent with `--json`, `--csv`, `completions`, when standard error is not a
-  terminal and when `CI` is set, and never changes a command's output or exit code. Turn it off with
-  `HODEISHIELD_NO_UPDATE_CHECK=1` or `hodeishield config set update_check false`; the README's "New-version
-  notice" section lists exactly what is sent.
-  ([#38](https://github.com/Hodeitek/hodeishield-cli/issues/38))
-- A container image, `ghcr.io/hodeitek/hodeishield-cli`, for `linux/amd64` and `linux/arm64`: the
-  release's own binary on a distroless base, running as a non-root user, tagged with the exact
-  version only. It is signed by digest with Sigstore and carries the release's SBOM as a signed
-  attestation. ([#36](https://github.com/Hodeitek/hodeishield-cli/issues/36))
 
 ## [0.3.1] - 2026-10-10
 
