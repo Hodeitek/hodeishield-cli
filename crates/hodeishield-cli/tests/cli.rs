@@ -68,7 +68,7 @@ impl Env {
         if cfg!(target_os = "macos") {
             self._dir
                 .path()
-                .join("home/Library/Application Support/com.Hodeitek.HodeiShield/sessions")
+                .join("home/Library/Application Support/com.Hodeitek.HodeiShield.sessions")
         } else {
             self.state().join("hodeishield/sessions")
         }
