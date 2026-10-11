@@ -8,6 +8,18 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ### Added
 
+- An opt-in plain-text token store, for machines that have no system keychain (an SSH or jump host,
+  WSL without a desktop). Set `HODEISHIELD_TOKEN_STORE=plaintext-file`, or the global setting
+  `hodeishield config set token_store plaintext-file`, and `login --device` keeps the session in a
+  file only your user can read, one per profile, in the platform's state directory
+  (`$XDG_STATE_HOME/hodeishield/sessions/` on Linux). The keychain stays the default, nothing ever
+  falls back from one store to the other, and the file store is not available on Windows yet. Every
+  read and write refuses a file or directory that is a symbolic link, belongs to another user or is
+  open to group or others; files are replaced atomically with mode 600. `logout` revokes the tokens
+  and deletes the file. The README has a new section, "Servers, containers and remote sessions",
+  with the trade-off and the advice for containers and CI (a tenant API key); ADR 0001 records the
+  decision. A configuration file that contains `token_store` is refused by older CLIs.
+  ([#39](https://github.com/Hodeitek/hodeishield-cli/issues/39))
 - Each release now includes a Windows on Arm build, `hodeishield-<version>-aarch64-pc-windows-msvc.zip`.
   It is built natively on a Windows on Arm runner, its `hodeishield.exe` is signed with Authenticode
   like the x64 one and checked to need no Visual C++ runtime, and the archive is listed in

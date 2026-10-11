@@ -27,8 +27,8 @@ endpoint agents from a terminal or a script.
 
 - **Read-only.** Every command is a `GET` against the public `/v1` API. Nothing here can change data in
   your organisation.
-- **Safe with credentials.** Sign-in tokens live in the system keychain, never in a file; nothing is
-  ever printed or logged; credentials only travel over HTTPS and are never replayed to a redirect.
+- **Safe with credentials.** Sign-in tokens live in the system keychain unless you opt in to a
+  plain-text file for machines that have none; nothing is ever printed or logged; credentials only travel over HTTPS and are never replayed to a redirect.
 - **Built for scripts.** `--json` prints the API's own JSON, exit codes say what went wrong, and
   `HODEISHIELD_API_KEY` works without any interactive step.
 - **Verifiable.** Every release is signed with Sigstore (keyless, from GitHub Actions) and carries
@@ -169,7 +169,8 @@ docker run --rm -e HODEISHIELD_API_KEY ghcr.io/hodeitek/hodeishield-cli:$v vendo
 
 `HODEISHIELD_API_KEY` is passed through from your environment (`-e NAME` without a value) so the key
 never appears on the command line. `hodeishield login` does not work in a container (there is no
-browser and no system keychain): use a tenant API key, see [Authenticate](#authenticate).
+browser and no system keychain): use a tenant API key, see
+[Servers, containers and remote sessions](#servers-containers-and-remote-sessions).
 
 The image is signed by digest with cosign (keyless) and carries the release's CycloneDX SBOM as a
 signed attestation. Verify both before you rely on the image:
@@ -297,8 +298,9 @@ hodeishield login --profile client-b
 
 A profile that has not been defined is refused (`Profile ... is not defined`).
 
-`login` first checks that the system keychain is available and stops before opening the browser or
-showing a code if it is not; use a tenant API key on such a machine.
+`login` first checks that the selected token store is available and stops before opening the browser
+or showing a code if it is not. On a machine without a keychain, see
+[Servers, containers and remote sessions](#servers-containers-and-remote-sessions).
 
 With `--device`, open the address the CLI prints on any device and **type the code by hand**: the app
 does not accept a link with the code filled in, on purpose.
@@ -309,8 +311,8 @@ framework the app offers; evidence; endpoints) and for a refresh token. To ask f
 
 The token is kept in the system keychain (macOS Keychain, Windows Credential Manager, or the Secret
 Service — GNOME Keyring, KWallet — on Linux) and refreshed automatically, also when the app ends an
-access token early. Without a keychain, signing in is refused rather than falling back to a file: use
-an API key there.
+access token early. Without a keychain, signing in is refused rather than falling back to a file;
+the file store below is an explicit choice, never a fallback.
 
 The keychain can also be out of reach in a session that has one on the machine, such as an SSH or
 other remote logon on Windows. With no API key set, commands then stop with exit code 3 and say that
@@ -319,6 +321,53 @@ automated sessions. With the key set, the keychain is not read at all.
 
 To cut the CLI's access from elsewhere, revoke it in [the app](https://app.hodeishield.com) under
 **Account → Application access**. Signing out of the web app does not cut it.
+
+### Servers, containers and remote sessions
+
+Where there is no desktop session (an SSH server, a container, WSL without a desktop, a CI runner)
+there is usually no keychain either, and `hodeishield login` stops before it opens a browser or shows
+a code. You have two options, in this order of preference:
+
+1. **A tenant API key** (see [With a tenant API key](#with-a-tenant-api-key-scripts-ci-servers)).
+   It works everywhere, needs no storage on the machine, can be limited to the read scopes you need
+   and is the right choice for containers and CI. Do not sign in during `docker build`, and never
+   commit or publish a container in which someone has signed in.
+2. **A plain-text token file, if you want to sign in as yourself** on a machine you control, such as
+   a jump host. You opt in explicitly, and the trade-off is that the tokens are stored
+   **unencrypted** in a file that only your user can read. Anyone who can read your files, such as
+   `root`, a backup, a snapshot or a copy of your home directory, can use the refresh token until it
+   is revoked.
+
+   ```sh
+   export HODEISHIELD_TOKEN_STORE=plaintext-file   # or: hodeishield config set token_store plaintext-file
+   hodeishield login --device
+   hodeishield whoami
+   hodeishield logout                              # revokes the tokens, then deletes the file
+   ```
+
+   - **Where.** One file per profile in the sessions directory of your state directory:
+     `$XDG_STATE_HOME/hodeishield/sessions/` (by default `~/.local/state/hodeishield/sessions/`) on
+     Linux, and `~/Library/Application Support/com.Hodeitek.HodeiShield/sessions/` on macOS. The
+     configuration file never holds a token, and the file names do not reveal profile names.
+   - **Checks.** The directory is created with mode 700 and the files with mode 600, written by
+     replacing the file atomically. On every read and write the CLI refuses, and does not repair, a
+     file or directory that is a symbolic link, belongs to another user, or is open to group or
+     others. Commands then stop with exit code 3 (`login`: 1) and tell you what is wrong; fix it
+     yourself (`chmod`), and revoke the tokens in the app if someone else could have read them.
+   - **No fallback.** The setting must be the same on every command, and the CLI never switches
+     between the keychain and the file on its own. Tokens are not moved when you change it: sign out,
+     change the setting, sign in again. The values are `plaintext-file` and `keychain` (the default);
+     anything else is an error.
+   - **Network home directories.** Do not keep the state directory on NFS or another shared file
+     system: the file would be readable by the server's administrators and by `root` on other
+     machines that mount it, and its permissions are not enforced the same way. On Linux the CLI
+     warns on `login` when the directory is on NFS or SMB; it does not stop you. Point
+     `XDG_STATE_HOME` at a local directory instead.
+   - **Deleting is not revoking.** `logout` revokes the tokens at the app and then deletes the file,
+     but removing the file by hand, or restoring it from a backup, does not end the session. Only
+     revoking does.
+   - **Not on Windows yet.** Windows has no permission bits to check, so selecting the file store
+     there is refused with exit code 1, before anything is asked of the app.
 
 ## Use
 
@@ -380,7 +429,7 @@ hodeishield vendors list --all --csv > vendors.csv
 | 0 | Success |
 | 1 | Error (invalid input, configuration, unexpected answer) |
 | 2 | Invalid command line |
-| 3 | Not authenticated: no credential (also when the system keychain cannot be reached in this session), or the API rejected it |
+| 3 | Not authenticated: no credential (also when the system keychain cannot be reached in this session, or the opt-in token file is refused as unsafe), or the API rejected it |
 | 4 | The credential lacks the scope the command needs |
 | 5 | Not found (or not in your organisation) |
 | 6 | Rate limit exhausted (the CLI already retried short waits) |
@@ -426,6 +475,7 @@ hodeishield config path                      # where the file is
 hodeishield --profile staging config set api_url https://api.example.test
 hodeishield config use staging               # make it the default profile
 hodeishield config set update_check false    # no new-version notice (global, not per profile)
+hodeishield config set token_store plaintext-file   # opt-in token file, see the section on servers
 hodeishield --profile default vendors list   # or pick one per command
 ```
 
@@ -436,9 +486,12 @@ hodeishield --profile default vendors list   # or pick one per command
 | `HODEISHIELD_API_URL` | API base URL |
 | `HODEISHIELD_APP_URL` | App base URL (sign-in) |
 | `HODEISHIELD_CONFIG` | Path of the configuration file |
+| `HODEISHIELD_TOKEN_STORE` | Where sign-in tokens are kept: `keychain` (the default) or `plaintext-file`, an [opt-in](#servers-containers-and-remote-sessions); takes precedence over `token_store` in the configuration file |
 | `HODEISHIELD_NO_UPDATE_CHECK` | Any non-empty value turns off the [new-version notice](#new-version-notice) |
 
-The configuration file holds URLs and sign-in settings only, never a credential. URLs must use HTTPS;
+The configuration file holds URLs and sign-in settings only, never a credential. `update_check` and
+`token_store` are global settings, not per profile. An older CLI refuses a configuration file that
+contains `token_store`; use the environment variable there. URLs must use HTTPS;
 plain HTTP is accepted only for `localhost`.
 
 ## New-version notice

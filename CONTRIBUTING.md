@@ -6,8 +6,9 @@ Thanks for helping. Bug reports, fixes and documentation improvements are welcom
 
 - **The CLI only reads.** Changes that write to the API will not be accepted; the `/v1` API is
   read-only anyway.
-- **Credentials never leave the keychain or the environment.** No change may write a token or key to
-  a file, print it, or log it. Tests assert this; keep them passing.
+- **Credentials stay in the keychain, the environment or the opt-in token file.** No change may write
+  a token or key anywhere else, print it, or log it, and nothing may fall back from one store to the
+  other. Tests assert this; keep them passing.
 - **Do not include real data** in issues, tests or examples: no real API keys, tokens, tenant names,
   hostnames other than the public `*.hodeishield.com`, or customer data. Use `example.com` /
   `example.test` and made-up values.
@@ -105,8 +106,8 @@ implementation plugged into one. **Depth** is the behaviour available per unit o
 - **The interface is the test surface.** Test through the interface. A test that reaches past it
   pins the implementation and breaks on every refactor.
 - **One adapter is a hypothetical seam; two make it real.** Add a trait only when a second
-  implementation exists today, a test double included. `TokenStore` qualifies: the OS keychain and
-  the in-memory store used by tests both implement it.
+  implementation exists today, a test double included. `TokenStore` qualifies: the OS keychain, the
+  opt-in token file and the in-memory store used by tests all implement it.
 - **Locality.** Table, JSON and CSV rendering, including the sanitising of terminal control
   characters, lives in `output.rs`, so a change to it touches one module, not every command.
 
