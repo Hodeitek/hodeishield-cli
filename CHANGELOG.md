@@ -15,6 +15,11 @@ commands, `--json` output and exit codes. Each release's notes start with its se
   if an archive or package lacks it. The container image carries the binary and licence files only;
   the README says where its user information is.
   ([#133](https://github.com/Hodeitek/hodeishield-cli/issues/133))
+- `docs/risk-assessment.md`: the cybersecurity risk assessment. It lists what the CLI protects, the
+  threats considered and the controls. It says how each security requirement of the Cyber Resilience
+  Act is met or why it does not apply, and why the CLI does not update itself or keep an activity
+  log. ([#122](https://github.com/Hodeitek/hodeishield-cli/issues/122),
+  [#123](https://github.com/Hodeitek/hodeishield-cli/issues/123))
 
 ### Changed
 

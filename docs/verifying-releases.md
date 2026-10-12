@@ -7,7 +7,7 @@ Every release of `hodeishield-cli` publishes, for each platform archive:
   "bundle" files produced by **keyless** `cosign sign-blob` (no private key:
   the workflow signs using its GitHub Actions OIDC identity, and the
   signature is recorded in the public Rekor transparency log).
-- `hodeishield-<version>-aarch64-pc-windows-msvc.zip` (Windows on Arm, from 0.4.1),
+- `hodeishield-<version>-aarch64-pc-windows-msvc.zip` (Windows on Arm, from 0.4.0),
   checksummed, signed with Sigstore, covered by the provenance and accompanied by its
   SBOM like the other archives. Its `hodeishield.exe` carries the same Authenticode signature
   (section 5). There is no arm64 MSI yet.

@@ -233,7 +233,7 @@ Scheduled runs use `main`, the default branch, every Monday.
 | `cargo deny check`, `cargo audit` (`ci.yml`) | Dependencies against the RustSec advisories, and the licence, banned-crate and source policy in `deny.toml` | Every pull request and push to `dev` and `main` | The CI run |
 | CodeQL (`security-tests.yml`) | Static analysis of the Rust code and of the workflows, with the `security-extended` queries | Every pull request and push to `dev` and `main`, and weekly | Security tab |
 | OSV-Scanner (`security-tests.yml`) | Every dependency in `Cargo.lock` against the OSV database | Every pull request and push to `dev` and `main`, and weekly | Security tab; the run fails |
-| actionlint, zizmor (`workflow-lint.yml`) | Workflow mistakes and unsafe patterns: actions not pinned by commit, broad token permissions, template injection, persisted credentials | Every change under `.github`, and weekly | actionlint: warnings on the run; zizmor: Security tab |
+| actionlint, zizmor (`workflow-lint.yml`) | Workflow mistakes and unsafe patterns: actions not pinned by commit, broad token permissions, template injection, persisted credentials | Every change under `.github`, and weekly | The run fails; zizmor's results also go to the Security tab |
 | OpenSSF Scorecard (`scorecard.yml`) | Supply-chain practices of the repository, such as pinning, token permissions, branch protection and signed releases | Every push to `main`, weekly, and when branch protection changes | Security tab, and published on [scorecard.dev](https://scorecard.dev) |
 | Dependabot alerts and security updates | Dependencies against the GitHub Advisory Database, which includes RustSec | When an advisory is published or a dependency changes | Security tab, and a pull request when a fixed version exists |
 | Repository builder tests (`repo-builder-tests.yml`) | The APT and DNF repository builder refuses forged packages and indexes | Every change to `packaging/repo`, and weekly | The run |
@@ -241,8 +241,8 @@ Scheduled runs use `main`, the default branch, every Monday.
 | Proxy and TLS (`proxy-tls.yml`) | Proxy and TLS inspection behaviour against a TLS-inspecting proxy | Every change to the CLI, the API client or `Cargo.lock` | The run |
 | Dependency review (by hand) | The pins Dependabot does not cover, `cargo outdated`, actions pinned by commit | Monthly | A pull request |
 
-actionlint and zizmor report without failing the run until the findings in the existing workflows
-are resolved; a pull request that adds a new zizmor finding still shows it in code scanning.
+Any actionlint or zizmor finding fails the run; zizmor runs at its pedantic level. A finding that is
+accepted instead of fixed is ignored in `.github/zizmor.yml` with a one-line reason.
 
 What happens with the findings:
 
