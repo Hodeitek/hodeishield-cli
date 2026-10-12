@@ -44,3 +44,12 @@ updates:
     ignore:
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
+
+  # The pinned base image of the container image (packaging/container/Dockerfile).
+  - package-ecosystem: "docker"
+    directory: "/packaging/container"
+    target-branch: "dev"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7

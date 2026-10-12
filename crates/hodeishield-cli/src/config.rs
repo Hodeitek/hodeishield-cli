@@ -25,6 +25,9 @@ pub struct ConfigFile {
     /// Profile used when neither `--profile` nor `HODEISHIELD_PROFILE` names one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_profile: Option<String>,
+    /// Whether to look for a newer release once a day. Global, not per profile. Unset: yes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update_check: Option<bool>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub profiles: BTreeMap<String, Profile>,
 }
@@ -46,8 +49,33 @@ pub struct Profile {
     pub oauth_scopes: Option<Vec<String>>,
 }
 
-/// The keys `config set` and `config unset` accept.
-pub const KEYS: &[&str] = &["api_url", "app_url", "oauth_client_id", "oauth_scopes"];
+/// The keys `config set` and `config unset` accept. `update_check` is global; the rest belong to a
+/// profile.
+pub const KEYS: &[&str] = &[
+    "api_url",
+    "app_url",
+    "oauth_client_id",
+    "oauth_scopes",
+    UPDATE_CHECK,
+];
+
+/// The one global key.
+pub const UPDATE_CHECK: &str = "update_check";
+
+impl ConfigFile {
+    pub fn set_update_check(&mut self, value: &str) -> Result<()> {
+        self.update_check = Some(match value.trim().to_ascii_lowercase().as_str() {
+            "true" => true,
+            "false" => false,
+            _ => {
+                return Err(Failure::general(format!(
+                    "update_check: `{value}` is not true or false."
+                )));
+            }
+        });
+        Ok(())
+    }
+}
 
 impl Profile {
     pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
@@ -348,6 +376,16 @@ mod tests {
             let mode = std::fs::metadata(&path).expect("meta").permissions().mode();
             assert_eq!(mode & 0o777, 0o600);
         }
+    }
+
+    #[test]
+    fn update_check_is_a_global_boolean() {
+        let mut config = ConfigFile::default();
+        assert!(config.set_update_check("maybe").is_err());
+        config.set_update_check("False").expect("set");
+        assert_eq!(config.update_check, Some(false));
+        let text = toml::to_string_pretty(&config).expect("toml");
+        assert_eq!(text.trim(), "update_check = false");
     }
 
     #[test]

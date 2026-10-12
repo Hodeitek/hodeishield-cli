@@ -6,20 +6,26 @@
 mod config;
 mod resources;
 mod session;
+mod tenants;
 
 use crate::auth::{self, TokenStore};
 use crate::cli::{Cli, Command};
 use crate::config::{Overrides, Settings};
 use crate::failure::{ApiContext, CredentialSource, Result, from_api};
 use hodeishield_api::Client;
+use std::cell::Cell;
 use std::io::Write;
 use std::sync::Arc;
+use tenants::Selection;
 
 pub struct Context {
     pub overrides: Overrides,
     pub json: bool,
     pub verbose: bool,
+    pub selection: Selection,
     pub store: Arc<dyn TokenStore + Send + Sync>,
+    /// Cached information about whether the credential is a portfolio key, set on first API call.
+    is_portfolio_key: Cell<Option<bool>>,
 }
 
 impl Context {
@@ -27,14 +33,35 @@ impl Context {
         crate::config::resolve(&self.overrides)
     }
 
-    /// A `/v1` client with the credential in effect.
-    pub fn api(&self, settings: &Settings) -> Result<(Client, CredentialSource)> {
+    /// A `/v1` client with the credential in effect, reading `tenant` (a client tenant's id) when
+    /// one is given and the credential's own tenant otherwise.
+    pub fn api(
+        &self,
+        settings: &Settings,
+        tenant: Option<&str>,
+    ) -> Result<(Client, CredentialSource)> {
         let (credential, source) = auth::credential_for_api(settings, self.store.as_ref())?;
+        let is_portfolio =
+            source == CredentialSource::ApiKey && auth::is_portfolio_key(&credential);
+        self.is_portfolio_key.set(Some(is_portfolio));
         let mut builder =
             Client::builder(settings.api_url.clone(), credential).user_agent(crate::USER_AGENT);
         if source == CredentialSource::OAuth {
             let (settings, store) = (settings.clone(), Arc::clone(&self.store));
             builder = builder.renew_credential(move || auth::renew(&settings, store.as_ref()));
+        }
+        if let Some(tenant) = tenant {
+            builder = builder.tenant(tenant).map_err(|e| {
+                from_api(
+                    e,
+                    &ApiContext {
+                        source,
+                        framework: None,
+                        tenant_selected: true,
+                        is_portfolio_key: is_portfolio,
+                    },
+                )
+            })?;
         }
         if self.verbose {
             builder = builder.observer(|event| {
@@ -65,10 +92,22 @@ impl Context {
                 &ApiContext {
                     source,
                     framework: None,
+                    tenant_selected: tenant.is_some(),
+                    is_portfolio_key: is_portfolio,
                 },
             )
         })?;
         Ok((client, source))
+    }
+
+    /// What a failure message needs to know about a call made with this context's selection.
+    pub fn call<'a>(&self, source: CredentialSource, framework: Option<&'a str>) -> ApiContext<'a> {
+        ApiContext {
+            source,
+            framework,
+            tenant_selected: !matches!(self.selection, Selection::Own),
+            is_portfolio_key: self.is_portfolio_key.get().unwrap_or(false),
+        }
     }
 }
 
@@ -80,7 +119,13 @@ pub fn run(cli: Cli, out: &mut dyn Write) -> Result<()> {
         },
         json: cli.json,
         verbose: cli.verbose,
+        selection: match (cli.tenant, cli.all_tenants) {
+            (Some(tenant), _) => Selection::Tenant(tenant),
+            (None, true) => Selection::All,
+            (None, false) => Selection::Own,
+        },
         store: Arc::new(auth::store::Keychain),
+        is_portfolio_key: Cell::new(None),
     };
     match cli.command {
         Command::Vendors(command) => resources::vendors(&ctx, command, out),
@@ -89,6 +134,7 @@ pub fn run(cli: Cli, out: &mut dyn Write) -> Result<()> {
         Command::Compliance(command) => resources::compliance(&ctx, command, out),
         Command::Evidence(command) => resources::evidence(&ctx, command, out),
         Command::Endpoints(command) => resources::endpoints(&ctx, command, out),
+        Command::Tenants(command) => tenants::run(&ctx, command, out),
         Command::Login(args) => session::login(&ctx, &args),
         Command::Logout => session::logout(&ctx),
         Command::Whoami => session::whoami(&ctx, out),

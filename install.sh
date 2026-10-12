@@ -78,7 +78,7 @@ case "$(uname -s)" in
 esac
 
 if [ -z "$version" ]; then
-  latest=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/${REPO}/releases/latest") ||
+  latest=$(curl -fsSLI --proto '=https' --tlsv1.2 -o /dev/null -w '%{url_effective}' "https://github.com/${REPO}/releases/latest") ||
     die "could not find the latest release"
   version=${latest##*/}
   version=${version#v}

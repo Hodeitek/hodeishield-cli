@@ -89,6 +89,9 @@ pub trait TokenStore {
     fn save(&self, profile: &str, token: &StoredToken) -> Result<()>;
     /// Whether there was something to delete.
     fn delete(&self, profile: &str) -> Result<bool>;
+    /// Whether tokens can be kept for this profile, without writing anything. Sign-in checks it
+    /// before it asks the person to approve anything.
+    fn check_available(&self, profile: &str) -> Result<()>;
 }
 
 /// The system keychain.
@@ -101,13 +104,27 @@ fn ensure_store() -> Result<()> {
     STORE_READY
         .get_or_init(|| native_store().map(keyring_core::set_default_store))
         .clone()
-        .map_err(|reason| {
-            Failure::general(format!("{KEYCHAIN_UNAVAILABLE}: {reason}")).hint(
-                "Sign-in tokens are only kept in the system keychain. On Linux, start a Secret \
-                 Service (GNOME Keyring or KWallet); on a server without one, use a tenant API key \
-                 in HODEISHIELD_API_KEY instead.",
-            )
-        })
+        .map_err(|reason| unavailable(&reason))
+}
+
+fn unavailable(reason: &str) -> Failure {
+    Failure::general(format!("{KEYCHAIN_UNAVAILABLE}: {reason}")).hint(unavailable_hint())
+}
+
+/// What to do about a missing keychain, for the platform this build runs on.
+fn unavailable_hint() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "Sign-in tokens are only kept in the system keychain. Allow access when the Keychain \
+         prompt appears (or in Keychain Access), or use a tenant API key in HODEISHIELD_API_KEY \
+         instead."
+    } else if cfg!(windows) {
+        "Sign-in tokens are only kept in the system keychain. Check that Windows Credential \
+         Manager is available, or use a tenant API key in HODEISHIELD_API_KEY instead."
+    } else {
+        "Sign-in tokens are only kept in the system keychain. Start a Secret Service \
+         (GNOME Keyring or KWallet); on a server without one, use a tenant API key in \
+         HODEISHIELD_API_KEY instead."
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -146,6 +163,19 @@ fn keychain_failure(error: keyring_core::Error) -> Failure {
     Failure::general(format!("system keychain: {error}"))
 }
 
+/// The failure for a keychain read that did not find an entry. When the platform store cannot be
+/// reached from this session (Windows ERROR_NO_SUCH_LOGON_SESSION over SSH, no Secret Service on
+/// Linux), it is worded as an unavailable keychain, which `explain_store_failure` turns into "not
+/// authenticated"; anything else is a plain keychain failure.
+pub(crate) fn read_failure(error: keyring_core::Error) -> Failure {
+    match error {
+        keyring_core::Error::PlatformFailure(_) | keyring_core::Error::NoStorageAccess(_) => {
+            unavailable(&error.to_string())
+        }
+        other => keychain_failure(other),
+    }
+}
+
 impl TokenStore for Keychain {
     fn load(&self, profile: &str) -> Result<Option<StoredToken>> {
         let entry = entry(profile)?;
@@ -158,7 +188,7 @@ impl TokenStore for Keychain {
                 Ok(Some(StoredToken::from_payload(payload)))
             }
             Err(keyring_core::Error::NoEntry) => Ok(None),
-            Err(e) => Err(keychain_failure(e)),
+            Err(e) => Err(read_failure(e)),
         }
     }
 
@@ -175,6 +205,25 @@ impl TokenStore for Keychain {
             Ok(()) => Ok(true),
             Err(keyring_core::Error::NoEntry) => Ok(false),
             Err(e) => Err(keychain_failure(e)),
+        }
+    }
+
+    /// Reads the profile's entry, which proves the backend answers without writing a secret: an
+    /// entry that does not exist, or that cannot be decoded, still means the keychain works.
+    ///
+    /// Reading the stored entry and discarding it is deliberate: keyring-core 1.0 has no cheaper
+    /// probe that works everywhere. `get_attributes` is not implemented on macOS, and treating
+    /// `NotSupportedByStore` as unavailable would lock macOS users out. The value is dropped
+    /// at once; `zeroize` is not a direct dependency and is not added for this.
+    fn check_available(&self, profile: &str) -> Result<()> {
+        match entry(profile)?.get_password() {
+            Err(
+                e @ (keyring_core::Error::PlatformFailure(_)
+                | keyring_core::Error::NoStorageAccess(_)
+                | keyring_core::Error::NoDefaultStore
+                | keyring_core::Error::NotSupportedByStore(_)),
+            ) => Err(unavailable(&e.to_string())),
+            _ => Ok(()),
         }
     }
 }
@@ -209,6 +258,10 @@ impl TokenStore for MemoryStore {
             .map_err(|_| Failure::general("poisoned"))?
             .remove(profile)
             .is_some())
+    }
+
+    fn check_available(&self, _profile: &str) -> Result<()> {
+        Ok(())
     }
 }
 

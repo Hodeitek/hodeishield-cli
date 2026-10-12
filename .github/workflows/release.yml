@@ -392,10 +392,21 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  # x86_64 builds on the x64 runner. arm64 builds natively on the GitHub-hosted Windows 11 Arm
+  # runner (as aarch64 Linux does on ubuntu-24.04-arm), so the C code of aws-lc-sys is compiled by
+  # the toolchain that will also run the CI tests, with no cross-compilation.
   build-windows:
-    name: build (x86_64-pc-windows-msvc)
+    name: build (${{ matrix.target }})
     needs: version
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -406,18 +417,20 @@ jobs:
         run: rustup show
 
       - name: Build
-        run: cargo build --release --locked --target x86_64-pc-windows-msvc -p hodeishield-cli
+        run: cargo build --release --locked --target ${{ matrix.target }} -p hodeishield-cli
 
       - name: Stage the unsigned executable for the signing job
         shell: pwsh
+        env:
+          TARGET: ${{ matrix.target }}
         run: |
           New-Item -ItemType Directory -Path stage | Out-Null
-          Copy-Item -Path "target/x86_64-pc-windows-msvc/release/$env:BIN_NAME.exe", "LICENSE", "NOTICE", "README.md" -Destination stage
+          Copy-Item -Path "target/$env:TARGET/release/$env:BIN_NAME.exe", "LICENSE", "NOTICE", "README.md" -Destination stage
 
       - name: Upload the unsigned executable
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: unsigned-x86_64-pc-windows-msvc
+          name: unsigned-${{ matrix.target }}
           path: stage/*
           if-no-files-found: error
           retention-days: 1
@@ -432,11 +445,25 @@ jobs:
   # Environment secrets (release-signing): AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID
   # (directory identifiers, kept out of public logs). Environment variables: AZURE_SIGNING_ENDPOINT,
   # AZURE_SIGNING_ACCOUNT_NAME, AZURE_CERTIFICATE_PROFILE_NAME.
+  #
+  # One job per architecture; each pauses for the same `release-signing` approval. The signing
+  # itself does not depend on the architecture of the exe, so both run on the x64 runner, which
+  # also hosts the x64 dumpbin used to inspect them.
   sign-windows:
-    name: sign and package (x86_64-pc-windows-msvc)
+    name: sign and package (${{ matrix.target }})
     needs: [version, build-windows]
     runs-on: windows-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+            key: x64
+            machine: "8664 machine (x64)"
+          - target: aarch64-pc-windows-msvc
+            key: arm64
+            machine: "AA64 machine (ARM64)"
     environment: ${{ needs.version.outputs.sign_windows == 'true' && 'release-signing' || '' }}
     permissions:
       contents: read
@@ -444,15 +471,21 @@ jobs:
     env:
       VERSION: ${{ needs.version.outputs.version }}
       SIGN: ${{ needs.version.outputs.sign_windows }}
+      TARGET: ${{ matrix.target }}
+      MACHINE: ${{ matrix.machine }}
+      KEY: ${{ matrix.key }}
     # The digest of the exe this job hands to the MSI build. A job output cannot be rewritten by
-    # another job, so `windows-msi` checks what it downloads against this, not against a name.
+    # another job, so `windows-msi` checks what it downloads against this, not against a name. The
+    # name carries the architecture, because the legs of a matrix share their outputs otherwise:
+    # each leg sets only its own (output names cannot use expressions).
     outputs:
-      exe_sha256: ${{ steps.handoff.outputs.exe_sha256 }}
+      exe_sha256_x64: ${{ steps.handoff.outputs.exe_sha256_x64 }}
+      exe_sha256_arm64: ${{ steps.handoff.outputs.exe_sha256_arm64 }}
     steps:
       - name: Download the unsigned executable
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: unsigned-x86_64-pc-windows-msvc
+          name: unsigned-${{ matrix.target }}
           path: stage
 
       # Anything else in the hand-off would be packaged, and possibly signed, as ours.
@@ -492,6 +525,13 @@ jobs:
             $runtime = @($imports | Where-Object { $_ -match '^(VCRUNTIME|MSVCP|CONCRT|VCOMP|VCCORLIB|MSVCR\d)' })
             if ($runtime.Count -gt 0) {
               Write-Host "::error::$($exe.Name) imports the Visual C++ runtime ($($runtime -join ', ')), which Windows does not include."
+              $failed = $true
+            }
+            # The archive name says which architecture this is: the file must really be that one.
+            $headers = & $dumpbin /nologo /headers $exe.FullName
+            if ($LASTEXITCODE -ne 0) { throw "dumpbin /headers failed on $($exe.FullName)" }
+            if (-not ($headers | Select-String -SimpleMatch $env:MACHINE -Quiet)) {
+              Write-Host "::error::$($exe.Name) is not a '$env:MACHINE' executable, which $env:TARGET requires."
               $failed = $true
             }
           }
@@ -567,10 +607,12 @@ jobs:
         shell: pwsh
         run: |
           $hash = (Get-FileHash -LiteralPath stage\hodeishield.exe -Algorithm SHA256).Hash.ToLower()
-          "exe_sha256=$hash" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
+          "exe_sha256_$env:KEY=$hash" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
           Write-Host "hodeishield.exe $hash"
 
+      # The MSI is built for x64 only (an arm64 MSI is a follow-up).
       - name: Upload the signed executable for the MSI build
+        if: matrix.key == 'x64'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: windows-msi-input
@@ -582,7 +624,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $stageName = "hodeishield-$env:VERSION-x86_64-pc-windows-msvc"
+          $stageName = "hodeishield-$env:VERSION-$env:TARGET"
           $dir = Join-Path $env:RUNNER_TEMP $stageName
           New-Item -ItemType Directory -Path $dir, dist | Out-Null
           Copy-Item stage/* $dir
@@ -591,7 +633,7 @@ jobs:
       - name: Upload archive
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: archive-x86_64-pc-windows-msvc
+          name: archive-${{ matrix.target }}
           path: dist/*.zip
           if-no-files-found: error
           retention-days: 7
@@ -608,7 +650,7 @@ jobs:
       contents: read
     env:
       VERSION: ${{ needs.version.outputs.version }}
-      EXE_SHA256: ${{ needs.sign-windows.outputs.exe_sha256 }}
+      EXE_SHA256: ${{ needs.sign-windows.outputs.exe_sha256_x64 }}
       # Pinned to 5.x: later WiX releases add maintenance-fee terms to their licence, to be reviewed
       # before moving. Bumped by hand in the periodic dependency review (CONTRIBUTING.md).
       WIX_VERSION: "5.0.2"
@@ -723,7 +765,7 @@ jobs:
       - name: Check the MSI before signing it
         shell: powershell
         env:
-          EXE_SHA256: ${{ needs.sign-windows.outputs.exe_sha256 }}
+          EXE_SHA256: ${{ needs.sign-windows.outputs.exe_sha256_x64 }}
         run: |
           $ErrorActionPreference = "Stop"
           $msi = (Resolve-Path "msi\hodeishield-$env:VERSION-x86_64-pc-windows-msvc.msi").Path
@@ -921,7 +963,8 @@ jobs:
             x86_64-unknown-linux-musl:x86_64-unknown-linux-musl \
             aarch64-unknown-linux-musl:aarch64-unknown-linux-musl \
             universal-apple-darwin:aarch64-apple-darwin \
-            x86_64-pc-windows-msvc:x86_64-pc-windows-msvc; do
+            x86_64-pc-windows-msvc:x86_64-pc-windows-msvc \
+            aarch64-pc-windows-msvc:aarch64-pc-windows-msvc; do
             name="${pair%%:*}"
             target="${pair##*:}"
             cargo cyclonedx --manifest-path crates/hodeishield-cli/Cargo.toml --format json \
@@ -994,8 +1037,9 @@ jobs:
             echo "archive-universal-apple-darwin hodeishield-$V-universal-apple-darwin.tar.gz"
             [ "$SIGN_MACOS" = true ] && echo "archive-universal-apple-darwin hodeishield-$V-universal-apple-darwin.pkg"
             echo "archive-x86_64-pc-windows-msvc hodeishield-$V-x86_64-pc-windows-msvc.zip"
+            echo "archive-aarch64-pc-windows-msvc hodeishield-$V-aarch64-pc-windows-msvc.zip"
             [ "$SIGN_WINDOWS" = true ] && echo "archive-msi hodeishield-$V-x86_64-pc-windows-msvc.msi"
-            for t in x86_64-unknown-linux-musl aarch64-unknown-linux-musl universal-apple-darwin x86_64-pc-windows-msvc; do
+            for t in x86_64-unknown-linux-musl aarch64-unknown-linux-musl universal-apple-darwin x86_64-pc-windows-msvc aarch64-pc-windows-msvc; do
               echo "archive-sbom hodeishield-$V-$t.cdx.json"
             done
             echo "archive-packages hodeishield_${pv}-1_amd64.deb"

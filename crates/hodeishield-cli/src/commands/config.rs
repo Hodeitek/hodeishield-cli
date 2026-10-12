@@ -20,6 +20,7 @@ pub fn run(ctx: &Context, command: ConfigCommand, out: &mut dyn Write) -> Result
         }
         ConfigCommand::Show => {
             let settings = ctx.settings()?;
+            let update_check = config::load(&path)?.update_check.unwrap_or(true);
             let value = json!({
                 "config_file": settings.config_path.display().to_string(),
                 "profile": settings.profile,
@@ -27,6 +28,7 @@ pub fn run(ctx: &Context, command: ConfigCommand, out: &mut dyn Write) -> Result
                 "app_url": settings.app_url.as_str(),
                 "oauth_client_id": settings.oauth_client_id,
                 "oauth_scopes": settings.oauth_scopes,
+                "update_check": update_check,
             });
             if ctx.json {
                 return Ok(print_json(out, &value)?);
@@ -40,8 +42,16 @@ pub fn run(ctx: &Context, command: ConfigCommand, out: &mut dyn Write) -> Result
             writeln!(out, "app_url          {}", settings.app_url)?;
             writeln!(out, "oauth_client_id  {}", settings.oauth_client_id)?;
             writeln!(out, "oauth_scopes     {scopes}")?;
+            writeln!(out, "update_check     {update_check}")?;
             Ok(())
         }
+        ConfigCommand::Set { key, value } if key == config::UPDATE_CHECK => {
+            edit_global(&path, |file| file.set_update_check(&value))
+        }
+        ConfigCommand::Unset { key } if key == config::UPDATE_CHECK => edit_global(&path, |file| {
+            file.update_check = None;
+            Ok(())
+        }),
         ConfigCommand::Set { key, value } => edit(ctx, &path, |profile| profile.set(&key, &value)),
         ConfigCommand::Unset { key } => edit(ctx, &path, |profile| profile.unset(&key)),
         ConfigCommand::Use { name } => {
@@ -59,6 +69,18 @@ pub fn run(ctx: &Context, command: ConfigCommand, out: &mut dyn Write) -> Result
             Ok(())
         }
     }
+}
+
+/// Changes a setting that belongs to the file, not to a profile.
+fn edit_global(
+    path: &std::path::Path,
+    change: impl FnOnce(&mut config::ConfigFile) -> Result<()>,
+) -> Result<()> {
+    let mut file = config::load(path)?;
+    change(&mut file)?;
+    config::save(path, &file)?;
+    eprintln!("Saved in {}.", path.display());
+    Ok(())
 }
 
 /// Changes the profile named by `--profile` (or the default one), creating it if needed.

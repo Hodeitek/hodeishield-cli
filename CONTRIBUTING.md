@@ -39,8 +39,18 @@ cargo xtask man target/man        # generate man pages
 cargo deny check && cargo audit   # dependency policy and advisories
 ```
 
-CI runs the tests on Linux, macOS and Windows and the other checks on Linux; a pull request needs
-them all green.
+CI runs the tests on Linux, macOS, Windows and Windows on Arm and the other checks on Linux; a pull
+request needs them all green.
+
+### The scripting surface is tested
+
+`crates/hodeishield-cli/tests/contract.rs` pins what [Stability](README.md#stability) promises
+scripts: the exit codes 0 to 8, the shape of `--json` output (including fields the CLI does not
+know), the `--csv` header and quoting rules, and which stream carries data and which carries notes
+and errors. The expectations are written out in full so a change shows in review. If one of these
+tests fails, either the change is a mistake or it breaks the scripting surface: in the second case
+edit the expectation on purpose and add a line under `### Changed (scripting surface)` in
+`CHANGELOG.md`.
 
 ### Dependency updates
 
@@ -63,7 +73,8 @@ dependency: it changes only by a deliberate decision.
 
 `crates/hodeishield-api/src/generated.rs` is generated from the vendored OpenAPI document
 `openapi/v1.json` by `cargo xtask codegen`. Do not edit it by hand. To follow a new version of `/v1`,
-see [openapi/README.md](openapi/README.md).
+see [openapi/README.md](openapi/README.md). A weekly workflow reports, in an issue, when the
+published document no longer matches that copy; it does not change the repository.
 
 ### Trying the CLI against your organisation
 
@@ -74,13 +85,39 @@ export HODEISHIELD_API_KEY=...   # never commit or paste it anywhere
 cargo run -- vendors list
 ```
 
+## Design
+
+A short vocabulary for designing or refactoring a module, adapted from
+[aihero.dev/codebase-design](https://www.aihero.dev/skills-codebase-design). A **module** is anything
+with an interface and an implementation, at any scale: a function, a file, a crate. Its **interface**
+is everything a caller must know to use it: signature, invariants, errors and ordering. A **seam** is
+a place where behaviour can change without editing that place, and an **adapter** is a concrete
+implementation plugged into one. **Depth** is the behaviour available per unit of interface, and
+**locality** means that what changes together lives together.
+
+- **Depth lives in the interface.** Judge a module by how little a caller must learn, not by how
+  much code it hides. `hodeishield-api` is the model: the CLI calls `client.list_vendors(&params)`
+  and gets typed results, while URL building, authentication, retries, rate limits and the response
+  size cap stay behind it.
+- **Deletion test.** Imagine deleting the module and inlining it into its callers. If the
+  complexity vanishes, it was a pass-through and should not exist; if it spreads to every caller, it
+  is earning its place.
+- **The interface is the test surface.** Test through the interface. A test that reaches past it
+  pins the implementation and breaks on every refactor.
+- **One adapter is a hypothetical seam; two make it real.** Add a trait only when a second
+  implementation exists today, a test double included. `TokenStore` qualifies: the OS keychain and
+  the in-memory store used by tests both implement it.
+- **Locality.** Table, JSON and CSV rendering, including the sanitising of terminal control
+  characters, lives in `output.rs`, so a change to it touches one module, not every command.
+
 ## Pull requests
 
 - Branch from `dev` and open the pull request against `dev`. `main` only receives releases.
 - Keep changes focused, with tests for new behaviour.
 - Add a line under `## [Unreleased]` in `CHANGELOG.md` for any change a user or a script would
   notice. A release renames that section to `## [X.Y.Z] - YYYY-MM-DD`; the release workflow refuses
-  a tag without it and uses the section as the release notes.
+  a tag without it and uses the section as the release notes. A change to the scripting surface
+  goes under `### Changed (scripting surface)`; see [Stability](README.md#stability).
 - Commits must be signed (GPG or SSH) and use a clear, imperative message in English. Reference
   the issue it resolves with `Closes #N` in the commit message.
 - Commit messages and pull request descriptions must not mention Claude: no session trailer, no
@@ -110,7 +147,11 @@ after everything they list; packages and by-hash indexes are immutable, so a cli
 index can still finish its update). Only `hodeishield` packages vouched for by the previously signed
 index (an RPM, by the repository key's signature) or by the release's verified `SHA256SUMS` are
 published, and anything else found in the bucket stops the job, so write access to the bucket alone
-cannot get a package signed. The bucket user needs list, read and write permissions
+cannot get a package signed. The `Repository builder tests` workflow checks this on every change to
+`packaging/repo` and weekly (`packaging/repo/repo-test.sh`): with throwaway keys and a throwaway bucket it
+publishes releases, installs and upgrades from the result with apt and dnf, and plants forged packages
+and indexes that the builder and the clients must refuse. Those cases run in CI only and are not meant
+to be run ad hoc. The bucket user needs list, read and write permissions
 only: nothing is ever deleted or overwritten. It runs after the same approval and is skipped while
 the `packaging` environment has no `PACKAGES_S3_ENDPOINT`. It needs the variables
 `PACKAGES_S3_ENDPOINT`, `PACKAGES_S3_REGION` and `PACKAGES_S3_BUCKET`, the secrets
@@ -127,6 +168,16 @@ A failure opens an issue labelled `repo-freshness` with what was expected, what 
 and it is closed when the check passes again; a release less than 48 hours old that is not served yet
 only raises a warning, since the `repos` job waits for an approval. On such an issue, first check who
 can write to the bucket, then re-run the `repos` job for the latest release to publish current indexes.
+
+Publishing a release also starts the **Container image** workflow. After the same `packaging`
+environment approval, it downloads the release's two Linux musl archives and SBOMs, verifies
+`SHA256SUMS` with cosign (the same identity as above) and the files against it, and builds
+`ghcr.io/hodeitek/hodeishield-cli` for `linux/amd64` and `linux/arm64` from `packaging/container/Dockerfile`
+without compiling anything. It pushes the exact-version tag only (no `latest`) with the job's own
+`GITHUB_TOKEN` (`packages: write`, held by no other job), signs the image by digest with cosign,
+attaches the SBOM with `cosign attest --type cyclonedx`, then verifies both and runs the image. Stable
+releases only. The base image is pinned by digest and bumped by dependabot. The first time, the package
+is private: a maintainer makes it public in the package settings once the first image exists.
 
 winget is submitted by hand, and only with the maintainers' approval, because it is a public
 submission to another project:
@@ -151,6 +202,11 @@ An issue is closed as soon as the fix reaches `main`, never left open once fixed
   proves it; one that is partly fixed gets a comment saying what remains; an obsolete one is closed
   with the reason. A security issue is closed only with evidence that it is fixed or not exploitable.
 - After a merge into `dev`, the issues the pull request mentions get the same review.
+
+## Design decisions
+
+Significant design choices are written up in [docs/decisions](docs/decisions), one numbered
+file each, with a status (Proposed, Accepted, Rejected or Superseded).
 
 ## Security issues
 

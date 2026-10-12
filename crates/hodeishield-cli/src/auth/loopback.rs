@@ -15,10 +15,33 @@ use std::time::{Duration, Instant};
 
 const CALLBACK_PATH: &str = "/callback";
 
+/// The most a single read may wait for the next bytes of a request.
+const READ_TIMEOUT: Duration = Duration::from_secs(5);
+/// The most a single connection may take to deliver its whole request head. The listener serves one
+/// connection at a time, so this bounds how long a stalled or trickling client can hold it.
+const CONNECTION_DEADLINE: Duration = Duration::from_secs(10);
+
+/// How long the listener waits on one connection. Injectable so tests need not sleep for seconds.
+#[derive(Debug, Clone, Copy)]
+struct Limits {
+    read: Duration,
+    connection: Duration,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            read: READ_TIMEOUT,
+            connection: CONNECTION_DEADLINE,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Loopback {
     listener: TcpListener,
     redirect_uri: String,
+    limits: Limits,
 }
 
 /// What the browser brought back.
@@ -40,6 +63,7 @@ impl Loopback {
         Ok(Self {
             listener,
             redirect_uri: format!("http://127.0.0.1:{port}{CALLBACK_PATH}"),
+            limits: Limits::default(),
         })
     }
 
@@ -59,38 +83,79 @@ impl Loopback {
     ) -> Result<Callback> {
         let deadline = Instant::now() + timeout;
         loop {
+            // Checked before every accept, not only when idle: a client that keeps connecting keeps
+            // the queue full, and must not be able to postpone the timeout.
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return Err(timed_out());
+            }
             match self.listener.accept() {
                 Ok((stream, _)) => {
-                    if let Some(result) = handle(stream, state, issuer, require_iss) {
+                    let request = Request {
+                        state,
+                        issuer,
+                        require_iss,
+                        limits: self.limits,
+                        deadline,
+                    };
+                    if let Some(result) = handle(stream, &request) {
                         return result;
                     }
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    if Instant::now() >= deadline {
-                        return Err(Failure::new(
-                            Kind::NotAuthenticated,
-                            "Timed out waiting for the browser to finish signing in.",
-                        )
-                        .hint("Run `hodeishield login` again, or `hodeishield login --device`."));
-                    }
-                    std::thread::sleep(Duration::from_millis(100));
+                    std::thread::sleep(Duration::from_millis(100).min(left));
                 }
+                // A client that reset before we accepted it (reported on macOS, the BSDs and
+                // Windows) is not the end of the sign-in.
+                Err(e) if is_aborted_connection(e.kind()) => {}
                 Err(e) => return Err(e.into()),
             }
         }
     }
 }
 
-/// `None`: not the callback, keep waiting. `Some`: the sign-in ended, one way or another.
-fn handle(
-    mut stream: TcpStream,
-    state: &str,
-    issuer: &str,
+fn timed_out() -> Failure {
+    Failure::new(
+        Kind::NotAuthenticated,
+        "Timed out waiting for the browser to finish signing in.",
+    )
+    .hint("Run `hodeishield login` again, or `hodeishield login --device`.")
+}
+
+fn is_aborted_connection(kind: std::io::ErrorKind) -> bool {
+    matches!(
+        kind,
+        std::io::ErrorKind::ConnectionAborted | std::io::ErrorKind::ConnectionReset
+    )
+}
+
+/// What `handle` checks a connection against.
+struct Request<'a> {
+    state: &'a str,
+    issuer: &'a str,
     require_iss: bool,
-) -> Option<Result<Callback>> {
+    limits: Limits,
+    /// When the whole sign-in gives up; no connection may outlive it.
+    deadline: Instant,
+}
+
+/// `None`: not the callback, keep waiting. `Some`: the sign-in ended, one way or another.
+fn handle(mut stream: TcpStream, request: &Request<'_>) -> Option<Result<Callback>> {
+    let Request {
+        state,
+        issuer,
+        require_iss,
+        ..
+    } = *request;
     let _ = stream.set_nonblocking(false);
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
-    let target = read_request_target(&mut stream)?;
+    // A client that never reads the answer must not hold the listener either.
+    let _ = stream.set_write_timeout(Some(request.limits.read));
+    let connection_deadline = Instant::now() + request.limits.connection;
+    let target = read_request_target(
+        &mut stream,
+        request.limits.read,
+        connection_deadline.min(request.deadline),
+    )?;
     let (path, query) = target.split_once('?').unwrap_or((target.as_str(), ""));
     if path != CALLBACK_PATH {
         respond(&mut stream, "404 Not Found", "Not found.");
@@ -177,10 +242,23 @@ fn handle(
 }
 
 /// The request target of a `GET` request line, or `None` for anything else.
-fn read_request_target(stream: &mut TcpStream) -> Option<String> {
+///
+/// Every read waits for at most `read_timeout` and never past `deadline`, so a client that sends a
+/// byte now and then cannot hold the connection beyond it.
+fn read_request_target(
+    stream: &mut TcpStream,
+    read_timeout: Duration,
+    deadline: Instant,
+) -> Option<String> {
     let mut buffer = Vec::with_capacity(1024);
     let mut chunk = [0_u8; 1024];
     while !buffer.windows(4).any(|w| w == b"\r\n\r\n") && buffer.len() < 16 * 1024 {
+        let left = deadline.saturating_duration_since(Instant::now());
+        let wait = read_timeout.min(left);
+        // A zero timeout is an error for the socket; out of time means stop reading.
+        if wait.is_zero() || stream.set_read_timeout(Some(wait)).is_err() {
+            break;
+        }
         match stream.read(&mut chunk) {
             Ok(0) | Err(_) => break,
             Ok(n) => buffer.extend_from_slice(&chunk[..n]),
@@ -301,5 +379,125 @@ mod tests {
             "/callback?error=access_denied&state=expected-state".to_owned(),
         ]);
         assert!(result.expect_err("denied").message.contains("denied"));
+    }
+
+    /// Connects and sends one byte every `pause`, `count` times, stopping when the server hangs up.
+    fn trickle(uri: &str, pause: Duration, count: u32) -> std::thread::JoinHandle<()> {
+        let addr = uri
+            .trim_start_matches("http://")
+            .split('/')
+            .next()
+            .expect("host")
+            .to_owned();
+        let mut stream = TcpStream::connect(addr).expect("connect");
+        std::thread::spawn(move || {
+            for _ in 0..count {
+                if stream.write_all(b"x").is_err() {
+                    return;
+                }
+                std::thread::sleep(pause);
+            }
+        })
+    }
+
+    #[test]
+    fn an_aborted_connection_does_not_end_the_sign_in() {
+        use std::io::ErrorKind::*;
+        assert!(is_aborted_connection(ConnectionAborted));
+        assert!(is_aborted_connection(ConnectionReset));
+        assert!(!is_aborted_connection(WouldBlock));
+        assert!(!is_aborted_connection(PermissionDenied));
+    }
+
+    #[test]
+    fn the_overall_timeout_holds_while_clients_keep_connecting() {
+        let loopback = Loopback::bind().expect("bind");
+        let uri = loopback.redirect_uri().to_owned();
+        let addr = uri
+            .trim_start_matches("http://")
+            .split('/')
+            .next()
+            .expect("host")
+            .to_owned();
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = stop.clone();
+        let churn = std::thread::spawn(move || {
+            while !flag.load(std::sync::atomic::Ordering::Relaxed) {
+                // Connect and close at once, so there is always something waiting to be accepted.
+                drop(TcpStream::connect(&addr));
+            }
+        });
+        let started = Instant::now();
+        let result = loopback.wait(
+            "expected-state",
+            "https://app.example.test",
+            false,
+            Duration::from_millis(400),
+        );
+        let elapsed = started.elapsed();
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        churn.join().expect("churn");
+        assert!(
+            result.expect_err("timeout").message.contains("Timed out"),
+            "timed out"
+        );
+        assert!(elapsed < Duration::from_secs(3), "{elapsed:?}");
+    }
+
+    fn quick(read_ms: u64, connection_ms: u64) -> Limits {
+        Limits {
+            read: Duration::from_millis(read_ms),
+            connection: Duration::from_millis(connection_ms),
+        }
+    }
+
+    #[test]
+    fn a_trickling_client_is_cut_off_and_the_real_callback_still_gets_in() {
+        let mut loopback = Loopback::bind().expect("bind");
+        // Each byte arrives well inside the read timeout, so only the connection deadline stops it.
+        loopback.limits = quick(1_000, 300);
+        let uri = loopback.redirect_uri().to_owned();
+        let slow = trickle(&uri, Duration::from_millis(50), 100);
+        let started = Instant::now();
+        let real = {
+            let uri = uri.clone();
+            std::thread::spawn(move || hit(&uri, "/callback?code=abc&state=expected-state"))
+        };
+        let result = loopback.wait(
+            "expected-state",
+            "https://app.example.test",
+            false,
+            Duration::from_secs(10),
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "{:?}",
+            started.elapsed()
+        );
+        assert_eq!(result.expect("real callback").code.expose_secret(), "abc");
+        assert!(real.join().expect("client").starts_with("HTTP/1.1 200"));
+        slow.join().expect("trickler");
+    }
+
+    #[test]
+    fn the_overall_timeout_holds_while_a_trickling_client_is_connected() {
+        let mut loopback = Loopback::bind().expect("bind");
+        loopback.limits = quick(1_000, 5_000);
+        let uri = loopback.redirect_uri().to_owned();
+        let slow = trickle(&uri, Duration::from_millis(50), 100);
+        let started = Instant::now();
+        let result = loopback.wait(
+            "expected-state",
+            "https://app.example.test",
+            false,
+            Duration::from_millis(400),
+        );
+        let elapsed = started.elapsed();
+        assert!(
+            result.expect_err("timeout").message.contains("Timed out"),
+            "timed out"
+        );
+        assert!(elapsed < Duration::from_secs(2), "{elapsed:?}");
+        slow.join().expect("trickler");
     }
 }

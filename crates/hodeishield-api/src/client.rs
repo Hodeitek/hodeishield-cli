@@ -29,6 +29,50 @@ pub struct Operation {
     /// Scopes the credential needs. A template such as `compliance.<framework>:read` stands for the
     /// scope of the framework being read.
     pub scopes: &'static [&'static str],
+    /// The vocabulary the document publishes for a query parameter (`x-hs-known-values`), as
+    /// `(parameter, values)` pairs, only for the parameters that have one. The vocabularies are
+    /// open: the server may accept a value that is not listed, so use this to help and to warn,
+    /// never to refuse. Read it through [`Operation::known_values`].
+    pub known_values: &'static [(&'static str, &'static [&'static str])],
+    /// The values the document marks as deprecated for a query parameter
+    /// (`x-hs-deprecated-values`), only for the parameters that have some. The server still
+    /// accepts them until their sunset date. Read it through [`Operation::deprecated_values`].
+    pub deprecated_values: &'static [DeprecatedValues],
+    /// Whether a client built for one client tenant selects that tenant on this operation and
+    /// checks the answer's confirmation. True for the data operations, false for the portfolio
+    /// listing, which is never scoped.
+    pub tenant_scoped: bool,
+}
+
+impl Operation {
+    /// The values the document lists for the query parameter `param`, in document order, or `None`
+    /// when it publishes no vocabulary for it.
+    #[must_use]
+    pub fn known_values(&self, param: &str) -> Option<&'static [&'static str]> {
+        self.known_values
+            .iter()
+            .find(|(name, _)| *name == param)
+            .map(|(_, values)| *values)
+    }
+
+    /// The deprecated values the document lists for the query parameter `param`, or `None` when
+    /// it lists none.
+    #[must_use]
+    pub fn deprecated_values(&self, param: &str) -> Option<&'static DeprecatedValues> {
+        self.deprecated_values.iter().find(|d| d.param == param)
+    }
+}
+
+/// Values of a query parameter that the API still accepts but has deprecated, as the document
+/// lists them (`x-hs-deprecated-values` and `x-hs-deprecated-values-sunset`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeprecatedValues {
+    /// The query parameter, e.g. `severity`.
+    pub param: &'static str,
+    /// The deprecated values, in document order.
+    pub values: &'static [&'static str],
+    /// The last day the API accepts them (`YYYY-MM-DD`), when the document gives one.
+    pub sunset: Option<&'static str>,
 }
 
 /// A successful answer: the typed body, the body exactly as received (for `--json`, so fields this
@@ -54,6 +98,9 @@ pub struct ResponseMeta {
     pub rate_limit: Option<RateLimit>,
     /// `Retry-After`, in seconds.
     pub retry_after: Option<u64>,
+    /// `X-HS-Tenant` of a 2xx answer: the tenant id, lowercase, when the header is present exactly
+    /// once and holds a UUID. Informational only; this is not a tenant-isolation check.
+    pub tenant_id: Option<String>,
 }
 
 /// The `RateLimit-*` headers of an answer: the limit closest to being exhausted.
@@ -98,8 +145,23 @@ impl ResponseMeta {
             request_id: text("x-request-id"),
             rate_limit,
             retry_after: number("retry-after"),
+            tenant_id: if status.is_success() {
+                tenant_header(headers)
+            } else {
+                None
+            },
         }
     }
+}
+
+/// The single `X-HS-Tenant` value, when it is a canonical UUID (any case), lowercased.
+fn tenant_header(headers: &HeaderMap) -> Option<String> {
+    let mut values = headers.get_all("x-hs-tenant").iter();
+    let value = values.next()?.to_str().ok()?;
+    if values.next().is_some() {
+        return None;
+    }
+    crate::portfolio::is_uuid(value).then(|| value.to_ascii_lowercase())
 }
 
 /// What the client reports about each request it sends, for `--verbose`. It carries no header and
@@ -135,6 +197,15 @@ pub struct RetryEvent<'a> {
 type Observer = Arc<dyn Fn(&RequestEvent<'_>) + Send + Sync>;
 type RetryObserver = Arc<dyn Fn(&RetryEvent<'_>) + Send + Sync>;
 type Renew = Arc<dyn Fn() -> Option<SecretString> + Send + Sync>;
+type AnswerCheck = Arc<dyn Fn(&HeaderMap) -> Result<(), Error> + Send + Sync>;
+
+/// Extra headers a client sends on data requests, and the check its successful answers must pass.
+/// The portfolio module fills it in; this file knows nothing about what the headers mean.
+#[derive(Clone, Default)]
+pub(crate) struct Scope {
+    pub(crate) headers: HeaderMap,
+    pub(crate) check: Option<AnswerCheck>,
+}
 
 /// Builds a [`Client`].
 pub struct ClientBuilder {
@@ -149,6 +220,7 @@ pub struct ClientBuilder {
     observer: Option<Observer>,
     retry_observer: Option<RetryObserver>,
     renew: Option<Renew>,
+    pub(crate) scope: Scope,
 }
 
 impl fmt::Debug for ClientBuilder {
@@ -268,6 +340,7 @@ impl ClientBuilder {
             observer: self.observer,
             retry_observer: self.retry_observer,
             renew: self.renew,
+            scope: self.scope,
         })
     }
 }
@@ -285,6 +358,7 @@ pub struct Client {
     observer: Option<Observer>,
     retry_observer: Option<RetryObserver>,
     renew: Option<Renew>,
+    scope: Scope,
 }
 
 impl fmt::Debug for Client {
@@ -321,6 +395,7 @@ impl Client {
             observer: None,
             retry_observer: None,
             renew: None,
+            scope: Scope::default(),
         }
     }
 
@@ -369,24 +444,29 @@ impl Client {
         std::thread::sleep(wait);
     }
 
+    /// A GET. The operation decides whether the client's tenant selection applies: scope headers
+    /// are sent and checked only when `operation.tenant_scoped`.
     pub(crate) fn get<T: DeserializeOwned>(
         &self,
         operation: &'static Operation,
         path: String,
         query: Vec<(&'static str, String)>,
     ) -> Result<ApiResponse<T>, Error> {
+        let scoped = operation.tenant_scoped;
         let url = self.url(&path, &query);
         let mut rate_limit_retries = 0;
         let mut transient_retries = 0;
         let mut renewed = false;
         loop {
             let started = Instant::now();
-            let response = match self
+            let mut request = self
                 .http
                 .get(url.clone())
-                .header(AUTHORIZATION, self.authorization()?)
-                .send()
-            {
+                .header(AUTHORIZATION, self.authorization()?);
+            if scoped {
+                request = request.headers(self.scope.headers.clone());
+            }
+            let response = match request.send() {
                 Ok(response) => response,
                 Err(e)
                     if (e.is_connect() || e.is_timeout())
@@ -415,8 +495,14 @@ impl Client {
                     elapsed: started.elapsed(),
                 });
             }
+            // A scoped answer that does not carry the scope that was asked for is never decoded.
+            let verdict = match (&self.scope.check, scoped, status.is_success()) {
+                (Some(check), true, true) => check(response.headers()),
+                _ => Ok(()),
+            };
             let body = read_body(response, MAX_RESPONSE_BYTES).map_err(Error::Body)?;
             if status.is_success() {
+                verdict?;
                 let raw: serde_json::Value =
                     serde_json::from_slice(&body).map_err(|source| Error::Decode {
                         operation: operation.id,
@@ -587,6 +673,33 @@ pub fn encode_path_segment(segment: &str) -> Result<String, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn known_values_are_looked_up_by_parameter() {
+        let operation = Operation {
+            id: "listThings",
+            method: "GET",
+            path: "/v1/things",
+            summary: "List things",
+            scopes: &[],
+            known_values: &[("severity", &["critical", "high"])],
+            deprecated_values: &[DeprecatedValues {
+                param: "severity",
+                values: &["alto"],
+                sunset: Some("2027-01-14"),
+            }],
+            tenant_scoped: true,
+        };
+        assert_eq!(
+            operation.known_values("severity"),
+            Some(&["critical", "high"][..])
+        );
+        assert_eq!(operation.known_values("page"), None);
+        let deprecated = operation.deprecated_values("severity").expect("listed");
+        assert_eq!(deprecated.values, &["alto"]);
+        assert_eq!(deprecated.sunset, Some("2027-01-14"));
+        assert_eq!(operation.deprecated_values("page"), None);
+    }
 
     fn client(base: &str) -> Client {
         Client::new(base.parse().expect("url"), SecretString::from("hsk_test")).expect("client")
