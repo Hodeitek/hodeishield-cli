@@ -4,7 +4,9 @@ name: Re-sign package repository
 # (CONTRIBUTING.md, "The repository signing key"): signs the RPM packages already in the bucket again
 # with the new subkey and regenerates the indexes, with packaging/repo/resign.sh. Started by hand only.
 # It runs in the packaging-resign environment (default branch only; one maintainer approves), whose
-# secrets are set only during a recovery. A dry run (the default) reads the bucket and checks everything but uploads nothing.
+# secrets are set only during a recovery. Every package in the bucket must be a verified release asset
+# (a .deb byte for byte, an RPM apart from its signature), checked before anything is signed. A dry run
+# (the default) reads the bucket and checks everything but uploads nothing.
 # It shares the concurrency group of the other packaging workflows, so a pending run here and a pending
 # release can displace each other: start it when no release is pending.
 on:
@@ -20,7 +22,7 @@ on:
         default: false
         type: boolean
       confirm:
-        description: "With apply: the fingerprint of the primary key in packaging/gpg.key"
+        description: "With apply: the primary key fingerprint published in the README (spaces allowed)"
         required: false
         default: ""
         type: string
@@ -69,14 +71,20 @@ jobs:
             echo "::error::The packaging-resign environment lacks:$missing (its secrets are set only for a recovery, see CONTRIBUTING.md)"
             exit 1
           fi
-          # Only stable version numbers reach the commands below (the same pattern as package-managers).
-          for v in $VERSIONS; do
+          # At least one version, split on any whitespace, and only stable version numbers reach the
+          # commands below (the same pattern as package-managers).
+          # shellcheck disable=SC2086 # split on purpose
+          set -- $VERSIONS
+          if [ $# = 0 ]; then
+            echo "::error::No version given."
+            exit 1
+          fi
+          for v in "$@"; do
             if ! [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
               echo "::error::'$v' is not a stable release version."
               exit 1
             fi
           done
-          [ -n "${VERSIONS// /}" ] || { echo "::error::No version given."; exit 1; }
           # Not the security boundary: a run can be started from any branch, and a branch can change this
           # file. What keeps an apply from a branch away from the secrets is the packaging-resign environment's
           # deployment-branch rule (CONTRIBUTING.md); this check only fails early and clearly.
@@ -121,15 +129,18 @@ jobs:
           cosign-release: "v3.1.3"
 
       # Every release's packages, each verified against that release's SHA256SUMS, which cosign
-      # verifies against the release workflow's identity. This is the only source the RPM packages are
-      # signed from; nothing in the bucket is trusted.
+      # verifies against the release workflow's identity (as docs/verifying-releases.md documents: the
+      # release workflow, run by the push of that tag). These release assets are the only source the
+      # RPM packages are signed from, and what every package in the bucket is compared with before
+      # anything is signed; nothing in the bucket is trusted. The .rpm and .deb assets are kept apart
+      # and handed to resign.sh read-only.
       - name: Download and verify the packages
         env:
           GH_TOKEN: ${{ github.token }}
           VERSIONS: ${{ inputs.versions }}
         run: |
           set -euo pipefail
-          mkdir verified
+          mkdir release-rpms release-debs
           for VERSION in $VERSIONS; do
             # A published, final release only: a draft or a prerelease is not in the bucket.
             state=$(gh release view "v$VERSION" -R "$GITHUB_REPOSITORY" --json isPrerelease,isDraft \
@@ -150,14 +161,25 @@ jobs:
             for p in "${packages[@]}"; do args+=(-p "$p"); done
             gh release download "v$VERSION" -R "$GITHUB_REPOSITORY" -D "rel-$VERSION" "${args[@]}"
             cosign verify-blob --bundle "rel-$VERSION/SHA256SUMS.sigstore.json" \
-              --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/tags/v${VERSION}" \
+              --certificate-identity "https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v${VERSION}" \
               --certificate-oidc-issuer https://token.actions.githubusercontent.com \
               --certificate-github-workflow-trigger push "rel-$VERSION/SHA256SUMS"
-            for p in "${packages[@]}"; do grep "  ${p}\$" "rel-$VERSION/SHA256SUMS"; done > "rel-$VERSION/packages.sums"
-            (cd "rel-$VERSION" && sha256sum -c packages.sums)
-            for p in "${packages[@]}"; do cp "rel-$VERSION/$p" verified/; done
+            for p in "${packages[@]}"; do
+              awk -v f="$p" '$2 == f' "rel-$VERSION/SHA256SUMS" > "rel-$VERSION/package.sums"
+              if [ "$(wc -l < "rel-$VERSION/package.sums")" != 1 ]; then
+                echo "::error::$p is not listed exactly once in the SHA256SUMS of v$VERSION."
+                exit 1
+              fi
+              (cd "rel-$VERSION" && sha256sum -c --strict package.sums)
+              case $p in *.rpm) out=release-rpms ;; *) out=release-debs ;; esac
+              if [ -e "$out/$p" ]; then
+                echo "::error::$p is there twice (is a version given twice?)."
+                exit 1
+              fi
+              cp "rel-$VERSION/$p" "$out/"
+            done
           done
-          ls verified
+          ls -l release-rpms release-debs
 
       # Before an apply: the old RPM objects are kept only if the bucket keeps versions. Reading that
       # needs s3:GetBucketVersioning; a credential that lacks it stops the run here, by design.
@@ -226,11 +248,14 @@ jobs:
             --env PACKAGES_S3_ENDPOINT --env PACKAGES_S3_REGION --env PACKAGES_S3_BUCKET \
             --env PACKAGES_S3_ACCESS_KEY_ID --env PACKAGES_S3_SECRET_ACCESS_KEY \
             --env SIGNING_KEY --env RESIGN_CONFIRM --env GNUPGHOME=/gnupg --env PUBLIC_KEY=/gpg.key \
+            --env README_FILE=/README.md \
             --volume "$GNUPGHOME:/gnupg" \
             --volume "$PWD/packaging/gpg.key:/gpg.key:ro" \
+            --volume "$PWD/README.md:/README.md:ro" \
             --volume "$PWD/packaging/repo:/repo:ro" \
-            --volume "$PWD/verified:/new:ro" \
-            hodeishield-repo sh /repo/resign.sh "${flag[@]}" /new
+            --volume "$PWD/release-rpms:/release-rpms:ro" \
+            --volume "$PWD/release-debs:/release-debs:ro" \
+            hodeishield-repo sh /repo/resign.sh "${flag[@]}" /release-rpms /release-debs
 
       - name: Remove the keyring
         if: always()

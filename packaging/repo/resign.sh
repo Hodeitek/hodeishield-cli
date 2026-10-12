@@ -5,27 +5,35 @@
 # Maintenance run, for after the signing subkey has been revoked and replaced: signs the RPM packages
 # of the bucket again with the new subkey and regenerates every index. Not part of a release.
 #
-#   resign.sh [--apply] <verified-packages-dir>
+#   resign.sh [--apply] <release-rpms-dir> <release-debs-dir>
 #
 # Without --apply nothing is uploaded: the bucket is read, the repository is built and checked in a
 # temporary directory, and a summary is printed. --apply uploads, and also needs RESIGN_CONFIRM set to
-# the fingerprint of the primary key in PUBLIC_KEY.
+# the primary key fingerprint that the README publishes (spaces allowed).
 #
-# <verified-packages-dir> holds the packages of every release in the bucket, each verified against the
-# release's SHA256SUMS (the maintenance workflow does that). It is the only trusted source: the bucket's
-# .deb files must be identical to these, and each bucket .rpm must be the same package (same header
-# digest), only with a signature. The RPM packages are then signed again from these files. The set of
-# packages in the bucket must be exactly the set in this directory.
+# <release-rpms-dir> and <release-debs-dir> hold the .rpm and the .deb assets of every release in the
+# bucket, as the releases publish them, each verified against the release's SHA256SUMS and that file's
+# cosign signature (the maintenance workflow does that, and mounts them read-only). They are the only
+# trusted source. Before any package or index is signed, every package in the bucket must be one of
+# them: a .deb byte for byte, an .rpm with the same name, epoch, version, release and architecture, the
+# same header and payload digests and the same bytes after its signature header (only the signature
+# differs). The set of packages in the bucket must be exactly the set of assets, and any other file in
+# the pool, or any other .rpm under rpm/, stops the run. The RPM packages are then signed again from the
+# assets, never from the bucket's copies.
 #
 # Environment: the same as publish.sh (PACKAGES_S3_*, GNUPGHOME, SIGNING_KEY, PUBLIC_KEY). PUBLIC_KEY
-# is the new public key, exported without the revoked subkey (export-public-key.sh).
+# is the new public key, exported without the revoked subkey (export-public-key.sh). README_FILE is the
+# repository's README.md, which publishes the fingerprint of the primary key that users check.
 #
-# It refuses to run when PUBLIC_KEY carries a revoked subkey, when it does not carry exactly one usable
+# It refuses to run when the primary key of PUBLIC_KEY is not the one the README publishes, when
+# PUBLIC_KEY carries a revoked subkey, when it does not carry exactly one usable
 # signing subkey (the one named by SIGNING_KEY), or when a signature made with SIGNING_KEY
-# does not verify against PUBLIC_KEY (the same check build.sh applies). The old signatures and the
-# published InRelease, made by the revoked subkey, are not trusted and not read. The RPM files are
-# uploaded under their own names: the bucket's versioning keeps the previous objects, nothing is
-# deleted. Runs in the pinned image named in packaging/repo/image.
+# does not verify against PUBLIC_KEY (the same check build.sh applies; that test signature, over a
+# fixed text, is the only one made before the bucket is checked, and is thrown away). The old signatures
+# and the published InRelease, made by the revoked subkey, are not trusted and not read: the APT index is
+# regenerated from the release assets alone. The RPM files are uploaded under their own names: the
+# bucket's versioning keeps the previous objects, nothing is deleted. Runs in the pinned image named in
+# packaging/repo/image.
 
 set -eu
 
@@ -42,25 +50,41 @@ case ${1-} in
     shift
     ;;
 esac
-[ $# = 1 ] || usage 2
-verified=$1
+[ $# = 2 ] || usage 2
+rpms=$1
+debs=$2
 
 die() {
   printf 'resign.sh: %s\n' "$*" >&2
   exit 1
 }
 
-: "${GNUPGHOME:?}" "${SIGNING_KEY:?}" "${PUBLIC_KEY:?}"
+: "${GNUPGHOME:?}" "${SIGNING_KEY:?}" "${PUBLIC_KEY:?}" "${README_FILE:?}"
 : "${PACKAGES_S3_ENDPOINT:?}" "${PACKAGES_S3_REGION:?}" "${PACKAGES_S3_BUCKET:?}"
 : "${PACKAGES_S3_ACCESS_KEY_ID:?}" "${PACKAGES_S3_SECRET_ACCESS_KEY:?}"
 here=$(cd "$(dirname "$0")" && pwd)
-[ -d "$verified" ] || die "$verified is not a directory"
+[ -d "$rpms" ] || die "$rpms is not a directory"
+[ -d "$debs" ] || die "$debs is not a directory"
 [ -s "$PUBLIC_KEY" ] || die "$PUBLIC_KEY is missing or empty"
+# Only regular files, .rpm in one directory and .deb in the other; build.sh checks their names.
+odd=$(find "$rpms" -mindepth 1 \( ! -type f -o ! -name '*.rpm' \) -print)
+[ -z "$odd" ] || die "$rpms holds something other than .rpm files: $odd"
+odd=$(find "$debs" -mindepth 1 \( ! -type f -o ! -name '*.deb' \) -print)
+[ -z "$odd" ] || die "$debs holds something other than .deb files: $odd"
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 primary=$(gpg --batch --with-colons --show-keys "$PUBLIC_KEY" | awk -F: '$1 == "fpr" { print $10; exit }')
 [ -n "$primary" ] || die "cannot read the fingerprint of $PUBLIC_KEY"
+
+# The primary key is the one users check against the README: the first line after "The repositories
+# are signed with this key" that is, without its spaces, 40 hexadecimal digits.
+published=$(awk '/^The repositories are signed with this key/ { on = 1; next }
+  on && /^#/ { exit }
+  on { gsub(/[ \t]/, ""); if (length($0) == 40 && $0 !~ /[^0-9A-F]/) { print; exit } }' "$README_FILE")
+[ -n "$published" ] || die "cannot read the primary key fingerprint that $README_FILE publishes"
+[ "$primary" = "$published" ] ||
+  die "the primary key of $PUBLIC_KEY is $primary, not the one the README publishes ($published)"
 
 # The key to publish must be one that rpm on RHEL and Rocky Linux 8 and 9 can import (no revoked
 # subkey), and must carry exactly one usable signing subkey: the one that signs, SIGNING_KEY.
@@ -79,8 +103,9 @@ sig_ok "$tmp/key.gpg" "$primary" "$tmp/probe.asc" "$tmp/probe" ||
   die "a signature made with $SIGNING_KEY does not verify against $PUBLIC_KEY; nothing was read or changed"
 
 if [ -n "$apply" ]; then
-  [ -n "${RESIGN_CONFIRM-}" ] && [ "$RESIGN_CONFIRM" = "$primary" ] ||
-    die "--apply needs RESIGN_CONFIRM set to the primary key fingerprint $primary"
+  confirm=$(printf '%s' "${RESIGN_CONFIRM-}" | tr -d ' ' | tr a-f A-F)
+  [ -n "$confirm" ] && [ "$confirm" = "$primary" ] ||
+    die "--apply needs RESIGN_CONFIRM set to the primary key fingerprint published in the README ($primary)"
   dry=
   printf 'resign.sh: APPLY, key %s: the bucket will be changed\n' "$primary"
 else
@@ -88,8 +113,12 @@ else
   printf 'resign.sh: dry run, key %s: the bucket is only read\n' "$primary"
 fi
 
+# The assets as publish.sh and build.sh take them: one directory, read from here on only.
+mkdir "$tmp/assets"
+find "$rpms" "$debs" -mindepth 1 -maxdepth 1 -type f -exec cp -t "$tmp/assets/" {} +
+
 status=0
-RESIGN=1 DRY_RUN=$dry sh "$here/publish.sh" "$verified" || status=$?
+RESIGN=1 DRY_RUN=$dry sh "$here/publish.sh" "$tmp/assets" || status=$?
 [ "$status" = 0 ] || die "failed (exit $status); see above"
 if [ -n "$apply" ]; then
   printf 'resign.sh: done. Purge the CDN cache for /rpm/*/*.rpm and the entry points (CONTRIBUTING.md).\n'

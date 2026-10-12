@@ -25,10 +25,13 @@
 #   - the clients must refuse a tampered index, a corrupt package and a package that is not signed
 #     with the repository key, and must install and upgrade from the untampered repository;
 #   - after a signing subkey is revoked and replaced (throwaway keys of their own), the builder must
-#     refuse the bucket's old signatures, resign.sh must refuse every unsafe run and leave the bucket as
-#     it was, and the one confirmed run must sign the RPM packages again (the old objects stay as
-#     versions), after which a new release publishes and apt and dnf install from the repository with
-#     the exported key, which carries no revoked subkey.
+#     refuse the bucket's old signatures, resign.sh must refuse every unsafe run (a package in the bucket
+#     that is not a release asset, a .deb byte for byte and an RPM apart from its signature, an
+#     unexpected file, a public key that is not the one to publish or whose primary key the README does
+#     not publish) and leave the bucket as it was, ignore the published InRelease, and
+#     the one confirmed run must sign the RPM packages again (the old objects stay as versions), after
+#     which a new release publishes and apt and dnf install from the repository with the exported key,
+#     which carries no revoked subkey.
 
 set -eu
 
@@ -134,6 +137,7 @@ quiet --quick-generate-key 'HodeiShield repository test key <repo-test@example.i
 primary=$(fingerprint)
 quiet --quick-add-key "$primary" rsa4096 sign never
 gpg --batch --armor --export "$primary" > /w/pub.asc
+printf '%s\n' "$primary" > /w/pub.fpr
 quiet --export-secret-subkeys "$primary" > /w/subkey.gpg
 gpgconf --kill all
 
@@ -838,6 +842,10 @@ quiet --export-secret-subkeys "$new!" > /w/rv-new-secret.gpg
 # What would be published without the filter: it still carries the revoked subkey.
 gpg --batch --armor --export "$primary" > /w/rv-pub-revoked.asc
 sh /w/bin/export-public-key.sh "$primary" > /w/rv-pub-new.asc
+# And a key with a second usable signing subkey, which resign.sh must refuse to publish.
+quiet --quick-add-key "$primary" rsa4096 sign never
+gpg --batch --armor --export-options export-minimal --export-filter "drop-subkey=fpr = $old || fpr = $old2" \
+  --export "$primary" > /w/rv-pub-two.asc
 gpgconf --kill all
 GNUPGHOME=/w/gnupg-rv-new
 export GNUPGHOME
@@ -848,23 +856,69 @@ rm -f /w/rv-new-secret.gpg
 EOF
 cp "$here/export-public-key.sh" "$here/sigcheck.sh" "$work/bin/"
 
+# clearsign.sh <gnupg home> <key> <in> <out>: clear-signs a file with that key.
+cat > "$work/bin/clearsign.sh" << 'EOF'
+set -eu
+export HOME=/tmp GNUPGHOME="$1"
+gpg --batch --yes --local-user "$2" --digest-algo SHA512 --clearsign --output "$4" "$3"
+EOF
+
+# splice.sh <rpm a> <rpm b> <out>: the lead and signature header of <rpm a>, then the main header and
+# payload of <rpm b>. The signature header follows the 96-byte lead; its size is given by its 16-byte
+# intro (the number of index entries and the length of the data), padded to a multiple of 8 bytes.
+cat > "$work/bin/splice.sh" << 'EOF'
+set -eu
+be32() {
+  od -An -v -tu1 -j "$2" -N 4 "$1" | awk '{ for (i = 1; i <= NF; i++) n = n * 256 + $i } END { print n }'
+}
+sigend() { echo $((96 + (16 + 16 * $(be32 "$1" 104) + $(be32 "$1" 108) + 7) / 8 * 8)); }
+{
+  head -c "$(sigend "$1")" "$1"
+  tail -c "+$(($(sigend "$2") + 1))" "$2"
+} > "$3"
+EOF
+
 group "Throwaway keys: a signing subkey, its revocation and its replacement"
 tool sh /w/bin/rv-keys.sh
 rv_primary=$(cat "$work/rv.primary")
+# The README's key section, as resign.sh reads it, with the recovery key's fingerprint in groups of four.
+{
+  printf 'The repositories are signed with this key (RSA 4096); check its fingerprint before trusting it:\n\n'
+  printf '%s\n' '```text' "$(printf '%s\n' "$rv_primary" | sed 's/..../& /g; s/ $//')" '```'
+} > "$work/rv-README.md"
 endgroup
 
-# rvkeys <old|new|revoked-pub|old-sign-new-pub>: which keyring, signing subkey and public key publish() and resign_run() use.
+# rvkeys <old|new|revoked-pub|old-sign-new-pub|two-pub|other-primary>: which keyring, signing subkey and
+# public key publish() and resign_run() use.
 rvkeys() {
   case $1 in
     old) kh=$work/gnupg-rv-old ksign=$(cat "$work/rv-old.key") kpub=$work/rv-pub-old.asc ;;
     new) kh=$work/gnupg-rv-new ksign=$(cat "$work/rv-new.key") kpub=$work/rv-pub-new.asc ;;
     revoked-pub) kh=$work/gnupg-rv-new ksign=$(cat "$work/rv-new.key") kpub=$work/rv-pub-revoked.asc ;;
     old-sign-new-pub) kh=$work/gnupg-rv-old ksign=$(cat "$work/rv-old.key") kpub=$work/rv-pub-new.asc ;;
+    two-pub) kh=$work/gnupg-rv-new ksign=$(cat "$work/rv-new.key") kpub=$work/rv-pub-two.asc ;;
+    # The repository test key of the other cases: another primary key, with its own signing subkey.
+    other-primary) kh=$work/gnupg-sign ksign=$signing_key kpub=$work/pub.asc ;;
   esac
 }
 
-# resign_run <bucket> <verified packages dir>: runs resign.sh; $rflags is "--apply" or empty, $rconfirm
-# the confirmation. Sets $out and $rc.
+# assets <dir> <package>...: the release assets as the workflow hands them to resign.sh, the .rpm files
+# in <dir>/release-rpms and the .deb files in <dir>/release-debs. A later file replaces an earlier one
+# of the same name.
+assets() {
+  adir=$1
+  shift
+  mkdir -p "$adir/release-rpms" "$adir/release-debs"
+  for afile in "$@"; do
+    case $afile in
+      *.rpm) cp "$afile" "$adir/release-rpms/" ;;
+      *.deb) cp "$afile" "$adir/release-debs/" ;;
+    esac
+  done
+}
+
+# resign_run <bucket> <release assets dir, as assets() makes it>: runs resign.sh; $rflags is "--apply" or
+# empty, $rconfirm the confirmation. Sets $out and $rc.
 resign_run() {
   rc=0
   # shellcheck disable=SC2086
@@ -872,10 +926,11 @@ resign_run() {
     --env PACKAGES_S3_ENDPOINT="$srv" --env PACKAGES_S3_REGION=us-east-1 --env PACKAGES_S3_BUCKET="$1" \
     --env PACKAGES_S3_ACCESS_KEY_ID="$pubuser" --env PACKAGES_S3_SECRET_ACCESS_KEY="$pubpass" \
     --env SIGNING_KEY="$ksign" --env GNUPGHOME=/gnupg --env PUBLIC_KEY=/gpg.key \
-    --env RESIGN_CONFIRM="${rconfirm-}" \
-    --volume "$kh:/gnupg" --volume "$kpub:/gpg.key:ro" \
-    --volume "$here:/repo:ro" --volume "$2:/new:ro" \
-    "$builder" sh /repo/resign.sh ${rflags-} /new 2>&1) || rc=$?
+    --env RESIGN_CONFIRM="${rconfirm-}" --env README_FILE=/README.md \
+    --volume "$kh:/gnupg" --volume "$kpub:/gpg.key:ro" --volume "$work/rv-README.md:/README.md:ro" \
+    --volume "$here:/repo:ro" \
+    --volume "$2/release-rpms:/release-rpms:ro" --volume "$2/release-debs:/release-debs:ro" \
+    "$builder" sh /repo/resign.sh ${rflags-} /release-rpms /release-debs 2>&1) || rc=$?
 }
 
 # rv_subkeys <file in /w> <validity letter>: the number of subkeys of a public key file with that validity.
@@ -924,47 +979,48 @@ fi
 runner=resign_run
 rflags=
 rconfirm=
-mkdir -p "$work/rv-missing" "$work/rv-other"
-cp "$pk"/v1/* "$work/rv-missing/"
-rm "$work/rv-missing/hodeishield-0.2.0-1.aarch64.rpm"
+assets "$work/rv-v1" "$pk"/v1/*
+assets "$work/rv-missing" "$pk"/v1/*
+rm "$work/rv-missing/release-rpms/hodeishield-0.2.0-1.aarch64.rpm"
 mkpkgs "$pk/v1-other" hodeishield 0.2.0 "hodeishield 0.2.0 with another payload"
-cp "$pk"/v1/* "$work/rv-other/"
-cp "$pk/v1-other/hodeishield-0.2.0-1.x86_64.rpm" "$work/rv-other/"
-mkdir -p "$work/rv-otherdeb"
-cp "$pk"/v1/* "$work/rv-otherdeb/"
-cp "$pk/v1-other/hodeishield_0.2.0-1_amd64.deb" "$work/rv-otherdeb/"
+assets "$work/rv-other" "$pk"/v1/* "$pk/v1-other/hodeishield-0.2.0-1.x86_64.rpm"
+assets "$work/rv-otherdeb" "$pk"/v1/* "$pk/v1-other/hodeishield_0.2.0-1_amd64.deb"
 
 rvkeys old-sign-new-pub
 must_refuse R4 "resign: the old subkey's signature does not verify against the new key" rt-rv1 \
-  "resign.sh: a signature made with .* does not verify" "$pk/v1"
+  "resign.sh: a signature made with .* does not verify" "$work/rv-v1"
 rvkeys revoked-pub
 must_refuse R5 "resign: the public key still carries the revoked subkey" rt-rv1 \
-  "resign.sh: .* carries a revoked subkey" "$pk/v1"
+  "resign.sh: .* carries a revoked subkey" "$work/rv-v1"
 rvkeys new
 rflags=--apply
-must_refuse R6 "resign: --apply without the confirmation" rt-rv1 "resign.sh: --apply needs RESIGN_CONFIRM" "$pk/v1"
+must_refuse R6 "resign: --apply without the confirmation" rt-rv1 "resign.sh: --apply needs RESIGN_CONFIRM" \
+  "$work/rv-v1"
 rconfirm=$(cat "$work/evil.fpr")
-must_refuse R7 "resign: --apply with another fingerprint" rt-rv1 "resign.sh: --apply needs RESIGN_CONFIRM" "$pk/v1"
+must_refuse R7 "resign: --apply with another fingerprint" rt-rv1 "resign.sh: --apply needs RESIGN_CONFIRM" \
+  "$work/rv-v1"
 rconfirm=$rv_primary
 must_refuse R8 "resign: a package of the bucket is missing from the verified ones" rt-rv1 \
   "publish.sh: the packages in the bucket .* differ" "$work/rv-missing"
 must_refuse R9 "resign: a bucket rpm is not the verified release's package" rt-rv1 \
-  "publish.sh: .* is not the package of the verified release" "$work/rv-other"
+  "publish.sh: rpm/.* in the bucket differs from its release asset beyond the signature" "$work/rv-other"
 must_refuse R10 "resign: a bucket deb differs from the verified one" rt-rv1 \
-  "build.sh: .* is in the bucket but neither in the signed index" "$work/rv-otherdeb"
+  "publish.sh: apt/pool/.* in the bucket differs from its release asset; nothing is signed" "$work/rv-otherdeb"
 
 # More packages in the verified set than in the bucket is refused too: the sets must be identical.
-mkdir -p "$work/rv-extra"
-cp "$pk"/v1/* "$pk"/v2/* "$work/rv-extra/"
+assets "$work/rv-extra" "$pk"/v1/* "$pk"/v2/*
 must_refuse R10b "resign: the verified set holds packages that are not in the bucket" rt-rv1 \
   "publish.sh: the packages in the bucket .* differ" "$work/rv-extra"
+
+# The bucket as the revocation left it, for the refusal cases after the recovery (R17 to R24).
+clone rt-rv1 rt-rv0
 
 # The dry run reads and builds, and uploads nothing.
 rflags=
 rconfirm=
 group "R11 resign dry run"
 before=$(snap rt-rv1)
-resign_run rt-rv1 "$pk/v1"
+resign_run rt-rv1 "$work/rv-v1"
 printf '%s\n' "$out" | tail -n 12
 endgroup
 if [ "$rc" = 0 ] && [ "$before" = "$(snap rt-rv1)" ] &&
@@ -981,7 +1037,7 @@ rflags=--apply
 rconfirm=$rv_primary
 group "R12 resign --apply"
 before=$(snap rt-rv1)
-resign_run rt-rv1 "$pk/v1"
+resign_run rt-rv1 "$work/rv-v1"
 printf '%s\n' "$out" | tail -n 25
 endgroup
 after=$(snap rt-rv1)
@@ -1023,3 +1079,94 @@ client dnf R15 "dnf (rockylinux:9) installs from the recovered repository and up
   ok "$srv/rt-rv1" "$srv/rt-rv3" 0.2.0 0.2.1
 client dnf8 R16 "dnf (rockylinux:8) installs from the recovered repository and upgrades" "installs and upgrades" \
   ok "$srv/rt-rv1" "$srv/rt-rv3" 0.2.0 0.2.1
+
+# --- Recovery: packages that are not the releases', keys that are not the one to publish --------------
+# resign.sh must refuse each of these, before anything is signed, and change nothing; --apply and the
+# right confirmation are given, so only the check under test stops the run. Each case plants something
+# in a copy of the bucket as the revocation left it (rt-rv0). The RPM packages planted there carry the
+# revoked subkey's signature, as whoever held that subkey after a leak could have made them.
+runner=resign_run
+rvkeys new
+rflags=--apply
+rconfirm=$rv_primary
+cp "$pk/v1-other/hodeishield-0.2.0-1.x86_64.rpm" "$work/t/r17.rpm"
+cp "$pk/evil/hodeishield-9.9.9-1.x86_64.rpm" "$work/t/r19.rpm"
+tool sh /w/bin/signrpm.sh /w/gnupg-rv-old "$(cat "$work/rv-old.key")" /w/rv-pub-old.asc \
+  /w/t/r17.rpm /w/t/r19.rpm
+
+clone rt-rv0 rt-rv17
+put rt-rv17 rpm/x86_64/hodeishield-0.2.0-1.x86_64.rpm "$work/t/r17.rpm"
+must_refuse R17 "resign: revoked-subkey rpm of the release's name, other content" rt-rv17 \
+  "publish.sh: rpm/x86_64/.* in the bucket differs from its release asset beyond the signature" "$work/rv-v1"
+
+# The signature header of the published RPM, which gives the release's header digest, followed by the
+# main header and payload of another build of the same version. rpm checks the header digest when it
+# reads a package, so it cannot read this one.
+get rt-rv0 rpm/x86_64/hodeishield-0.2.0-1.x86_64.rpm "$work/t/r18.sig.rpm"
+tool sh /w/bin/splice.sh /w/t/r18.sig.rpm /w/pk/v1-other/hodeishield-0.2.0-1.x86_64.rpm /w/t/r18.rpm
+clone rt-rv0 rt-rv18
+put rt-rv18 rpm/x86_64/hodeishield-0.2.0-1.x86_64.rpm "$work/t/r18.rpm"
+must_refuse R18 "resign: rpm with the release's signature header, other content" rt-rv18 \
+  "publish.sh: cannot read rpm/x86_64/hodeishield-0.2.0-1.x86_64.rpm in the bucket; nothing is signed" \
+  "$work/rv-v1"
+
+clone rt-rv0 rt-rv19
+put rt-rv19 rpm/x86_64/hodeishield-9.9.9-1.x86_64.rpm "$work/t/r19.rpm"
+must_refuse R19 "resign: revoked-subkey rpm of no release" rt-rv19 \
+  "publish.sh: the packages in the bucket \(left\) and the release assets .* differ" "$work/rv-v1"
+
+clone rt-rv0 rt-rv20
+put rt-rv20 "$H/hodeishield_0.2.0-1_amd64.deb" "$pk/v1-other/hodeishield_0.2.0-1_amd64.deb"
+must_refuse R20 "resign: deb of the release's name, other content" rt-rv20 \
+  "publish.sh: apt/pool/.* in the bucket differs from its release asset; nothing is signed" "$work/rv-v1"
+
+# The published InRelease is not read by a recovery: one validly signed by another subkey of the same
+# primary key, listing a Packages hash that is not the published one, changes nothing. The dry run
+# builds and verifies as it does without it, and uploads nothing.
+get rt-rv0 apt/dists/stable/Release "$work/t/rv-Release"
+awk -v h="$(printf 'bogus Packages\n' | sha256sum | cut -d' ' -f1)" '
+  /^[^ ]/ { s = ($0 == "SHA256:") }
+  s && $3 == "main/binary-amd64/Packages" { print " " h " " $2 " " $3; next }
+  { print }' "$work/t/rv-Release" > "$work/t/rv-Release.r21"
+tool sh /w/bin/clearsign.sh /w/gnupg-rv-new "$(cat "$work/rv-new.key")" /w/t/rv-Release.r21 \
+  /w/t/rv-InRelease.r21
+clone rt-rv0 rt-rv21
+put rt-rv21 "$IR" "$work/t/rv-InRelease.r21"
+rflags=
+rconfirm=
+group "R21 resign dry run with an InRelease signed by another subkey of the same primary"
+before=$(snap rt-rv21)
+resign_run rt-rv21 "$work/rv-v1"
+printf '%s\n' "$out" | tail -n 12
+endgroup
+if [ "$rc" = 0 ] && [ "$before" = "$(snap rt-rv21)" ] &&
+  printf '%s\n' "$out" | grep -q '^Dry run: nothing was uploaded' &&
+  printf '%s\n' "$out" | grep -q '^Repository built and verified'; then
+  record "R21 resign ignores an InRelease of another subkey" "dry run builds, uploads nothing" \
+    "built, verified, bucket unchanged" PASS
+else
+  record "R21 resign ignores an InRelease of another subkey" "dry run builds, uploads nothing" "exit $rc" FAIL
+  printf '%s\n' "$out"
+fi
+rflags=--apply
+rconfirm=$rv_primary
+
+clone rt-rv0 rt-rv22
+put rt-rv22 rpm/x86_64/other-1.0-1.x86_64.rpm "$pk/v1/hodeishield-0.2.0-1.x86_64.rpm"
+must_refuse R22 "resign: a file with an unexpected name among the rpm packages" rt-rv22 \
+  "publish.sh: unexpected files in the bucket" "$work/rv-v1"
+
+rvkeys two-pub
+must_refuse R23 "resign: the new public key carries two signing subkeys" rt-rv0 \
+  "resign.sh: .* does not carry exactly one signing subkey" "$work/rv-v1"
+
+# A well-formed key with its own signing subkey, but of another primary key, whose fingerprint the
+# operator confirms: it is not the fingerprint that the README publishes.
+rvkeys other-primary
+rconfirm=$(cat "$work/pub.fpr")
+must_refuse R24 "resign: another primary key, confirmed, that the README does not publish" rt-rv0 \
+  "resign.sh: the primary key of .* is not the one the README publishes" "$work/rv-v1"
+rvkeys new
+runner=publish
+rflags=
+rconfirm=
