@@ -6,6 +6,14 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ## [Unreleased]
 
+### Fixed
+
+- Counts on standard error now use the singular for one item: "1 vendor across 2 client tenants",
+  "1 vendor." after `--all`, and "Skipping 1 inactive client tenant".
+  ([#135](https://github.com/Hodeitek/hodeishield-cli/issues/135))
+- An API error message that already ends with a full stop no longer gets a second one ("The API
+  rejected the request: … ."). ([#136](https://github.com/Hodeitek/hodeishield-cli/issues/136))
+
 ## [0.4.1] - 2026-10-12
 
 ### Fixed

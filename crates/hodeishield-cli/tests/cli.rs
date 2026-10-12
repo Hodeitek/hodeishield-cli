@@ -1037,7 +1037,9 @@ fn all_tenants_skips_inactive_clients_and_says_so() {
         .output()
         .expect("run");
     assert!(output.status.success(), "{output:?}");
-    assert!(String::from_utf8_lossy(&output.stderr).contains("Skipping 1 inactive client tenants"));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("Skipping 1 inactive client tenant (")
+    );
 }
 
 #[test]
@@ -1223,6 +1225,56 @@ fn a_portfolio_credential_without_a_selection_is_told_how_to_select() {
         .expect("run");
     assert_eq!(output.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&output.stderr).contains("--all-tenants"));
+}
+
+#[test]
+fn a_server_message_that_ends_a_sentence_gets_one_full_stop() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    server
+        .mock("GET", "/v1/vendors")
+        .match_query(mockito::Matcher::Any)
+        .with_status(400)
+        .with_body(r#"{"error":{"code":"invalid_request","message":"Bad filter value.","request_id":"r5"}}"#)
+        .create();
+    let output = env
+        .api(&server)
+        .args(["vendors", "list"])
+        .output()
+        .expect("run");
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("The API rejected the request: Bad filter value.\n"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains(".."), "{stderr}");
+}
+
+#[test]
+fn one_item_across_the_clients_is_counted_in_the_singular() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    mock_portfolio(
+        &mut server,
+        &[
+            tenant(ACME, "acme", true, "in_force"),
+            tenant(BETA, "beta", true, "in_force"),
+        ],
+    );
+    mock_vendors(&mut server, ACME, &["Acme Hosting"]);
+    mock_vendors(&mut server, BETA, &[]);
+    let output = env
+        .api(&server)
+        .args(["--all-tenants", "vendors", "list"])
+        .output()
+        .expect("run");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("1 vendor across 2 client tenants."),
+        "{stderr}"
+    );
 }
 
 #[test]
@@ -1689,7 +1741,7 @@ fn an_unknown_licence_status_is_not_read_is_named_and_fails_the_command() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     // "inactive" is said of the inactive tenant only.
     assert!(
-        stderr.contains("Skipping 1 inactive client tenants"),
+        stderr.contains("Skipping 1 inactive client tenant ("),
         "{stderr}"
     );
     assert!(

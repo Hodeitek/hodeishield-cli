@@ -225,7 +225,7 @@ pub fn from_api(error: hodeishield_api::Error, context: &ApiContext<'_>) -> Fail
                 400 => {
                     let failure = Failure::general(format!(
                         "The API rejected the request: {}.",
-                        server_message.unwrap_or_else(|| "invalid request".to_owned())
+                        server_message.as_deref().map_or("invalid request", sentence_body)
                     ));
                     match detail(&api, "code") {
                         Some("TENANT_REQUIRED") => failure.hint(
@@ -253,7 +253,7 @@ pub fn from_api(error: hodeishield_api::Error, context: &ApiContext<'_>) -> Fail
                 ),
                 status => Failure::general(format!(
                     "Unexpected answer from the API: HTTP {status}{}.",
-                    server_message.map_or_else(String::new, |m| format!(": {m}"))
+                    server_message.map_or_else(String::new, |m| format!(": {}", sentence_body(&m)))
                 )),
             };
             failure.request_id = request_id;
@@ -283,6 +283,12 @@ pub fn from_api(error: hodeishield_api::Error, context: &ApiContext<'_>) -> Fail
 }
 
 /// A string member of `error.details`.
+/// The server's message without its closing punctuation, for a sentence the CLI ends itself, so
+/// that "Bad value." does not become "Bad value..".
+fn sentence_body(message: &str) -> &str {
+    message.trim_end().trim_end_matches(['.', '!', '?'])
+}
+
 fn detail<'a>(api: &'a hodeishield_api::ApiError, key: &str) -> Option<&'a str> {
     api.body
         .as_ref()
@@ -349,6 +355,14 @@ mod tests {
                 .closed_stdout()
                 .closed_pipe
         );
+    }
+
+    #[test]
+    fn a_sentence_body_drops_only_the_closing_punctuation() {
+        assert_eq!(sentence_body("Bad value."), "Bad value");
+        assert_eq!(sentence_body("Bad value!  "), "Bad value");
+        assert_eq!(sentence_body("send X-HS-Tenant.."), "send X-HS-Tenant");
+        assert_eq!(sentence_body("version 1.2 is old"), "version 1.2 is old");
     }
 
     #[test]
