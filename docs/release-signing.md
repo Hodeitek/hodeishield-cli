@@ -60,8 +60,14 @@ an RFC 3161 timestamp from `http://timestamp.acs.microsoft.com`.
 - **Account and certificate profile.** The `release-signing` environment variables
   `AZURE_SIGNING_ENDPOINT`, `AZURE_SIGNING_ACCOUNT_NAME` and `AZURE_CERTIFICATE_PROFILE_NAME` name
   them.
-- **Access.** The jobs log in with `azure/login` through OIDC federation: a federated credential
-  trusts only this repository's `release-signing` environment. The environment secrets
+- **Access.** The jobs log in with `azure/login` through OIDC federation. The Azure identity is an
+  app registration that the release signing of another Hodeitek project also uses; each project
+  signs in through a federated credential of its own. The one this repository uses trusts the issuer
+  `https://token.actions.githubusercontent.com` and the subject
+  `repo:Hodeitek@148438328/hodeishield-cli@1392495759:environment:release-signing`: this
+  repository's `release-signing` environment, with the organisation and the repository named by
+  their numeric IDs as well, so a repository created later under the same name does not match. The
+  release runs log this subject in their `azure/login` step. The environment secrets
   `AZURE_CLIENT_ID`, `AZURE_TENANT_ID` and `AZURE_SUBSCRIPTION_ID` are directory identifiers, not
   keys.
 - **Private key.** It is generated and kept in the service's hardware security modules and cannot be
@@ -110,9 +116,23 @@ separately in [#114](https://github.com/Hodeitek/hodeishield-cli/issues/114).
   container image.
 - **Repository settings.** Repository administrators manage the repository variables, the
   environments with their reviewers, secrets and variables, and the ruleset.
-- **Azure.** The signing account, its identity validations and certificate profiles, and the Azure
-  identity that holds the federated credential are managed in the Azure subscription of the account.
-  Revoking a certificate needs the Owner role on that subscription and is done in the Azure portal.
+- **Azure.** The signing account, its identity validations and certificate profiles are managed in
+  the Azure subscription of the account. One account holds the Owner role on that subscription.
+  Revoking a certificate needs that role and is done in the Azure portal. The app registration has
+  no app owners, so its federated credentials can be changed only by holders of the directory roles
+  Global Administrator, Application Administrator and Cloud Application Administrator.
+
+### Known gaps
+
+- **One subscription Owner.** No second account holds the Owner role. If that account is unavailable
+  during an incident, certificates cannot be revoked (step 3 of the next section) until access to it
+  is restored. Action: add a second Owner.
+- **No written recovery route.** How access to the subscription is regained if the Owner account is
+  lost is not written down. Action: write the recovery route and store it where an incident
+  responder can reach it.
+- **Shared app registration.** Deleting the app registration, or changing anything other than this
+  repository's federated credential, also affects the other project's release signing. The steps
+  below change only this repository's federated credential.
 - **Sigstore and SLSA.** No credential exists to hold or change. The identity follows from the
   repository, the workflow file and the tag.
 
@@ -126,8 +146,10 @@ the profile that the release workflow did not sign.
    - Set the repository variable `WINDOWS_SIGNING_ENABLED` to `false`. A release built meanwhile has
      no MSI and an unsigned `hodeishield.exe`: do not publish one before step 4.
    - Reject any pending deployment to `release-signing` and cancel running Release workflow runs.
-   - In Azure, remove the federated credential that trusts the `release-signing` environment, so no
-     workflow run can get a session for the account.
+   - In Azure, remove this repository's federated credential (the subject under
+     [Authenticode](#authenticode-windows)) from the app registration, so no workflow run of this
+     repository can get a session for the account. Leave the app registration and its other
+     credentials in place unless the app itself is compromised.
 2. **Find the window.** The signing account lists every certificate issued for the profile, with its
    serial number, thumbprint, creation and expiry dates and status. Compare them with the
    certificates in the signatures of the published files. The "Verify the Authenticode signature"
@@ -142,9 +164,11 @@ the profile that the release workflow did not sign.
    says.
 4. **Replace.** Create a new certificate profile, after a new identity validation if the old one is
    affected. A new profile has a new profile EKU. The subject comes from the identity validation and
-   stays the same for the same organisation. If the account or the Azure identity is affected, create
-   new ones, with a new federated credential that trusts only the `release-signing` environment, and
-   update the environment's secrets and variables. Then set `WINDOWS_SIGNING_ENABLED` back to `true`.
+   stays the same for the same organisation. If the account is affected, create a new one. If the
+   app registration itself is affected, replace it together with the maintainers of the other
+   project that signs through it. In either case, add a new federated credential that trusts only
+   this repository's `release-signing` environment, and update the environment's secrets and
+   variables. Then set `WINDOWS_SIGNING_ENABLED` back to `true`.
 5. **Sign again, in a new release.** A published file cannot be signed again in place. The
    Authenticode signature is part of the `.exe` and the `.msi`, so a file signed again has a new
    SHA-256: it no longer matches the release's `SHA256SUMS`, its Sigstore signatures or its
