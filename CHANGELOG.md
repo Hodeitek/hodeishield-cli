@@ -15,6 +15,15 @@ commands, `--json` output and exit codes. Each release's notes start with its se
   user information now gives the address of the declaration.
   ([#129](https://github.com/Hodeitek/hodeishield-cli/issues/129))
 
+### Changed
+
+- A release is no longer signed or published while a security advisory is open for its tagged
+  commit: the release workflow checks it with `cargo deny` and `cargo audit` against the RustSec
+  advisory database, and the release notes end with the result. An advisory can only be accepted
+  in `deny.toml` with a written reason and a review date, which CI checks; `CONTRIBUTING.md`
+  ("Known vulnerabilities at release") has the rule.
+  ([#121](https://github.com/Hodeitek/hodeishield-cli/issues/121))
+
 ## [0.4.2] - 2026-10-12
 
 ### Added
