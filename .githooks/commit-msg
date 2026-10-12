@@ -1,5 +1,6 @@
 #!/bin/sh
-# Enable with: git config core.hooksPath .githooks
+# Install a reviewed copy, with check-message.sh next to it (CONTRIBUTING.md):
+#   cp .githooks/commit-msg .githooks/check-message.sh "$(git rev-parse --git-common-dir)/hooks/"
 # Lines starting with '#' are dropped first, as git strips them from the message.
 set -eu
 
