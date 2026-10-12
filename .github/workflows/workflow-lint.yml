@@ -1,0 +1,115 @@
+name: Workflow lint
+
+# Checks the GitHub Actions workflows for mistakes and unsafe patterns:
+#
+# - actionlint: syntax, expressions, job and step references, and shellcheck on every `run:` script.
+# - zizmor: security audits such as actions not pinned by commit, broad token permissions,
+#   credentials persisted by checkout, template injection, dangerous triggers, and (online) pinned
+#   actions with a known vulnerability or a commit that is not in the action's repository. It runs
+#   at its pedantic level, which also asks for concurrency settings and a reason on each permission.
+#   Its results also go to the Security tab.
+#
+# It runs when anything under .github changes, and once a week on main because the online audits
+# depend on advisories published after the workflows last changed.
+#
+# Any finding fails the job. A finding that is accepted instead of fixed is ignored in
+# .github/zizmor.yml with a one-line reason.
+on:
+  pull_request:
+    paths:
+      - ".github/**"
+  push:
+    branches: [dev, main]
+    paths:
+      - ".github/**"
+  schedule:
+    - cron: "37 4 * * 1" # Mondays, 04:37 UTC
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: workflow-lint-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      # Official release, pinned by version and by the SHA-256 in the release's checksums file.
+      # Bumped by hand in the dependency review (CONTRIBUTING.md).
+      ACTIONLINT_VERSION: "1.7.12"
+      ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install actionlint
+        run: |
+          set -euo pipefail
+          archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl --proto '=https' --tlsv1.2 -fsSL -o "$RUNNER_TEMP/$archive" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${archive}"
+          echo "${ACTIONLINT_SHA256}  $RUNNER_TEMP/$archive" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" actionlint
+
+      # Each problem becomes an error annotation, and any problem fails the step. shellcheck comes
+      # with the runner image.
+      - name: Run actionlint
+        env:
+          FORMAT: '{{range $err := .}}::error file={{$err.Filepath}},line={{$err.Line}},col={{$err.Column}},title=actionlint ({{$err.Kind}})::{{replace $err.Message "%" "%25"}}\n{{end}}'
+        run: '"$RUNNER_TEMP/actionlint" -format "$FORMAT"'
+
+  zizmor:
+    name: zizmor
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write # upload the results to code scanning
+    env:
+      # Official release, pinned by version and SHA-256. The release publishes no checksums file:
+      # the SHA-256 is the one GitHub records for the release asset, checked against the release's
+      # build provenance attestation when it was pinned. Bumped by hand in the dependency review
+      # (CONTRIBUTING.md); record the new SHA-256 the same way.
+      ZIZMOR_VERSION: "1.30.1"
+      ZIZMOR_SHA256: e65324f4430c2717591937edcec90ccbefaf14c174f8ec9415e03ca875b46e1a
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install zizmor
+        run: |
+          set -euo pipefail
+          archive="zizmor-x86_64-unknown-linux-gnu.tar.gz"
+          curl --proto '=https' --tlsv1.2 -fsSL -o "$RUNNER_TEMP/$archive" \
+            "https://github.com/zizmorcore/zizmor/releases/download/v${ZIZMOR_VERSION}/${archive}"
+          echo "${ZIZMOR_SHA256}  $RUNNER_TEMP/$archive" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" zizmor
+
+      # Run twice: SARIF for code scanning first, so it is uploaded even when there are findings,
+      # then readable findings in the log, failing the job if there are any. The token is the job's
+      # read-only one, used by the online audits to query the GitHub API.
+      - name: Write the zizmor results for code scanning
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: '"$RUNNER_TEMP/zizmor" --persona pedantic --no-exit-codes --format sarif . > "$RUNNER_TEMP/zizmor.sarif"'
+
+      - name: Upload the results to code scanning
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          sarif_file: ${{ runner.temp }}/zizmor.sarif
+          category: zizmor
+
+      - name: Run zizmor
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: '"$RUNNER_TEMP/zizmor" --persona pedantic .'

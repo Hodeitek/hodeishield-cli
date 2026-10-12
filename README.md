@@ -2,6 +2,9 @@
 
 # HodeiShield CLI
 
+<!-- security-notice:start -->
+<!-- security-notice:end -->
+
 [![Latest release](https://img.shields.io/github/v/release/Hodeitek/hodeishield-cli?sort=semver)](https://github.com/Hodeitek/hodeishield-cli/releases/latest)
 [![CI](https://github.com/Hodeitek/hodeishield-cli/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Hodeitek/hodeishield-cli/actions/workflows/ci.yml?query=branch%3Amain)
 [![License: Apache-2.0](https://img.shields.io/github/license/Hodeitek/hodeishield-cli)](LICENSE)
@@ -10,6 +13,8 @@
 The official command-line client for [HodeiShield](https://hodeishield.com), by
 [Hodeitek](https://hodeitek.com). HodeiShield covers third-party risk, supply-chain security and
 compliance (NIS2, DORA, ISO 27001, ENS).
+
+Security policy, how to report a vulnerability and where advisories appear: [SECURITY.md](SECURITY.md).
 
 ## Quick start
 
@@ -49,15 +54,16 @@ section), and put `hodeishield` (`hodeishield.exe` on Windows) somewhere on your
 | Linux arm64 | `hodeishield-<version>-aarch64-unknown-linux-musl.tar.gz` |
 | macOS (Apple silicon and Intel) | `hodeishield-<version>-universal-apple-darwin.tar.gz` |
 | Windows x86_64 | `hodeishield-<version>-x86_64-pc-windows-msvc.zip` |
+| Windows arm64 | `hodeishield-<version>-aarch64-pc-windows-msvc.zip` (from 0.4.0) |
 
-`<version>` has no leading `v`: release `v0.3.0` ships `hodeishield-0.3.0-…`. The Linux binaries are
-statically linked and run on any distribution. Homebrew and Scoop packages are also available
-(next section).
+`<version>` has no leading `v`: release `v0.4.2` ships `hodeishield-0.4.2-…`. The Linux binaries are
+statically linked and run on any distribution. Homebrew and Scoop packages (next section) and a
+[container image](#container-image) are also available.
 
 From source, with the Rust toolchain installed (pin the release tag you want):
 
 ```sh
-cargo install --locked --git https://github.com/Hodeitek/hodeishield-cli --tag v0.3.0 hodeishield-cli
+cargo install --locked --git https://github.com/Hodeitek/hodeishield-cli --tag v0.4.2 hodeishield-cli
 ```
 
 ### Homebrew and Scoop
@@ -78,14 +84,16 @@ from a normal shell, is the recommended way and needs no administrator rights.
 The [Homebrew tap](https://github.com/Hodeitek/homebrew-hodeishield) and the
 [Scoop bucket](https://github.com/Hodeitek/scoop-hodeishield) are updated from each release's own
 files and `SHA256SUMS` when it is published, and both check those hashes when installing. Homebrew
-also installs the man pages and shell completions. A winget package has been submitted and is
-waiting for review by the winget community repository; it is not available yet.
+also installs the man pages and shell completions. Scoop picks the arm64 build on Windows on Arm
+automatically. A winget package has been submitted and is waiting for review by the winget community
+repository; it is not available yet.
 
 ### Debian, Ubuntu, Fedora, RHEL and other Linux distributions
 
 Signed APT and DNF repositories at `packages.hodeishield.com` provide `.deb` and `.rpm` packages for
 x86_64 and arm64, and your system's normal upgrades keep the CLI current. The packages install
-`/usr/bin/hodeishield`, the man pages and the bash, zsh and fish completions.
+`/usr/bin/hodeishield`, the man pages and the bash, zsh and fish completions, and from 0.4.2 the
+[user information](docs/user-information.md) in `/usr/share/doc/hodeishield/USER-INFORMATION.md`.
 
 The repositories are signed with this key (RSA 4096); check its fingerprint before trusting it:
 
@@ -225,20 +233,24 @@ less install.sh
 sh install.sh --version $v
 ```
 
-It needs `cosign` to check the archive's signature and stops if it is missing; `--no-verify` skips
-that check (the checksum still runs). `sh install.sh --help` lists the options (`--dir`, `--no-man`).
+It needs `cosign` v3, or v2.4 or newer, to check the archive's signature, and stops if it is missing
+or older; `--no-verify` skips that check (the checksum still runs). To check `install.sh` itself with
+cosign v2 as above, add `--new-bundle-format` to `cosign verify-blob`. `sh install.sh --help` lists
+the options (`--dir`, `--no-man`).
 
 ### Container image
 
-From the first release after 0.3.0, each stable release also publishes a multi-architecture
-(`linux/amd64`, `linux/arm64`) image at `ghcr.io/hodeitek/hodeishield-cli`, for CI jobs and container
-pipelines. It holds only the release's own `hodeishield` binary on a
+From 0.4.0, each stable release also publishes a multi-architecture (`linux/amd64`, `linux/arm64`)
+image at `ghcr.io/hodeitek/hodeishield-cli`, for CI jobs and container pipelines. It holds only the
+release's own `hodeishield` binary on a
 [distroless](https://github.com/GoogleContainerTools/distroless) static base (no shell, no package
 manager, CA certificates included) and runs as a non-root user. There is no `latest` tag: use the
-exact version, or better its digest.
+exact version, or better its digest. The image carries no documentation: the
+[user information](docs/user-information.md) for a version is in that release's tag, and, from
+0.4.2, as `USER-INFORMATION.md` in its archives.
 
 ```sh
-v=0.4.0   # the version you want
+v=0.4.2   # the version you want
 docker pull ghcr.io/hodeitek/hodeishield-cli:$v
 docker run --rm -e HODEISHIELD_API_KEY ghcr.io/hodeitek/hodeishield-cli:$v vendors list
 ```
@@ -251,7 +263,7 @@ The image is signed by digest with cosign (keyless) and carries the release's Cy
 signed attestation. Verify both before you rely on the image:
 
 ```sh
-v=0.4.0
+v=0.4.2
 image=ghcr.io/hodeitek/hodeishield-cli:$v
 cosign verify $image \
   --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/container-image.yml@refs/tags/v$v \
@@ -289,9 +301,9 @@ Each release has a `SHA256SUMS` file, a Sigstore bundle (`*.sigstore.json`) for 
 ```sh
 sha256sum --ignore-missing -c SHA256SUMS
 
-cosign verify-blob hodeishield-0.3.0-x86_64-unknown-linux-musl.tar.gz \
-  --bundle hodeishield-0.3.0-x86_64-unknown-linux-musl.tar.gz.sigstore.json \
-  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.3.0 \
+cosign verify-blob hodeishield-0.4.2-x86_64-unknown-linux-musl.tar.gz \
+  --bundle hodeishield-0.4.2-x86_64-unknown-linux-musl.tar.gz.sigstore.json \
+  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.4.2 \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --certificate-github-workflow-trigger push
 ```
@@ -319,7 +331,7 @@ xattr -d com.apple.quarantine ./hodeishield   # "No such xattr" means there was 
 Or download with `curl`, which does not set that attribute in the first place:
 
 ```sh
-curl -LO https://github.com/Hodeitek/hodeishield-cli/releases/download/v0.3.0/hodeishield-0.3.0-universal-apple-darwin.tar.gz
+curl -LO https://github.com/Hodeitek/hodeishield-cli/releases/download/v0.4.2/hodeishield-0.4.2-universal-apple-darwin.tar.gz
 ```
 
 **Windows, before 0.2.0.** Unblock the archive before unpacking it, so the executable does not
@@ -330,10 +342,12 @@ Unblock-File .\hodeishield-0.1.1-x86_64-pc-windows-msvc.zip
 Expand-Archive .\hodeishield-0.1.1-x86_64-pc-windows-msvc.zip
 ```
 
-If you already unpacked it, run `Unblock-File` on `hodeishield.exe` instead. SmartScreen can also
-warn about a signed file that is still new to it; in either case, if it shows "Windows protected
-your PC", choose **More info → Run anyway** («Más información → Ejecutar de todos modos» on a
-Spanish system).
+If you already unpacked it, run `Unblock-File` on `hodeishield.exe` instead. Windows PowerShell
+5.1's `Expand-Archive` does not copy the download mark to the unpacked files, so unblocking matters
+when you unpack with File Explorer's "Extract All" or another tool that carries the mark over.
+SmartScreen can also warn about a signed file that is still new to it; in either case, if it shows
+"Windows protected your PC", choose **More info → Run anyway** («Más información → Ejecutar de todos
+modos» on a Spanish system).
 
 ## Authenticate
 
@@ -361,7 +375,7 @@ hodeishield logout           # revokes the token at the app and removes it from 
 
 You sign in to [app.hodeishield.com](https://app.hodeishield.com) as usual (2FA, passkey or SSO), and
 on the consent screen you choose **the one tenant** the CLI may read. A sign-in token never covers
-more than that tenant, and it only reads. To use another tenant, define another profile and sign in
+more than that tenant, and it only reads. To use an unrelated tenant, define another profile and sign in
 to it:
 
 ```sh
@@ -373,6 +387,9 @@ A profile that has not been defined is refused (`Profile ... is not defined`).
 
 `login` first checks that the system keychain is available and stops before opening the browser or
 showing a code if it is not; use a tenant API key on such a machine.
+
+An MSSP reads its clients with one credential instead: see
+[Several tenants (MSSP)](#several-tenants-mssp).
 
 With `--device`, open the address the CLI prints on any device and **type the code by hand**: the app
 does not accept a link with the code filled in, on purpose.
@@ -419,6 +436,103 @@ rest. `--all` stops with an error past 100,000 items (or 1,000 pages); narrow th
 or walk it with `--page`. Every list takes `--sort` and `--order`; `--help` on any command lists
 what it accepts.
 
+### Several tenants (MSSP)
+
+An MSSP reads all of its client tenants with **one** credential: a **portfolio key**, created in the
+app by an organisation administrator of an active MSSP organisation, in the MSSP area (API keys).
+Nobody else can create one: not a tenant administrator, and not a platform operator acting outside
+an MSSP organisation. You do not need
+a profile, a key or a sign-in per client, and you should not set them up that way.
+
+A portfolio key reads only, always expires (90 days by default, 365 at most), and works on the
+HodeiShield API only. It can be limited when it is created to some of your clients and to source IP
+ranges; a request from another address is refused like an unknown key (exit code 3). Signing in
+with `hodeishield login` does not cover a whole portfolio: use the key. Rotate your portfolio keys
+before they expire, so scripts do not stop working; a new key and its predecessor both work for up
+to 7 days while the old one is in force.
+
+**1. Use the credential as any other key.**
+
+```sh
+export HODEISHIELD_API_KEY=hsp_3f2a9c0d1b4e_...   # the portfolio key; keep it in your CI's secret store
+```
+
+The key starts with `hsp_`, a 12-character identifier and `_`, then a long secret. The first 16
+characters identify the key in the app and in audit entries; the CLI never prints any part of the
+key. The same variable takes a tenant API key as before.
+
+**2. List the client tenants it may read.**
+
+```console
+$ hodeishield tenants list
+SLUG    NAME        ORGANISATION  TYPE    STATUS  LICENCE   ID
+acme    Acme S.L.   Acme Group    client  active  in_force  11111111-1111-4111-8111-111111111111
+beta    Beta Corp   Beta Group    client  active  grace     22222222-2222-4222-8222-222222222222
+```
+
+It takes `--json`, `--csv`, `--page` and `--all` like any list, sorted by name. It includes your
+own organisation's tenants (`TYPE` `own` for the internal one) and clients that are inactive or have
+no licence in force, which the `STATUS` and `LICENCE` columns tell apart. A key that was limited to
+some tenants when it was created lists and reads only those. The list is read from the API each
+time: a client added to or removed from your portfolio shows up on the next command.
+
+**3. Select the client a read command reads.** The selection goes with the command and is never
+remembered, so a later command cannot read another client by surprise.
+
+```sh
+hodeishield --tenant acme vendors list            # one client, by slug or id
+hodeishield --all-tenants alerts list --status open
+```
+
+- `--tenant <slug|id>` works on every read command (`list`, `get`, `compliance posture`). The CLI
+  prints `Client tenant: acme (<id>)` on standard error, so a log shows which client was read;
+  standard output is exactly what it is without a selection.
+- `--all-tenants` works on `list` commands and `compliance controls`. It fetches every page of each
+  client (`--per-page` applies, `--page` does not) and adds the tenant to each row: a `TENANT`
+  column in the table, and `tenant_id`, `tenant_slug` and `tenant_name` fields in `--json` and
+  `--csv`. Clients that are inactive, or whose licence status is `inactive`, are skipped with a
+  note on standard error. A client in its grace period is read. A client whose licence status this
+  CLI does not know is not read either; it is named on standard error (`licence status … is not
+  known to this version; not read`) and the command exits non-zero, so nothing goes missing
+  silently. Clients are asked one after the other. In the table, a slug with characters other
+  than `a-z`, `0-9` and `-` is followed by the start of the client's id, so look-alike names can be
+  told apart; `--json` and `--csv` carry the full values.
+- The tenant on a row is the one whose own request returned it. The CLI asks the API about one
+  client at a time, and refuses an answer that does not confirm that client.
+
+```sh
+hodeishield --all-tenants alerts list --status open --json \
+  | jq -r '.[] | [.tenant_slug, .severity, .title] | @tsv'
+hodeishield --all-tenants vendors list --criticality critical --csv > critical-vendors.csv
+```
+
+**4. When something is not readable.**
+
+- A client that is not in your portfolio (or that you mistyped) fails with `No client tenant … in
+  this credential's portfolio.` and exit code 5, before anything is read.
+- With `--all-tenants`, a client that cannot be read on its own account (for example its licence is
+  not in force, exit code 8) is reported on standard error and skipped; the command prints the
+  others and still exits non-zero, so a script does not mistake a partial result for a complete
+  one. This is the only signal of a partial result: check the exit code, and read standard error
+  for which clients were left out. A client named by both an id and a slug of another client
+  (a slug can look like an id) is refused as ambiguous; use the id shown by `tenants list`.
+- Without `--tenant` or `--all-tenants`, a portfolio key is refused by the API, and the CLI tells
+  you to choose. A single-tenant key or sign-in behaves exactly as before; asking it for a client
+  fails with exit code 4 (it lacks the portfolio scope).
+- A client you named that is deactivated, or whose licence is not in force, fails with exit code 8.
+- A portfolio key is limited to 100 requests per minute, and all the portfolio keys of your
+  organisation together to 600 (the API may change these numbers); a client tenant's own limits
+  can be lower. The CLI waits out a short `Retry-After` and retries; if the wait is longer, or the
+  limit is still exhausted, the command stops with exit code 6 and says which limit it hit
+  (`portfolio_key`, `portfolio_org`, `portfolio_tenant` or `tenant`), instead of asking the next
+  client. Use `--per-page 200` and narrow with filters to need fewer requests.
+- Against an API that does not offer portfolio access yet, `tenants list`, `--tenant` and
+  `--all-tenants` fail with `This API does not offer portfolio access yet.` and exit code 7. Nothing
+  else changes.
+
+**5. Revoke access.** Revoke the portfolio key in the app, in the MSSP area; it stops working on its
+next request. A client leaving your portfolio is dropped from the list on the next command.
+
 ### JSON for scripts
 
 `--json` prints the body the API returned, unchanged, including fields newer than your CLI. With
@@ -458,7 +572,7 @@ hodeishield vendors list --all --csv > vendors.csv
 | 4 | The credential lacks the scope the command needs |
 | 5 | Not found (or not in your organisation) |
 | 6 | Rate limit exhausted (the CLI already retried short waits) |
-| 7 | The API could not be reached or failed |
+| 7 | The API could not be reached or failed, or does not offer portfolio access yet |
 | 8 | The tenant's licence is not in force: a tenant administrator must renew or reactivate it |
 
 Errors go to stderr with a hint and, when the API gave one, a **request id**: quote it when you
@@ -601,7 +715,15 @@ TLS-inspecting proxy; macOS and Windows have not been verified yet.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md). To report a vulnerability,
 use [GitHub private reporting](https://github.com/Hodeitek/hodeishield-cli/security/advisories/new)
-or email [security@hodeitek.com](mailto:security@hodeitek.com), never a public issue.
+or email [security@hodeitek.com](mailto:security@hodeitek.com), never a public issue. Security
+advisories are published under
+[Security → Advisories](https://github.com/Hodeitek/hodeishield-cli/security/advisories).
+
+From 1.0.0, each major version is supported with security fixes for five years; during 0.x, fixes go
+into the latest 0.x release ([Supported versions](SECURITY.md#supported-versions)).
+[docs/user-information.md](docs/user-information.md) gathers the manufacturer's contact details, the
+support period, secure use, how to update and remove the CLI, and where the SBOM is published.
+Releases from 0.4.2 ship a copy as `USER-INFORMATION.md` in their archives and packages.
 
 ## License
 

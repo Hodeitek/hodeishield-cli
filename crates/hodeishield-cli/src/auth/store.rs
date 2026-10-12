@@ -16,6 +16,23 @@ const SERVICE: &str = "hodeishield-cli";
 /// Start of the message when there is no keychain to use.
 pub const KEYCHAIN_UNAVAILABLE: &str = "the system keychain is not available";
 
+/// The message when the profile's entry exists but cannot be decoded.
+const UNREADABLE: &str = "the sign-in stored in the system keychain is unreadable";
+
+/// Decodes a stored entry. An entry that cannot be decoded fails with a message that
+/// [`is_unreadable`] recognises, so `logout` can still remove it.
+fn decode(text: &str) -> Result<StoredToken> {
+    let payload: Payload = serde_json::from_str(text).map_err(|_| {
+        Failure::general(UNREADABLE).hint("Run `hodeishield logout` and sign in again.")
+    })?;
+    Ok(StoredToken::from_payload(payload))
+}
+
+/// Whether `failure` is a profile's entry that exists but cannot be decoded.
+pub fn is_unreadable(failure: &Failure) -> bool {
+    failure.message == UNREADABLE
+}
+
 /// A signed-in session for one profile.
 #[derive(Debug, Clone)]
 pub struct StoredToken {
@@ -180,13 +197,7 @@ impl TokenStore for Keychain {
     fn load(&self, profile: &str) -> Result<Option<StoredToken>> {
         let entry = entry(profile)?;
         match entry.get_password() {
-            Ok(text) => {
-                let payload: Payload = serde_json::from_str(&text).map_err(|_| {
-                    Failure::general("the sign-in stored in the system keychain is unreadable")
-                        .hint("Run `hodeishield logout` and sign in again.")
-                })?;
-                Ok(Some(StoredToken::from_payload(payload)))
-            }
+            Ok(text) => decode(&text).map(Some),
             Err(keyring_core::Error::NoEntry) => Ok(None),
             Err(e) => Err(read_failure(e)),
         }
@@ -234,12 +245,22 @@ impl TokenStore for Keychain {
 pub struct MemoryStore(std::sync::Mutex<std::collections::BTreeMap<String, String>>);
 
 #[cfg(test)]
+impl MemoryStore {
+    /// Stores `text` as the profile's entry as it is, like a keychain entry written by something
+    /// else.
+    pub fn put_raw(&self, profile: &str, text: &str) {
+        self.0
+            .lock()
+            .expect("not poisoned")
+            .insert(profile.to_owned(), text.to_owned());
+    }
+}
+
+#[cfg(test)]
 impl TokenStore for MemoryStore {
     fn load(&self, profile: &str) -> Result<Option<StoredToken>> {
         let map = self.0.lock().map_err(|_| Failure::general("poisoned"))?;
-        Ok(map.get(profile).map(|text| {
-            StoredToken::from_payload(serde_json::from_str(text).expect("valid payload"))
-        }))
+        map.get(profile).map(|text| decode(text)).transpose()
     }
 
     fn save(&self, profile: &str, token: &StoredToken) -> Result<()> {
@@ -328,5 +349,19 @@ mod tests {
         assert!(store.load("p").expect("load").is_some());
         assert!(store.delete("p").expect("delete"));
         assert!(!store.delete("p").expect("delete again"));
+    }
+
+    #[test]
+    fn an_entry_that_cannot_be_decoded_is_recognised_as_unreadable() {
+        let store = MemoryStore::default();
+        store.put_raw("p", "not a sign-in");
+        let err = store.load("p").expect_err("unreadable");
+        assert!(is_unreadable(&err));
+        assert_eq!(
+            err.hint.as_deref(),
+            Some("Run `hodeishield logout` and sign in again.")
+        );
+        assert!(!is_unreadable(&unavailable("no session")));
+        assert!(!is_unreadable(&Failure::general("anything else")));
     }
 }

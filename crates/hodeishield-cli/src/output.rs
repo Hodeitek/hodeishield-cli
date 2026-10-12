@@ -10,6 +10,47 @@ use comfy_table::{ContentArrangement, Table, presets};
 use serde_json::Value;
 use std::io::Write;
 
+/// Standard output (or any writer) that remembers whether a write or flush failed with
+/// [`std::io::ErrorKind::BrokenPipe`], so the caller can tell "the reader of standard output went
+/// away" from a broken pipe anywhere else (a socket, a file), which must stay a failure.
+pub struct Tracked<W> {
+    inner: W,
+    closed: bool,
+}
+
+impl<W> Tracked<W> {
+    pub fn new(inner: W) -> Self {
+        Self {
+            inner,
+            closed: false,
+        }
+    }
+
+    /// Whether a write or flush hit a closed pipe.
+    pub fn closed(&self) -> bool {
+        self.closed
+    }
+
+    fn note<T>(&mut self, result: std::io::Result<T>) -> std::io::Result<T> {
+        if let Err(e) = &result {
+            self.closed |= e.kind() == std::io::ErrorKind::BrokenPipe;
+        }
+        result
+    }
+}
+
+impl<W: Write> Write for Tracked<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let result = self.inner.write(buf);
+        self.note(result)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        let result = self.inner.flush();
+        self.note(result)
+    }
+}
+
 /// Replaces control characters (escape sequences, carriage returns, …) with `�`.
 pub fn clean(text: &str) -> String {
     text.chars()
@@ -79,6 +120,68 @@ pub fn short_time(value: Option<&str>) -> String {
     } else {
         clean(value)
     }
+}
+
+/// A table's header and rows, before they are laid out: what a command knows how to say about its
+/// items. [`tenant_table`] adds the client column when a list spans tenants.
+#[derive(Debug)]
+pub struct Rows {
+    pub headers: &'static [&'static str],
+    pub rows: Vec<Vec<String>>,
+}
+
+impl Rows {
+    pub fn new(headers: &'static [&'static str], rows: Vec<Vec<String>>) -> Self {
+        Self { headers, rows }
+    }
+
+    pub fn into_table(self) -> Table {
+        table(self.headers, self.rows)
+    }
+}
+
+/// `n` followed by `noun`, a plural ending in "s" ("vendors", "evidence items"), in the singular
+/// when `n` is 1: "1 vendor", "2 vendors".
+pub fn count(n: usize, noun: &str) -> String {
+    if n == 1 {
+        format!("1 {}", noun.strip_suffix('s').unwrap_or(noun))
+    } else {
+        format!("{n} {noun}")
+    }
+}
+
+/// What leads a row of a multi-tenant table. A slug made only of `[a-z0-9-]` is shown as it is. Any
+/// other slug (it may hold look-alike letters, so that two tenants would read the same) is shown
+/// with the start of the tenant's id, which differs. `--json` and `--csv` carry the full values.
+pub fn tenant_label(slug: &str, id: &str) -> String {
+    let plain = !slug.is_empty()
+        && slug
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+    if plain {
+        slug.to_owned()
+    } else {
+        let short: String = id.chars().take(8).collect();
+        format!("{} [{}]", clean(slug), clean(&short))
+    }
+}
+
+/// Rows of several client tenants in one table, each led by the tenant's slug (see
+/// [`tenant_label`]). The text is the server's, so it is sanitised like every other cell.
+pub fn tenant_table(headers: &[&str], groups: Vec<(String, String, Vec<Vec<String>>)>) -> Table {
+    let mut all = vec!["TENANT"];
+    all.extend_from_slice(headers);
+    let rows = groups
+        .into_iter()
+        .flat_map(|(slug, id, rows)| {
+            let label = tenant_label(&slug, &id);
+            rows.into_iter().map(move |mut row| {
+                row.insert(0, label.clone());
+                row
+            })
+        })
+        .collect();
+    table(&all, rows)
 }
 
 pub fn table(headers: &[&str], rows: Vec<Vec<String>>) -> Table {
@@ -272,6 +375,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_count_of_one_takes_the_singular() {
+        assert_eq!(count(0, "vendors"), "0 vendors");
+        assert_eq!(count(1, "vendors"), "1 vendor");
+        assert_eq!(count(2, "vendors"), "2 vendors");
+        assert_eq!(count(1, "evidence items"), "1 evidence item");
+        assert_eq!(count(1, "client tenants"), "1 client tenant");
+    }
+
+    #[test]
     fn control_characters_never_reach_the_terminal() {
         assert_eq!(
             clean("ok\u{1b}[31mred\r\n"),
@@ -374,6 +486,51 @@ mod tests {
             text,
             "id             x\ncontrol_codes  A.1, A.2\nby_status      ok=2\nnone           -\n"
         );
+    }
+
+    #[test]
+    fn a_tenant_column_leads_each_row_and_is_sanitised() {
+        let t = tenant_table(
+            &["ID"],
+            vec![
+                (
+                    "acme".to_owned(),
+                    "11111111-0000".to_owned(),
+                    vec![vec!["1".into()]],
+                ),
+                (
+                    "ev\u{1b}il".to_owned(),
+                    "22222222-0000".to_owned(),
+                    vec![vec!["2".into()], vec!["3".into()]],
+                ),
+            ],
+        );
+        let mut out = Vec::new();
+        print_table(&mut out, &t).expect("print");
+        let text = String::from_utf8(out).expect("utf8");
+        let lines: Vec<&str> = text.lines().collect();
+        assert!(
+            lines[0].starts_with("TENANT") && lines[0].ends_with("ID"),
+            "{text}"
+        );
+        assert!(
+            lines[1].starts_with("acme") && lines[1].ends_with('1'),
+            "{text}"
+        );
+        assert!(lines[2].starts_with("ev\u{fffd}il [22222222]"), "{text:?}");
+        assert!(!text.contains('\u{1b}'));
+    }
+
+    #[test]
+    fn only_plain_slugs_stand_alone_in_the_tenant_column() {
+        let id = "0b8f2a52-6a0e-4d5c-9d3e-1f2a3b4c5d6e";
+        assert_eq!(tenant_label("acme-2", id), "acme-2");
+        // Cyrillic "а" (U+0430) looks like Latin "a"; the id tells the tenants apart.
+        assert_eq!(tenant_label("\u{430}cme", id), "\u{430}cme [0b8f2a52]");
+        assert_eq!(tenant_label("Acme", id), "Acme [0b8f2a52]");
+        assert_eq!(tenant_label("ac me", id), "ac me [0b8f2a52]");
+        assert_eq!(tenant_label("", id), " [0b8f2a52]");
+        assert_ne!(tenant_label("acme", id), tenant_label("\u{430}cme", id));
     }
 
     #[test]
