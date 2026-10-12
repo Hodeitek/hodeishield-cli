@@ -176,3 +176,6 @@ them to the right team.
   ([#114](https://github.com/Hodeitek/hodeishield-cli/issues/114)). See
   [docs/verifying-releases.md](docs/verifying-releases.md) and
   [docs/release-signing.md](docs/release-signing.md).
+
+The risks these guarantees address, and how each security requirement of the Cyber Resilience Act is
+met, are in [docs/risk-assessment.md](docs/risk-assessment.md).

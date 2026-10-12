@@ -62,7 +62,8 @@ key.
 
 What the CLI guarantees (read only, credentials never written to disk in clear text, printed or
 logged, HTTPS only, no redirects followed, signed releases) is in
-[SECURITY.md](../SECURITY.md#what-the-cli-guarantees). To use it securely:
+[SECURITY.md](../SECURITY.md#what-the-cli-guarantees), and the risk assessment behind them is in
+[risk-assessment.md](risk-assessment.md). To use it securely:
 
 - **Verify every download** before you run it: [Verify a download](../README.md#verify-a-download)
   and [docs/verifying-releases.md](verifying-releases.md). For the container image, verify it and
