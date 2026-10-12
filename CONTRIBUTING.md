@@ -132,6 +132,10 @@ implementation plugged into one. **Depth** is the behaviour available per unit o
 
 ## Releases and package managers
 
+A release starts with a signed `vX.Y.Z` tag on `main`. Release tags are protected: only members of
+the organisation's release team can create, move or delete a `v*` tag, and the tag runs the
+`release.yml` of the commit it points to ([docs/release-signing.md](docs/release-signing.md)).
+
 Publishing a release (not the draft) starts the **Package managers** workflow. It verifies the
 release's `SHA256SUMS` with cosign and writes the Homebrew formula, the Scoop manifest and the
 winget manifests from it. After the `packaging` environment's reviewer approves, it commits the

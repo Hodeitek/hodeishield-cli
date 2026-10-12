@@ -99,8 +99,8 @@ separately in [#114](https://github.com/Hodeitek/hodeishield-cli/issues/114).
 - **The release workflow.** `release.yml` changes through pull requests
   ([CONTRIBUTING.md](../CONTRIBUTING.md#pull-requests)). `main` accepts changes only through a pull
   request with passing checks and signed commits, for administrators too.
-- **Release tags.** The `release tags` ruleset protects `v*` tags: only repository administrators can
-  create, move or delete one. A tag runs the `release.yml` of the commit it points to, so this
+- **Release tags.** The `release tags` ruleset protects `v*` tags: only members of the
+  organisation's release team can create, move or delete one. A tag runs the `release.yml` of the commit it points to, so this
   ruleset is what guards the Sigstore identity. In the current `release.yml`, the Sigstore signing
   runs after the Windows signing jobs, which wait for an approval, but needs no approval of its own:
   a `release.yml` changed at a tag could sign without one.
@@ -193,7 +193,8 @@ advisory, which names the tags not to trust.
 
    - Reject any pending deployment to `release-signing` and `packaging`, and cancel running runs.
    - Revoke the leaked token, or remove the compromised account's access. Review who has the
-     administrator role: they can create `v*` tags and change the protections.
+     administrator role or is in the release team: they can create `v*` tags, and administrators can
+     change the protections.
    - If a rogue run may have reached `release-signing`, follow the Windows section as well.
 2. **Find what is affected.** List the `v*` tags and the releases, drafts included
    (`gh release list`), the Release workflow runs with the event and the user that started them, and
