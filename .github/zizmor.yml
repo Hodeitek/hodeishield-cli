@@ -1,0 +1,6 @@
+rules:
+  unpinned-uses:
+    config:
+      policies:
+        # SLSA's generator must be called by tag, not commit: its own checks read the calling ref.
+        slsa-framework/slsa-github-generator/*: ref-pin
