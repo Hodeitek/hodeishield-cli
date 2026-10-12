@@ -25,6 +25,11 @@ Every release of `hodeishield-cli` publishes, for each platform archive:
   [`slsa-framework/slsa-github-generator`](https://github.com/slsa-framework/slsa-github-generator)
   generic generator.
 
+After 0.4.1, every archive, `.deb`, `.rpm` and MSI also contains `USER-INFORMATION.md`, the
+[user information](user-information.md) for that release, so verifying the download verifies it
+too. The `.deb` and `.rpm` install it in `/usr/share/doc/hodeishield/`, the MSI next to
+`hodeishield.exe`.
+
 The steps below use `v0.4.1` and `hodeishield-0.4.1-x86_64-unknown-linux-musl.tar.gz`
 as examples — substitute the actual version and archive you downloaded.
 

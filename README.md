@@ -91,6 +91,8 @@ repository; it is not available yet.
 ### Debian, Ubuntu, Fedora, RHEL and other Linux distributions
 
 From 0.3.0, each release also publishes `.deb` and `.rpm` packages for x86_64 and arm64. They install `/usr/bin/hodeishield`, the man pages and the bash, zsh and fish completions.
+After 0.4.1 they also install the [user information](docs/user-information.md) in
+`/usr/share/doc/hodeishield/USER-INFORMATION.md`.
 Verify the package as in the next section (it has its own `.sigstore.json` and is listed in
 `SHA256SUMS`), then:
 
@@ -166,7 +168,9 @@ image at `ghcr.io/hodeitek/hodeishield-cli`, for CI jobs and container pipelines
 release's own `hodeishield` binary on a
 [distroless](https://github.com/GoogleContainerTools/distroless) static base (no shell, no package
 manager, CA certificates included) and runs as a non-root user. There is no `latest` tag: use the
-exact version, or better its digest.
+exact version, or better its digest. The image carries no documentation: the
+[user information](docs/user-information.md) for a version is in that release's tag, and, after
+0.4.1, as `USER-INFORMATION.md` in its archives.
 
 ```sh
 v=0.4.1   # the version you want
@@ -642,6 +646,7 @@ From 1.0.0, each major version is supported with security fixes for five years; 
 into the latest 0.x release ([Supported versions](SECURITY.md#supported-versions)).
 [docs/user-information.md](docs/user-information.md) gathers the manufacturer's contact details, the
 support period, secure use, how to update and remove the CLI, and where the SBOM is published.
+Releases after 0.4.1 ship a copy as `USER-INFORMATION.md` in their archives and packages.
 
 ## License
 

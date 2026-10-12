@@ -92,6 +92,7 @@ class Hodeishield < Formula
   def install
     bin.install "hodeishield"
     man1.install Dir["man/*.1"]
+    doc.install "USER-INFORMATION.md"
     generate_completions_from_executable(bin/"hodeishield", "completions")
   end
 
