@@ -20,8 +20,8 @@
 # Every case has an expected outcome, and the run fails if any case ends otherwise:
 #   - publishing a valid release must work (into an empty bucket, on top, again, and a third time);
 #   - the builder must refuse a bucket that holds anything the signed index does not vouch for, an
-#     index that is not the signed one, or a release that is not the hodeishield package, and then
-#     leave the bucket exactly as it was;
+#     index that is not the signed one, a /gpg.key that is not the repository key, or a release that
+#     is not the hodeishield package, and then leave the bucket exactly as it was;
 #   - the clients must refuse a tampered index, a corrupt package and a package that is not signed
 #     with the repository key, and must install and upgrade from the untampered repository.
 
@@ -242,10 +242,14 @@ cat > "$work/bin/dnf-client.sh" << 'EOF'
 set -uf
 dnfq="dnf -y --disablerepo=* --enablerepo=hodeishield"
 repo=/etc/yum.repos.d/hodeishield.repo
+key=/etc/pki/rpm-gpg/RPM-GPG-KEY-hodeishield
+# As the README sets DNF up: the key is downloaded to a local file (the user checks its fingerprint
+# against the README) and the .repo file is written by hand, never fetched from the repository.
 setup() {
-  curl -fsS "$1/rpm/hodeishield.repo" -o "$repo" || { echo "SETUP: cannot fetch the .repo file"; exit 90; }
-  sed -i "s#https://packages.hodeishield.com#$1#g" "$repo"
-  grep -qx 'gpgcheck=1' "$repo" && grep -qx 'repo_gpgcheck=1' "$repo" || { echo "SETUP: signature checks are off"; exit 90; }
+  mkdir -p /etc/pki/rpm-gpg
+  curl -fsS "$1/gpg.key" -o "$key" || { echo "SETUP: cannot fetch the key"; exit 90; }
+  printf '%s\n' '[hodeishield]' 'name=HodeiShield CLI' "baseurl=$1/rpm/\$basearch" 'enabled=1' 'gpgcheck=1' \
+    'repo_gpgcheck=1' "gpgkey=file://$key" > "$repo"
 }
 mode=$1
 shift
@@ -453,10 +457,14 @@ must_refuse() {
 # --- Must pass: publishing -------------------------------------------------------------------------------
 newbucket rt-v1
 must_publish P1 "release 0.2.0 into an empty bucket" rt-v1 "$pk/v1"
-for key in gpg.key index.html apt/dists/stable/InRelease apt/dists/stable/Release.gpg rpm/hodeishield.repo \
+for key in gpg.key index.html apt/dists/stable/InRelease apt/dists/stable/Release.gpg \
   rpm/x86_64/repodata/repomd.xml.asc rpm/aarch64/repodata/repomd.xml.asc; do
   mcx stat "r/rt-v1/$key" > /dev/null 2>&1 || record "P1 $key is published" present missing FAIL
 done
+# The DNF configuration is in the README only, never in the bucket.
+if mcx stat r/rt-v1/rpm/hodeishield.repo > /dev/null 2>&1; then
+  record "P1 no .repo file is published" absent present FAIL
+fi
 
 clone rt-v1 rt-v2
 must_publish P2 "release 0.2.1 on top of 0.2.0" rt-v2 "$pk/v2"
@@ -475,6 +483,19 @@ if [ "$before" = "$(packages_of rt-v2)" ]; then
   record "P3 published packages untouched" "same objects" "same objects" PASS
 else
   record "P3 published packages untouched" "same objects" "CHANGED" FAIL
+fi
+
+# Another copy of the same key in the bucket (here its binary form; a renewal changes the copy too):
+# publishing goes on and leaves the committed copy there.
+clone rt-v2 rt-p4
+tool sh -c 'gpg --batch --dearmor < /w/pub.asc > /w/pub.gpg'
+put rt-p4 gpg.key "$work/pub.gpg"
+must_publish P4 "another copy of the same key in the bucket" rt-p4 "$pk/v2"
+get rt-p4 gpg.key "$work/t/gpg.key.p4"
+if cmp -s "$work/t/gpg.key.p4" "$work/pub.asc"; then
+  record "P4 the bucket holds the committed key" "committed copy" "committed copy" PASS
+else
+  record "P4 the bucket holds the committed key" "committed copy" "OTHER CONTENT" FAIL
 fi
 
 clone rt-v2 rt-ctl
@@ -709,6 +730,21 @@ mkdir -p "$work/n05"
 cp "$pk/alt/hodeishield-0.2.1-1.x86_64.rpm" "$work/n05/"
 must_refuse N05 "same rpm file name as a published one, other content" rt-n05 \
   "build.sh: .* is already published with different content" "$work/n05"
+
+# The key that users check against the README, replaced in the bucket.
+fresh k01
+put rt-k01 gpg.key "$work/evil.asc"
+must_refuse K01 "gpg.key replaced by another key" rt-k01 "publish.sh: the published gpg.key is not the repository key"
+
+fresh k02
+cat "$work/pub.asc" "$work/evil.asc" > "$work/t/both.asc"
+put rt-k02 gpg.key "$work/t/both.asc"
+must_refuse K02 "another key added to gpg.key" rt-k02 "publish.sh: the published gpg.key is not the repository key"
+
+fresh k03
+put rt-k03 gpg.key "$work/policy.json"
+must_refuse K03 "gpg.key replaced by a file that is not a key" rt-k03 \
+  "publish.sh: the published gpg.key is not the repository key"
 
 # The user of the bucket cannot delete, as in production.
 rc=0
