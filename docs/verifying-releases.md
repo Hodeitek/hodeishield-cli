@@ -129,9 +129,68 @@ Get-AuthenticodeSignature .\hodeishield.exe | Format-List Status, SignerCertific
 information is under Properties → Digital Signatures. The same check applies to the `.msi`
 (`Get-AuthenticodeSignature .\hodeishield-<version>-x86_64-pc-windows-msvc.msi`).
 
+The signing certificate is renewed every day, so its thumbprint differs between releases. What
+identifies the certificate profile that signed the file is an Extended Key Usage (EKU) value that
+starts with `1.3.6.1.4.1.311.97.`. To list the EKU values:
+
+```powershell
+(Get-AuthenticodeSignature .\hodeishield.exe).SignerCertificate.Extensions |
+  Where-Object { $_ -is [System.Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension] } |
+  ForEach-Object { $_.EnhancedKeyUsages } | Select-Object Value, FriendlyName
+```
+
+From 0.2.0 the profile EKU is `1.3.6.1.4.1.311.97.449523565.535854065.272767902.439799148`
+([release-signing.md](release-signing.md#authenticode-windows) lists it with the subject).
+
 The macOS binary is not yet signed with a Developer ID or notarized; that, and a signed and
 notarized `.pkg` installer, come in a later release
 ([#50](https://github.com/Hodeitek/hodeishield-cli/issues/50)).
+
+## 6. Releases after a signing change
+
+If a signing credential or the release workflow is ever compromised or replaced, the maintainers
+publish a notice as described in [SECURITY.md](../SECURITY.md#security-notices): first the GitHub
+security advisory, then a notice at the top of [README.md](../README.md), then the release notes of
+the release that follows the change. The advisory names the affected versions and the first release
+signed after the change. [release-signing.md](release-signing.md) describes what the maintainers do.
+
+What can change:
+
+- **Windows.** A new certificate profile has a new profile EKU (section 5). The advisory and
+  [release-signing.md](release-signing.md#authenticode-windows) give the new value and the first
+  version signed with it. The subject still names Hodeitek S.L.
+- **Sigstore identity.** It changes only if the workflow file is renamed or moved, or the repository
+  is renamed or transferred. The advisory and the release notes then give the new identity and the
+  first version signed with it. Earlier releases keep the identity they were signed with.
+- **Tags not to trust.** A tag that a compromised workflow or token produced keeps verifying
+  against its own identity, because a Sigstore signature cannot be revoked. The advisory lists those
+  tags, with their commits and the SHA-256 of their files. Their version numbers are never used
+  again.
+
+What does not change:
+
+- A published file is never signed again in place. A fix comes as a new version, with its own tag,
+  checksums, signatures and provenance.
+- You always verify with the exact tag of the version you downloaded, the issuer
+  `https://token.actions.githubusercontent.com` and the trigger `push`.
+
+The certificate of each Sigstore signature also records the commit that was built. When an
+advisory names the commit of a genuine release, add it to the check:
+
+```sh
+cosign verify-blob \
+  --bundle SHA256SUMS.sigstore.json \
+  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v<version> \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-github-workflow-trigger push \
+  --certificate-github-workflow-sha <commit> \
+  SHA256SUMS
+```
+
+The provenance check (section 4) confirms the same source repository and tag. Every signature is
+also in the public Rekor transparency log: `rekor-cli search --sha <sha256 of the file>`, or
+[search.sigstore.dev](https://search.sigstore.dev), lists the log entries for a file, with the
+identity and commit in each certificate.
 
 ## Not yet
 

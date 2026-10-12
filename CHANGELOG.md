@@ -16,6 +16,17 @@ commands, `--json` output and exit codes. Each release's notes start with its se
   the README says where its user information is.
   ([#133](https://github.com/Hodeitek/hodeishield-cli/issues/133))
 
+### Changed
+
+- `docs/release-signing.md` lists the credentials and identities that sign releases (Sigstore, SLSA
+  provenance, the container image, and Authenticode through Azure Artifact Signing) and who may
+  change them, and describes what the maintainers do if the Windows certificate profile or the
+  release workflow is compromised. `docs/verifying-releases.md` now says how to recognise a release
+  published after such a change and how to check the Authenticode certificate profile. `SECURITY.md`
+  no longer says that no long-lived signing key exists at all, and points to the published
+  `security.txt` ([#126](https://github.com/Hodeitek/hodeishield-cli/issues/126),
+  [#125](https://github.com/Hodeitek/hodeishield-cli/issues/125)).
+
 ### Fixed
 
 - Counts on standard error now use the singular for one item: "1 vendor across 2 client tenants",
