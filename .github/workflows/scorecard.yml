@@ -1,0 +1,47 @@
+name: Scorecard
+
+# OpenSSF Scorecard: checks the repository's supply-chain practices (actions pinned by commit,
+# minimal token permissions, dangerous workflow patterns, branch protection, signed releases and
+# more) and uploads the results to the Security tab. The results are also published to the
+# Scorecard API, which signs them with this job's OIDC token.
+#
+# It is a workflow of its own because publishing restricts what the workflow may contain: no
+# top-level env or defaults, no write permission at workflow level, `id-token: write` only in the
+# Scorecard job, and in that job only a short list of approved actions, so no `run:` steps
+# (https://github.com/ossf/scorecard-action#workflow-restrictions). Scorecard reads the default
+# branch, so it runs on pushes to main, weekly, and when branch protection changes.
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "53 4 * * 1" # Mondays, 04:53 UTC
+  branch_protection_rule:
+
+permissions: {}
+
+jobs:
+  analysis:
+    name: scorecard
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write # upload the results to code scanning
+      id-token: write # sign the results published to the Scorecard API; held by no other job
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run Scorecard
+        uses: ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc # v2.4.4
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: true
+
+      - name: Upload the results to code scanning
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          sarif_file: results.sarif
