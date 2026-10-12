@@ -110,29 +110,33 @@ only. Upgrade with `sudo apt update && sudo apt upgrade` (or `sudo apt install -
 
 #### Fedora, RHEL, Rocky Linux, AlmaLinux (DNF)
 
-Add the repository with the `.repo` file, which turns on signature checking of both the packages and the
-repository metadata (`gpgcheck=1`, `repo_gpgcheck=1`). The command depends on your DNF version:
+Download the key and check its fingerprint, then write the repository file below by hand. It turns on
+signature checking of both the packages and the repository metadata (`gpgcheck=1`, `repo_gpgcheck=1`)
+and reads the key from the file you checked:
 
 ```sh
-# DNF 5 (Fedora 41 and later)
-sudo dnf config-manager addrepo --from-repofile=https://packages.hodeishield.com/rpm/hodeishield.repo
-
-# DNF 4 (RHEL, Rocky Linux and AlmaLinux 8 and 9, older Fedora; needs the dnf-plugins-core package)
-sudo dnf config-manager --add-repo https://packages.hodeishield.com/rpm/hodeishield.repo
-
-# Either one, without the plugin
-sudo curl -fsSLo /etc/yum.repos.d/hodeishield.repo https://packages.hodeishield.com/rpm/hodeishield.repo
-```
-
-Then install. The first time, DNF shows the key and asks to import it: confirm only if the fingerprint
-is the one above.
-
-```sh
+curl -fsSL https://packages.hodeishield.com/gpg.key -o hodeishield.asc
+gpg --show-keys --with-fingerprint hodeishield.asc     # must show the fingerprint above
+sudo install -m 0644 hodeishield.asc /etc/pki/rpm-gpg/RPM-GPG-KEY-hodeishield && rm hodeishield.asc
+sudo tee /etc/yum.repos.d/hodeishield.repo > /dev/null << 'REPO'
+[hodeishield]
+name=HodeiShield CLI
+baseurl=https://packages.hodeishield.com/rpm/$basearch
+enabled=1
+gpgcheck=1
+repo_gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-hodeishield
+REPO
 sudo dnf install hodeishield
 ```
 
+The first time, DNF shows the key and asks to import it: confirm only if the fingerprint is the one above.
 Upgrade with `sudo dnf upgrade hodeishield`. `sudo apt remove hodeishield` or
 `sudo dnf remove hodeishield` uninstalls it.
+
+This README is the only place that states the key's fingerprint and the repository configuration. The
+site `packages.hodeishield.com` serves the packages, the indexes and a copy of the key, and points here
+for the rest.
 
 #### When the repository key is renewed
 
@@ -147,11 +151,15 @@ curl -fsSL https://packages.hodeishield.com/gpg.key -o hodeishield.asc
 gpg --show-keys --with-fingerprint hodeishield.asc     # must show the fingerprint above
 sudo install -m 0644 hodeishield.asc /etc/apt/keyrings/hodeishield.asc && rm hodeishield.asc
 
-# Fedora, RHEL, Rocky Linux, AlmaLinux: remove the old key first, since rpm keeps the old copy otherwise
-sudo rpm -e $(rpm -q gpg-pubkey --qf '%{NAME}-%{VERSION}-%{RELEASE} %{PACKAGER}\n' | awk '/HodeiShield Packages </ { print $1 }') && sudo rpm --import https://packages.hodeishield.com/gpg.key
+# Fedora, RHEL, Rocky Linux, AlmaLinux
+curl -fsSL https://packages.hodeishield.com/gpg.key -o hodeishield.asc
+gpg --show-keys --with-fingerprint hodeishield.asc     # must show the fingerprint above
+sudo install -m 0644 hodeishield.asc /etc/pki/rpm-gpg/RPM-GPG-KEY-hodeishield && rm hodeishield.asc
+sudo rpm -e $(rpm -q gpg-pubkey --qf '%{NAME}-%{VERSION}-%{RELEASE} %{PACKAGER}\n' | awk '/HodeiShield Packages </ { print $1 }') && sudo rpm --import /etc/pki/rpm-gpg/RPM-GPG-KEY-hodeishield
 ```
 
-The `rpm` command removes the old copy of the key and imports the current one.
+The `rpm` command removes the old copy of the key, which rpm would keep otherwise, and imports the one
+you checked.
 
 #### A single package file
 
