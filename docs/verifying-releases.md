@@ -25,19 +25,19 @@ Every release of `hodeishield-cli` publishes, for each platform archive:
   [`slsa-framework/slsa-github-generator`](https://github.com/slsa-framework/slsa-github-generator)
   generic generator.
 
-After 0.4.1, every archive, `.deb`, `.rpm` and MSI also contains `USER-INFORMATION.md`, the
+From 0.4.2, every archive, `.deb`, `.rpm` and MSI also contains `USER-INFORMATION.md`, the
 [user information](user-information.md) for that release, so verifying the download verifies it
 too. The `.deb` and `.rpm` install it in `/usr/share/doc/hodeishield/`, the MSI next to
 `hodeishield.exe`.
 
-The steps below use `v0.4.1` and `hodeishield-0.4.1-x86_64-unknown-linux-musl.tar.gz`
+The steps below use `v0.4.2` and `hodeishield-0.4.2-x86_64-unknown-linux-musl.tar.gz`
 as examples — substitute the actual version and archive you downloaded.
 
 ## 1. Download the files
 
 From the release page, download:
 
-- the archive you want (e.g. `hodeishield-0.4.1-x86_64-unknown-linux-musl.tar.gz`)
+- the archive you want (e.g. `hodeishield-0.4.2-x86_64-unknown-linux-musl.tar.gz`)
 - `SHA256SUMS`
 - the matching `<archive>.sigstore.json`
 - `SHA256SUMS.sigstore.json`
@@ -62,7 +62,7 @@ in the format cosign v3 reads by default. Older cosign versions cannot read them
 ```sh
 cosign verify-blob \
   --bundle SHA256SUMS.sigstore.json \
-  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.4.1 \
+  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.4.2 \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --certificate-github-workflow-trigger push \
   SHA256SUMS
@@ -72,11 +72,11 @@ Repeat for the archive itself, using its own `.sigstore.json`:
 
 ```sh
 cosign verify-blob \
-  --bundle hodeishield-0.4.1-x86_64-unknown-linux-musl.tar.gz.sigstore.json \
-  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.4.1 \
+  --bundle hodeishield-0.4.2-x86_64-unknown-linux-musl.tar.gz.sigstore.json \
+  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.4.2 \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --certificate-github-workflow-trigger push \
-  hodeishield-0.4.1-x86_64-unknown-linux-musl.tar.gz
+  hodeishield-0.4.2-x86_64-unknown-linux-musl.tar.gz
 ```
 
 A successful verification confirms the file was signed by the
@@ -89,11 +89,11 @@ The SBOM is verified the same way, with its own bundle:
 
 ```sh
 cosign verify-blob \
-  --bundle hodeishield-0.4.1-x86_64-unknown-linux-musl.cdx.json.sigstore.json \
-  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.4.1 \
+  --bundle hodeishield-0.4.2-x86_64-unknown-linux-musl.cdx.json.sigstore.json \
+  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.4.2 \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --certificate-github-workflow-trigger push \
-  hodeishield-0.4.1-x86_64-unknown-linux-musl.cdx.json
+  hodeishield-0.4.2-x86_64-unknown-linux-musl.cdx.json
 ```
 
 ## 4. Verify SLSA build provenance
@@ -102,10 +102,10 @@ Requires [`slsa-verifier`](https://github.com/slsa-framework/slsa-verifier).
 
 ```sh
 slsa-verifier verify-artifact \
-  hodeishield-0.4.1-x86_64-unknown-linux-musl.tar.gz \
+  hodeishield-0.4.2-x86_64-unknown-linux-musl.tar.gz \
   --provenance-path hodeishield.intoto.jsonl \
   --source-uri github.com/Hodeitek/hodeishield-cli \
-  --source-tag v0.4.1
+  --source-tag v0.4.2
 ```
 
 `hodeishield.intoto.jsonl` is attached to the release and covers every

@@ -6,6 +6,8 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-10-12
+
 ### Added
 
 - Every release archive, `.deb`, `.rpm` and the MSI now include the user information
@@ -31,6 +33,11 @@ commands, `--json` output and exit codes. Each release's notes start with its se
   no longer says that no long-lived signing key exists at all, and points to the published
   `security.txt` ([#126](https://github.com/Hodeitek/hodeishield-cli/issues/126),
   [#125](https://github.com/Hodeitek/hodeishield-cli/issues/125)).
+- `docs/release-signing.md` also says who controls the Azure access used for Windows signing, with
+  its known gaps, and describes a weekly check that compares the release runs, the published files,
+  their entries in the Rekor transparency log and the container image signatures, and opens an issue
+  when something does not match ([#126](https://github.com/Hodeitek/hodeishield-cli/issues/126),
+  [#152](https://github.com/Hodeitek/hodeishield-cli/issues/152)).
 
 ### Fixed
 
@@ -260,7 +267,8 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 - Profiles (`config`), shell completions, and release archives for Linux, macOS and Windows signed
   with Sigstore and with SLSA provenance.
 
-[Unreleased]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.3.0...v0.3.1
