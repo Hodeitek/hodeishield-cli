@@ -111,6 +111,7 @@ mod tests {
         summary: "List alerts",
         scopes: &[],
         known_values: &[("severity", &["critical", "high", "medium", "low"])],
+        tenant_scoped: true,
     };
 
     const WITHOUT_LISTS: Operation = Operation {
@@ -154,6 +155,7 @@ mod tests {
 
     const ENGLISH: Operation = Operation {
         known_values: &[("severity", &["critical", "high", "medium", "low", "info"])],
+        tenant_scoped: true,
         ..WITH_LISTS
     };
 
@@ -207,6 +209,7 @@ mod tests {
         // A list without the new name: nothing to point to, so the generic warning stays.
         let other_list = Operation {
             known_values: &[("severity", &["urgent"])],
+            tenant_scoped: true,
             ..WITH_LISTS
         };
         let out = warnings(&other_list, &[("severity", Some("bajo"))]);
@@ -221,6 +224,7 @@ mod tests {
         let other = Operation {
             id: "listRisks",
             known_values: &[("severity", &["high"])],
+            tenant_scoped: true,
             ..WITH_LISTS
         };
         let out = warnings(&other, &[("severity", Some("alto"))]);

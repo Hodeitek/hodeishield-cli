@@ -758,7 +758,7 @@ impl<'a> Generator<'a> {
                 .collect();
             let _ = writeln!(
                 out,
-                "    /// `GET {}`: {}.\n    pub const {}: Operation = Operation {{ id: {:?}, method: \"GET\", path: {:?}, summary: {:?}, scopes: &[{}], known_values: &[{}] }};\n",
+                "    /// `GET {}`: {}.\n    pub const {}: Operation = Operation {{ id: {:?}, method: \"GET\", path: {:?}, summary: {:?}, scopes: &[{}], known_values: &[{}], tenant_scoped: {} }};\n",
                 op.path,
                 op.summary,
                 screaming(&op.id),
@@ -766,7 +766,10 @@ impl<'a> Generator<'a> {
                 op.path,
                 op.summary,
                 scopes.join(", "),
-                known.join(", ")
+                known.join(", "),
+                // A client tenant is selected on the data operations only; anything under the
+                // portfolio path (the tenant listing) is outside the selection.
+                !op.path.starts_with("/v1/portfolio/")
             );
         }
         let all: Vec<String> = self.operations.iter().map(|op| screaming(&op.id)).collect();

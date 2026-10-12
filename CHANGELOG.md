@@ -27,6 +27,25 @@ commands, `--json` output and exit codes. Each release's notes start with its se
   for each stable release: the release's own binary on a distroless base, running as a non-root
   user, tagged with the exact version only. It is signed by digest with Sigstore and carries the
   release's SBOM as a signed attestation. ([#36](https://github.com/Hodeitek/hodeishield-cli/issues/36))
+- Several client tenants with one portfolio key. `hodeishield tenants list` lists the client
+  tenants the key may read. The key is created by an organisation administrator of an active MSSP
+  organisation and goes in `HODEISHIELD_API_KEY`. The global `--tenant <slug|id>` selects one client
+  for any read command, including `get` and `compliance posture`, and prints the line
+  `Client tenant: <slug> (<id>)` on standard error. `--all-tenants` reads every client on a `list` command and adds
+  `tenant_id`, `tenant_slug` and `tenant_name` to each row in `--json` and `--csv` (a `TENANT`
+  column in the table). An unknown client fails with exit code 5, before any data is read. Without
+  these options nothing changes. `--all-tenants` asks one client at a time and skips clients that
+  are inactive or whose licence is not in force, with a note on standard error; the command still
+  exits 0 when only inactive clients are skipped. A client whose licence status the CLI does not
+  know is not read and is named on standard error. A client that fails when it is read because its
+  licence is not in force (exit code 8) or it is not found (exit code 5) is also named and skipped.
+  In both cases the other clients' data is printed and the command then exits non-zero (with the
+  code of the first client that failed, or 1 for an unknown licence status), so a script never takes
+  a partial result for a complete one. Any other failure stops the run before anything is printed,
+  for example exit code 6 (naming the limit) when a rate limit is exhausted. Against an API without
+  portfolio access the commands fail with exit code 7. The README has a new "Several tenants (MSSP)"
+  section. ([#54](https://github.com/Hodeitek/hodeishield-cli/issues/54),
+  [#45](https://github.com/Hodeitek/hodeishield-cli/issues/45))
 
 ### Changed (scripting surface)
 
@@ -64,6 +83,14 @@ commands, `--json` output and exit codes. Each release's notes start with its se
   details, secure use, updating, removal and where the SBOM is published
   ([#127](https://github.com/Hodeitek/hodeishield-cli/issues/127),
   [#128](https://github.com/Hodeitek/hodeishield-cli/issues/128)).
+- Errors that involve a client tenant now say so and what to do. An unknown client tenant (404
+  `TENANT_NOT_FOUND`) points to `hodeishield tenants list`; a portfolio key rejected for a missing
+  scope points to an organisation administrator; a rate limit names whether it is the key's, the
+  organisation's or the client tenant's own, and says whether other clients are affected; a
+  credential that covers several clients without `--tenant` or `--all-tenants` is told to pick one;
+  and `--tenant` with a credential for one tenant only is told to leave it out. Messages and
+  hints go to standard error; exit codes do not change. ([#54](https://github.com/Hodeitek/hodeishield-cli/issues/54),
+  [#45](https://github.com/Hodeitek/hodeishield-cli/issues/45))
 
 ### Fixed
 

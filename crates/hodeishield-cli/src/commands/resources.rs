@@ -4,16 +4,19 @@
 //! The read commands: one per `/v1` collection.
 
 use super::Context;
+use super::tenants::{Selection, Target};
 use crate::cli::{
     AlertsCommand, ComplianceCommand, EndpointsCommand, EvidenceCommand, Paging, RisksCommand,
     VendorsCommand,
 };
-use crate::failure::{ApiContext, CredentialSource, Result, from_api};
+use crate::failure::{ApiContext, CredentialSource, Failure, Kind, Result, from_api};
 use crate::filters::warn_unknown;
 use crate::output::{
-    cell, clean, print_csv, print_detail, print_json, print_table, short_time, table,
+    Rows, cell, clean, print_csv, print_detail, print_json, print_table, short_time, table,
+    tenant_table,
 };
-use comfy_table::Table;
+use hodeishield_api::Client;
+use hodeishield_api::portfolio::Tenant;
 use hodeishield_api::v1::{
     Alert, ComplianceControl, Endpoint, Evidence, ListAlertsParams, ListComplianceControlsParams,
     ListEndpointsParams, ListEvidenceParams, ListRisksParams, ListVendorsParams, Pagination, Risk,
@@ -27,6 +30,10 @@ use std::io::Write;
 type Fetch<'a, R> =
     dyn FnMut(Option<i64>, Option<i64>) -> std::result::Result<ApiResponse<R>, Error> + 'a;
 
+/// A fetch that still has to be told which client to ask.
+type FetchFrom<'a, R> =
+    dyn FnMut(&Client, Option<i64>, Option<i64>) -> std::result::Result<ApiResponse<R>, Error> + 'a;
+
 /// Most pages `--all` fetches: 200 000 items at the largest page size.
 const MAX_PAGES: i64 = 1_000;
 
@@ -35,7 +42,7 @@ const MAX_PAGES: i64 = 1_000;
 /// hundred MiB at most.
 const MAX_ITEMS: usize = 100_000;
 
-/// Prints one page, or every page with `--all`.
+/// Prints a list for the selected client, or for every client with `--all-tenants`.
 #[allow(clippy::too_many_arguments)]
 fn list<R, T>(
     ctx: &Context,
@@ -43,9 +50,38 @@ fn list<R, T>(
     paging: &Paging,
     noun: &str,
     api: ApiContext<'_>,
+    targets: &[Target],
+    fetch: &mut FetchFrom<'_, R>,
+    split: fn(R) -> (Vec<T>, Pagination),
+    render: fn(&[T]) -> Rows,
+) -> Result<()> {
+    if matches!(ctx.selection, Selection::All) {
+        return list_across(ctx, out, paging, noun, api, targets, fetch, split, render);
+    }
+    let client = &targets[0].client;
+    list_one(
+        ctx,
+        out,
+        paging,
+        noun,
+        api,
+        &mut |page, per_page| fetch(client, page, per_page),
+        split,
+        render,
+    )
+}
+
+/// Prints one page, or every page with `--all`, of one tenant's list.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn list_one<R, T>(
+    ctx: &Context,
+    out: &mut dyn Write,
+    paging: &Paging,
+    noun: &str,
+    api: ApiContext<'_>,
     fetch: &mut Fetch<'_, R>,
     split: fn(R) -> (Vec<T>, Pagination),
-    render: fn(&[T]) -> Table,
+    render: fn(&[T]) -> Rows,
 ) -> Result<()> {
     if !paging.all {
         let response = fetch(paging.page, paging.per_page).map_err(|e| from_api(e, &api))?;
@@ -61,7 +97,7 @@ fn list<R, T>(
             let raw_items = response.raw.get("data").and_then(Value::as_array);
             print_csv(out, raw_items.map_or(&[], Vec::as_slice))?;
         } else {
-            print_table(out, &render(&items))?;
+            print_table(out, &render(&items).into_table())?;
         }
         if pagination.total_pages > 1 {
             let next = if pagination.page < pagination.total_pages {
@@ -89,14 +125,145 @@ fn list<R, T>(
     if paging.csv {
         print_csv(out, &raw_items)?;
     } else {
-        print_table(out, &render(&items))?;
+        print_table(out, &render(&items).into_table())?;
     }
     eprintln!("{} {noun}.", items.len());
     Ok(())
 }
 
+/// Every page of every client tenant, each row labelled with the tenant whose request produced it.
+///
+/// A tenant that cannot be read for its own reasons (no licence, left the portfolio) is reported
+/// and skipped, and the command still fails at the end, so a script never takes a partial result
+/// for a complete one. Any other failure stops the walk: tenants are asked one after the other, and
+/// a rate limit (after the client has waited out the short ones) or a missing scope is not retried
+/// against the next tenant.
+#[allow(clippy::too_many_arguments)]
+fn list_across<R, T>(
+    ctx: &Context,
+    out: &mut dyn Write,
+    paging: &Paging,
+    noun: &str,
+    api: ApiContext<'_>,
+    targets: &[Target],
+    fetch: &mut FetchFrom<'_, R>,
+    split: fn(R) -> (Vec<T>, Pagination),
+    render: fn(&[T]) -> Rows,
+) -> Result<()> {
+    let per_page = paging.per_page.or(Some(200));
+    let mut collected: Vec<(&Tenant, Vec<Value>, Vec<T>)> = Vec::new();
+    let mut failures: Vec<Failure> = Vec::new();
+    let mut total = 0_usize;
+    for target in targets {
+        let Some(tenant) = &target.tenant else {
+            continue;
+        };
+        if target.unknown_licence {
+            // The licence vocabulary is open. Not read, but not silently dropped either.
+            eprintln!(
+                "warning: client tenant {}: licence status `{}` is not known to this version; not read",
+                clean(&tenant.slug),
+                clean(&tenant.licence_status)
+            );
+            failures.push(Failure::general("licence status not known"));
+            continue;
+        }
+        let walked = collect_pages(
+            noun,
+            &api,
+            per_page,
+            MAX_ITEMS.saturating_sub(total),
+            &mut |page, per_page| fetch(&target.client, page, per_page),
+            split,
+        );
+        match walked {
+            Ok((raw_items, items)) => {
+                total += items.len();
+                collected.push((tenant, raw_items, items));
+            }
+            Err(failure) if matches!(failure.kind, Kind::NotFound | Kind::LicenceInactive) => {
+                eprintln!(
+                    "warning: client tenant {}: {}",
+                    clean(&tenant.slug),
+                    clean(&failure.message)
+                );
+                failures.push(failure);
+            }
+            Err(failure) => return Err(failure),
+        }
+    }
+
+    if ctx.json || paging.csv {
+        let mut labelled = Vec::new();
+        for (tenant, raw_items, _) in &collected {
+            for item in raw_items {
+                labelled.push(with_tenant(item, tenant)?);
+            }
+        }
+        if ctx.json {
+            print_json(out, &Value::Array(labelled))?;
+        } else {
+            print_csv(out, &labelled)?;
+        }
+    } else {
+        let mut headers = None;
+        let mut groups = Vec::new();
+        for (tenant, _, items) in &collected {
+            if items.is_empty() {
+                continue;
+            }
+            let rows = render(items);
+            headers.get_or_insert(rows.headers);
+            groups.push((tenant.slug.clone(), tenant.id.clone(), rows.rows));
+        }
+        if let Some(headers) = headers {
+            print_table(out, &tenant_table(headers, groups))?;
+        }
+    }
+    if total == 0 {
+        eprintln!("No {noun} found.");
+    } else {
+        eprintln!("{total} {noun} across {} client tenants.", collected.len());
+    }
+    match failures.first() {
+        None => Ok(()),
+        Some(first) => Err(Failure::new(
+            first.kind,
+            format!(
+                "Could not read {} of {} client tenants (see the warnings above); the output covers the others.",
+                failures.len(),
+                targets.len()
+            ),
+        )),
+    }
+}
+
+/// The item with the tenant whose request returned it in front: `tenant_id`, `tenant_slug` and
+/// `tenant_name`. An item that already has such a field is refused rather than overwritten.
+fn with_tenant(item: &Value, tenant: &Tenant) -> Result<Value> {
+    let Value::Object(fields) = item else {
+        return Err(Failure::general(
+            "An item of the answer is not an object, so it cannot be labelled with its tenant.",
+        ));
+    };
+    let mut labelled = serde_json::Map::new();
+    labelled.insert("tenant_id".to_owned(), Value::String(tenant.id.clone()));
+    labelled.insert("tenant_slug".to_owned(), Value::String(tenant.slug.clone()));
+    labelled.insert("tenant_name".to_owned(), Value::String(tenant.name.clone()));
+    for (key, value) in fields {
+        if labelled.contains_key(key) {
+            return Err(Failure::general(format!(
+                "An item already has a field named {}, which the tenant label would overwrite.",
+                clean(key)
+            )));
+        }
+        labelled.insert(key.clone(), value.clone());
+    }
+    Ok(Value::Object(labelled))
+}
+
 /// Walks every page, as received and decoded, stopping with an error past `max_items` items.
-fn collect_pages<R, T>(
+pub(super) fn collect_pages<R, T>(
     noun: &str,
     api: &ApiContext<'_>,
     per_page: Option<i64>,
@@ -158,18 +325,15 @@ fn show<R, T: Serialize>(
     Ok(print_detail(out, &value)?)
 }
 
-fn plain(source: CredentialSource) -> ApiContext<'static> {
-    ApiContext {
-        source,
-        framework: None,
-    }
+fn plain(ctx: &Context, source: CredentialSource) -> ApiContext<'static> {
+    ctx.call(source, None)
 }
 
 pub fn vendors(ctx: &Context, command: VendorsCommand, out: &mut dyn Write) -> Result<()> {
     let settings = ctx.settings()?;
-    let (client, source) = ctx.api(&settings)?;
     match command {
         VendorsCommand::List(args) => {
+            let (targets, source) = ctx.targets(&settings)?;
             let base = ListVendorsParams {
                 q: args.query,
                 category: args.category,
@@ -184,8 +348,9 @@ pub fn vendors(ctx: &Context, command: VendorsCommand, out: &mut dyn Write) -> R
                 out,
                 &args.paging,
                 "vendors",
-                plain(source),
-                &mut |page, per_page| {
+                plain(ctx, source),
+                &targets,
+                &mut |client, page, per_page| {
                     client.list_vendors(&ListVendorsParams {
                         page,
                         per_page,
@@ -197,13 +362,16 @@ pub fn vendors(ctx: &Context, command: VendorsCommand, out: &mut dyn Write) -> R
             )
         }
         VendorsCommand::Get { id } => {
-            show(ctx, out, plain(source), client.get_vendor(&id), |r| &r.data)
+            let (client, source) = ctx.single(&settings)?;
+            show(ctx, out, plain(ctx, source), client.get_vendor(&id), |r| {
+                &r.data
+            })
         }
     }
 }
 
-fn vendor_table(items: &[Vendor]) -> Table {
-    table(
+fn vendor_table(items: &[Vendor]) -> Rows {
+    Rows::new(
         &["ID", "NAME", "DOMAIN", "CRITICALITY", "ACTIVE", "LAST SCAN"],
         items
             .iter()
@@ -223,13 +391,13 @@ fn vendor_table(items: &[Vendor]) -> Table {
 
 pub fn alerts(ctx: &Context, command: AlertsCommand, out: &mut dyn Write) -> Result<()> {
     let settings = ctx.settings()?;
-    let (client, source) = ctx.api(&settings)?;
     match command {
         AlertsCommand::List(args) => {
             warn_unknown(
                 &operations::LIST_ALERTS,
                 &[("severity", args.severity.as_deref())],
             );
+            let (targets, source) = ctx.targets(&settings)?;
             let base = ListAlertsParams {
                 status: args.status,
                 severity: args.severity,
@@ -244,8 +412,9 @@ pub fn alerts(ctx: &Context, command: AlertsCommand, out: &mut dyn Write) -> Res
                 out,
                 &args.paging,
                 "alerts",
-                plain(source),
-                &mut |page, per_page| {
+                plain(ctx, source),
+                &targets,
+                &mut |client, page, per_page| {
                     client.list_alerts(&ListAlertsParams {
                         page,
                         per_page,
@@ -257,13 +426,16 @@ pub fn alerts(ctx: &Context, command: AlertsCommand, out: &mut dyn Write) -> Res
             )
         }
         AlertsCommand::Get { id } => {
-            show(ctx, out, plain(source), client.get_alert(&id), |r| &r.data)
+            let (client, source) = ctx.single(&settings)?;
+            show(ctx, out, plain(ctx, source), client.get_alert(&id), |r| {
+                &r.data
+            })
         }
     }
 }
 
-fn alert_table(items: &[Alert]) -> Table {
-    table(
+fn alert_table(items: &[Alert]) -> Rows {
+    Rows::new(
         &["ID", "SEVERITY", "STATUS", "TYPE", "TITLE", "CREATED"],
         items
             .iter()
@@ -283,7 +455,6 @@ fn alert_table(items: &[Alert]) -> Table {
 
 pub fn risks(ctx: &Context, command: RisksCommand, out: &mut dyn Write) -> Result<()> {
     let settings = ctx.settings()?;
-    let (client, source) = ctx.api(&settings)?;
     match command {
         RisksCommand::List(args) => {
             warn_unknown(
@@ -293,6 +464,7 @@ pub fn risks(ctx: &Context, command: RisksCommand, out: &mut dyn Write) -> Resul
                     ("domain", args.domain.as_deref()),
                 ],
             );
+            let (targets, source) = ctx.targets(&settings)?;
             let base = ListRisksParams {
                 status: args.status,
                 domain: args.domain,
@@ -307,8 +479,9 @@ pub fn risks(ctx: &Context, command: RisksCommand, out: &mut dyn Write) -> Resul
                 out,
                 &args.paging,
                 "risks",
-                plain(source),
-                &mut |page, per_page| {
+                plain(ctx, source),
+                &targets,
+                &mut |client, page, per_page| {
                     client.list_risks(&ListRisksParams {
                         page,
                         per_page,
@@ -320,13 +493,16 @@ pub fn risks(ctx: &Context, command: RisksCommand, out: &mut dyn Write) -> Resul
             )
         }
         RisksCommand::Get { id } => {
-            show(ctx, out, plain(source), client.get_risk(&id), |r| &r.data)
+            let (client, source) = ctx.single(&settings)?;
+            show(ctx, out, plain(ctx, source), client.get_risk(&id), |r| {
+                &r.data
+            })
         }
     }
 }
 
-fn risk_table(items: &[Risk]) -> Table {
-    table(
+fn risk_table(items: &[Risk]) -> Rows {
+    Rows::new(
         &["ID", "TITLE", "DOMAIN", "STATUS", "INHERENT", "RESIDUAL"],
         items
             .iter()
@@ -347,17 +523,14 @@ fn risk_table(items: &[Risk]) -> Table {
 
 pub fn compliance(ctx: &Context, command: ComplianceCommand, out: &mut dyn Write) -> Result<()> {
     let settings = ctx.settings()?;
-    let (client, source) = ctx.api(&settings)?;
     match command {
         ComplianceCommand::Controls(args) => {
             warn_unknown(
                 &operations::LIST_COMPLIANCE_CONTROLS,
                 &[("status", args.status.as_deref())],
             );
-            let api = ApiContext {
-                source,
-                framework: Some(&args.framework),
-            };
+            let (targets, source) = ctx.targets(&settings)?;
+            let api = ctx.call(source, Some(&args.framework));
             let mut base = ListComplianceControlsParams::new(args.framework.clone());
             base.status = args.status;
             base.sort = args.sort;
@@ -368,7 +541,8 @@ pub fn compliance(ctx: &Context, command: ComplianceCommand, out: &mut dyn Write
                 &args.paging,
                 "controls",
                 api,
-                &mut |page, per_page| {
+                &targets,
+                &mut |client, page, per_page| {
                     client.list_compliance_controls(&ListComplianceControlsParams {
                         page,
                         per_page,
@@ -380,10 +554,8 @@ pub fn compliance(ctx: &Context, command: ComplianceCommand, out: &mut dyn Write
             )
         }
         ComplianceCommand::Posture { framework } => {
-            let api = ApiContext {
-                source,
-                framework: Some(&framework),
-            };
+            let (client, source) = ctx.single(&settings)?;
+            let api = ctx.call(source, Some(&framework));
             let response = client
                 .get_framework_posture(&framework)
                 .map_err(|e| from_api(e, &api))?;
@@ -413,8 +585,8 @@ pub fn compliance(ctx: &Context, command: ComplianceCommand, out: &mut dyn Write
     }
 }
 
-fn control_table(items: &[ComplianceControl]) -> Table {
-    table(
+fn control_table(items: &[ComplianceControl]) -> Rows {
+    Rows::new(
         &["CONTROL", "STATUS", "EVIDENCE", "LAST EVALUATED"],
         items
             .iter()
@@ -432,9 +604,9 @@ fn control_table(items: &[ComplianceControl]) -> Table {
 
 pub fn evidence(ctx: &Context, command: EvidenceCommand, out: &mut dyn Write) -> Result<()> {
     let settings = ctx.settings()?;
-    let (client, source) = ctx.api(&settings)?;
     match command {
         EvidenceCommand::List(args) => {
+            let (targets, source) = ctx.targets(&settings)?;
             let base = ListEvidenceParams {
                 evidence_type: args.evidence_type,
                 source_type: args.source_type,
@@ -449,8 +621,9 @@ pub fn evidence(ctx: &Context, command: EvidenceCommand, out: &mut dyn Write) ->
                 out,
                 &args.paging,
                 "evidence items",
-                plain(source),
-                &mut |page, per_page| {
+                plain(ctx, source),
+                &targets,
+                &mut |client, page, per_page| {
                     client.list_evidence(&ListEvidenceParams {
                         page,
                         per_page,
@@ -462,15 +635,20 @@ pub fn evidence(ctx: &Context, command: EvidenceCommand, out: &mut dyn Write) ->
             )
         }
         EvidenceCommand::Get { id } => {
-            show(ctx, out, plain(source), client.get_evidence(&id), |r| {
-                &r.data
-            })
+            let (client, source) = ctx.single(&settings)?;
+            show(
+                ctx,
+                out,
+                plain(ctx, source),
+                client.get_evidence(&id),
+                |r| &r.data,
+            )
         }
     }
 }
 
-fn evidence_table(items: &[Evidence]) -> Table {
-    table(
+fn evidence_table(items: &[Evidence]) -> Rows {
+    Rows::new(
         &["ID", "TYPE", "SOURCE", "TITLE", "VALID UNTIL"],
         items
             .iter()
@@ -489,9 +667,9 @@ fn evidence_table(items: &[Evidence]) -> Table {
 
 pub fn endpoints(ctx: &Context, command: EndpointsCommand, out: &mut dyn Write) -> Result<()> {
     let settings = ctx.settings()?;
-    let (client, source) = ctx.api(&settings)?;
     match command {
         EndpointsCommand::List(args) => {
+            let (targets, source) = ctx.targets(&settings)?;
             let base = ListEndpointsParams {
                 status: args.status,
                 silent_since: args.silent_since,
@@ -504,8 +682,9 @@ pub fn endpoints(ctx: &Context, command: EndpointsCommand, out: &mut dyn Write) 
                 out,
                 &args.paging,
                 "endpoints",
-                plain(source),
-                &mut |page, per_page| {
+                plain(ctx, source),
+                &targets,
+                &mut |client, page, per_page| {
                     client.list_endpoints(&ListEndpointsParams {
                         page,
                         per_page,
@@ -519,8 +698,8 @@ pub fn endpoints(ctx: &Context, command: EndpointsCommand, out: &mut dyn Write) 
     }
 }
 
-fn endpoint_table(items: &[Endpoint]) -> Table {
-    table(
+fn endpoint_table(items: &[Endpoint]) -> Rows {
+    Rows::new(
         &[
             "ID",
             "HOSTNAME",
@@ -555,6 +734,8 @@ mod tests {
         let api = ApiContext {
             source: CredentialSource::ApiKey,
             framework: None,
+            tenant_selected: false,
+            is_portfolio_key: false,
         };
         let total_pages = (total + per_page - 1) / per_page;
         collect_pages(
