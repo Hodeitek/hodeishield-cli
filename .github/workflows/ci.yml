@@ -260,6 +260,36 @@ jobs:
           fi
           grep -q -- "--no-verify" "$RUNNER_TEMP/err"
 
+      # cosign v2 reads the release's Sigstore bundles from 2.4 on, with a flag the script adds.
+      - name: Install cosign v2.4
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: "v2.4.1"
+
+      - name: Install the latest release with the script and cosign v2.4
+        run: |
+          set -eu
+          cosign version | grep -q 'GitVersion: *v2\.4\.1'
+          sh install.sh --dir "$RUNNER_TEMP/bin-v2" --no-man
+          "$RUNNER_TEMP/bin-v2/hodeishield" --version
+
+      # Older cosign versions cannot read them: the script must say which version it needs.
+      - name: Install cosign v2.2
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: "v2.2.4"
+
+      - name: The script names the cosign version it needs
+        run: |
+          set -eu
+          cosign version | grep -q 'GitVersion: *v2\.2\.4'
+          if sh install.sh --dir "$RUNNER_TEMP/bin-old" --no-man 2> "$RUNNER_TEMP/err-old"; then
+            echo "::error::install.sh accepted cosign v2.2.4"
+            exit 1
+          fi
+          grep -q "install cosign v3 (or v2.4 or newer)" "$RUNNER_TEMP/err-old"
+          test ! -e "$RUNNER_TEMP/bin-old/hodeishield"
+
   # The repository freshness monitor must go red: its control builds small repositories with a
   # throwaway key, serves them from localhost and checks that every stale, altered, unsigned or
   # missing case fails and the current one passes.

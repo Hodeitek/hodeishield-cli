@@ -6,6 +6,15 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ## [Unreleased]
 
+### Fixed
+
+- `install.sh` now checks the release's signature with cosign v2 (2.4 or newer) as well as v3. With
+  cosign v2 it stopped with "the Sigstore signature does not verify" although the release was
+  genuine: the signatures are Sigstore bundles that cosign v2 reads only with `--new-bundle-format`,
+  which the script now adds. With an older cosign it names the version it needs instead. The README
+  and `docs/verifying-releases.md` now say which cosign versions work, and what to add with v2.
+  ([#141](https://github.com/Hodeitek/hodeishield-cli/issues/141))
+
 ## [0.4.0] - 2026-10-12
 
 ### Added
