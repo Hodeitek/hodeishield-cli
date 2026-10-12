@@ -22,12 +22,12 @@
 //!
 //! # Relation to the generated client
 //!
-//! The vendored `openapi/v1.json` does not describe these operations yet, so this file is written
-//! by hand. When the vendored document is synced to the contract version above, the listing
-//! operation, [`Tenant`] and the paging types come from `cargo xtask codegen` (which first has to
-//! learn header parameters and the new security scheme), and this file shrinks to what is not an
-//! operation: [`ClientBuilder::tenant`] and its confirmation check, which the generated code does
-//! not provide.
+//! The listing operation is described by the vendored `openapi/v1.json`: its method, path, scope
+//! and the fact that it is never tenant-scoped come from the generated
+//! [`LIST_PORTFOLIO_TENANTS`](crate::v1::operations::LIST_PORTFOLIO_TENANTS). This file adds what
+//! the generated code does not provide: [`ClientBuilder::tenant`] and its confirmation check, the
+//! readability of a [`Tenant`], and the mapping of a missing route to
+//! [`Error::PortfolioNotOffered`].
 //!
 //! # Interface
 //!
@@ -36,8 +36,9 @@
 //!   client then refuses any successful answer that does not name the same tenant, so data of one
 //!   client is never returned as if it were another's.
 
-use crate::client::{Operation, Scope};
+use crate::client::Scope;
 use crate::error::Error;
+use crate::v1::operations::LIST_PORTFOLIO_TENANTS;
 use crate::v1::{Order, Pagination};
 use crate::{ApiResponse, Client, ClientBuilder};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
@@ -46,17 +47,6 @@ use std::sync::Arc;
 
 /// Request and response header that selects, and confirms, the client tenant.
 const TENANT_HEADER: HeaderName = HeaderName::from_static("x-hs-tenant");
-
-/// `GET /v1/portfolio/tenants`: List the client tenants of the credential's portfolio.
-pub const LIST_TENANTS: Operation = Operation {
-    id: "listPortfolioTenants",
-    method: "GET",
-    path: "/v1/portfolio/tenants",
-    summary: "List the client tenants of the credential's portfolio",
-    scopes: &["portfolio:read"],
-    known_values: &[],
-    tenant_scoped: false,
-};
 
 /// A client tenant of the portfolio. Text fields come from the server and are untrusted.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -210,8 +200,8 @@ impl Client {
         params: &ListTenantsParams,
     ) -> Result<ApiResponse<ListTenantsResponse>, Error> {
         self.get(
-            &LIST_TENANTS,
-            LIST_TENANTS.path.to_owned(),
+            &LIST_PORTFOLIO_TENANTS,
+            LIST_PORTFOLIO_TENANTS.path.to_owned(),
             params.query_pairs(),
         )
         .map_err(|error| match error {

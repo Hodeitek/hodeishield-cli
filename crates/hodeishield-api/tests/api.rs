@@ -1180,12 +1180,18 @@ fn only_a_decodable_success_is_one_even_with_the_right_echo() {
 
 #[test]
 fn the_listing_is_unscoped_by_its_operation_and_the_data_operations_are_scoped() {
-    use hodeishield_api::portfolio::LIST_TENANTS;
     use hodeishield_api::v1::operations;
-    let listing = LIST_TENANTS;
+    let listing = operations::LIST_PORTFOLIO_TENANTS;
+    assert_eq!(listing.method, "GET");
+    assert_eq!(listing.path, "/v1/portfolio/tenants");
+    assert_eq!(listing.scopes, ["portfolio:read"]);
     assert!(!listing.tenant_scoped);
-    assert!(operations::ALL.len() >= 11);
-    assert!(operations::ALL.iter().all(|op| op.tenant_scoped));
+    let data: Vec<_> = operations::ALL
+        .iter()
+        .filter(|op| op.id != listing.id)
+        .collect();
+    assert!(data.len() >= 11);
+    assert!(data.iter().all(|op| op.tenant_scoped));
 }
 
 #[test]

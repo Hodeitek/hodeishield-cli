@@ -34,6 +34,10 @@ pub struct Operation {
     /// open: the server may accept a value that is not listed, so use this to help and to warn,
     /// never to refuse. Read it through [`Operation::known_values`].
     pub known_values: &'static [(&'static str, &'static [&'static str])],
+    /// The values the document marks as deprecated for a query parameter
+    /// (`x-hs-deprecated-values`), only for the parameters that have some. The server still
+    /// accepts them until their sunset date. Read it through [`Operation::deprecated_values`].
+    pub deprecated_values: &'static [DeprecatedValues],
     /// Whether a client built for one client tenant selects that tenant on this operation and
     /// checks the answer's confirmation. True for the data operations, false for the portfolio
     /// listing, which is never scoped.
@@ -50,6 +54,25 @@ impl Operation {
             .find(|(name, _)| *name == param)
             .map(|(_, values)| *values)
     }
+
+    /// The deprecated values the document lists for the query parameter `param`, or `None` when
+    /// it lists none.
+    #[must_use]
+    pub fn deprecated_values(&self, param: &str) -> Option<&'static DeprecatedValues> {
+        self.deprecated_values.iter().find(|d| d.param == param)
+    }
+}
+
+/// Values of a query parameter that the API still accepts but has deprecated, as the document
+/// lists them (`x-hs-deprecated-values` and `x-hs-deprecated-values-sunset`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeprecatedValues {
+    /// The query parameter, e.g. `severity`.
+    pub param: &'static str,
+    /// The deprecated values, in document order.
+    pub values: &'static [&'static str],
+    /// The last day the API accepts them (`YYYY-MM-DD`), when the document gives one.
+    pub sunset: Option<&'static str>,
 }
 
 /// A successful answer: the typed body, the body exactly as received (for `--json`, so fields this
@@ -660,6 +683,11 @@ mod tests {
             summary: "List things",
             scopes: &[],
             known_values: &[("severity", &["critical", "high"])],
+            deprecated_values: &[DeprecatedValues {
+                param: "severity",
+                values: &["alto"],
+                sunset: Some("2027-01-14"),
+            }],
             tenant_scoped: true,
         };
         assert_eq!(
@@ -667,6 +695,10 @@ mod tests {
             Some(&["critical", "high"][..])
         );
         assert_eq!(operation.known_values("page"), None);
+        let deprecated = operation.deprecated_values("severity").expect("listed");
+        assert_eq!(deprecated.values, &["alto"]);
+        assert_eq!(deprecated.sunset, Some("2027-01-14"));
+        assert_eq!(operation.deprecated_values("page"), None);
     }
 
     fn client(base: &str) -> Client {

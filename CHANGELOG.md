@@ -83,6 +83,12 @@ commands, `--json` output and exit codes. Each release's notes start with its se
   details, secure use, updating, removal and where the SBOM is published
   ([#127](https://github.com/Hodeitek/hodeishield-cli/issues/127),
   [#128](https://github.com/Hodeitek/hodeishield-cli/issues/128)).
+- The alerts `--severity` filter now shows in `--help` the values the API lists (`critical`, `high`,
+  `medium`, `low`, `info`), and warns on standard error about a value the API does not list or has
+  deprecated. For the deprecated values (`critico`, `alto`, `medio`, `bajo`, accepted until
+  2027-01-14) the warning names the value to use instead. The value is still sent as typed, and exit
+  codes do not change. The CLI now follows version 2026-10-16 of the API document.
+  ([#53](https://github.com/Hodeitek/hodeishield-cli/issues/53))
 - Errors that involve a client tenant now say so and what to do. An unknown client tenant (404
   `TENANT_NOT_FOUND`) points to `hodeishield tenants list`; a portfolio key rejected for a missing
   scope points to an organisation administrator; a rate limit names whether it is the key's, the
