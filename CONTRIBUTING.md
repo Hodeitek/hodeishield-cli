@@ -242,6 +242,7 @@ Scheduled runs use `main`, the default branch, every Monday.
 | Dependabot alerts and security updates | Dependencies against the GitHub Advisory Database, which includes RustSec | When an advisory is published or a dependency changes | Security tab, and a pull request when a fixed version exists |
 | Repository builder tests (`repo-builder-tests.yml`) | The APT and DNF repository builder refuses forged packages and indexes | Every change to `packaging/repo`, and weekly | The run |
 | Repository freshness (`repo-freshness.yml`) | The published APT and DNF repositories are signed and current | Weekly, once `packaging/gpg.key` is committed | An issue labelled `repo-freshness` |
+| Release integrity (`release-integrity.yml`) | Release runs, published releases, their files, their Rekor entries (looked up by SHA-256) and the container image signatures match, in both directions ([docs/release-signing.md](docs/release-signing.md#weekly-release-integrity-check)) | Weekly, on demand, and on every change to the check | An issue labelled `release-integrity` |
 | Proxy and TLS (`proxy-tls.yml`) | Proxy and TLS inspection behaviour against a TLS-inspecting proxy | Every change to the CLI, the API client or `Cargo.lock` | The run |
 | Dependency review (by hand) | The pins Dependabot does not cover, `cargo outdated`, actions pinned by commit | Monthly | A pull request |
 
