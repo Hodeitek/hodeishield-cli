@@ -712,20 +712,14 @@ fn compliance_controls_csv() {
     assert_no_key(&output);
 }
 
-/// The vendored document lists no values for these filters yet, so they are sent exactly as typed,
+/// The vendored document lists no values for these filters, so they are sent exactly as typed,
 /// without a warning, and the command succeeds. (The warning itself is covered by the unit tests
 /// of `filters`, with operations that carry lists.)
 #[test]
 fn free_form_filters_are_sent_as_typed_without_a_warning() {
     for (args, path, param, value) in [
         (
-            &["alerts", "list", "--severity", "High"][..],
-            "/v1/alerts",
-            "severity",
-            "High",
-        ),
-        (
-            &["vendors", "list", "--category", "Cloud Host"],
+            &["vendors", "list", "--category", "Cloud Host"][..],
             "/v1/vendors",
             "category",
             "Cloud Host",
@@ -768,6 +762,47 @@ fn free_form_filters_are_sent_as_typed_without_a_warning() {
         assert!(output.status.success(), "{args:?}: {output:?}");
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(!stderr.contains("warning:"), "{args:?}: {stderr}");
+        mock.assert();
+    }
+}
+
+/// The vendored document lists the alert severities and deprecates some older ones: a value that
+/// is not listed, or a deprecated one, gets a warning and is still sent exactly as typed.
+#[test]
+fn listed_and_deprecated_severities_warn_and_are_sent_as_typed() {
+    for (value, expected) in [
+        ("high", None),
+        ("High", Some("did you mean `high`? Sending it anyway.")),
+        (
+            "alto",
+            Some(
+                "warning: `alto` is a deprecated value for --severity, accepted by the API until \
+                 2027-01-14; use `high`. Sending it as typed.",
+            ),
+        ),
+    ] {
+        let env = Env::new();
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock("GET", "/v1/alerts")
+            .match_query(mockito::Matcher::UrlEncoded(
+                "severity".into(),
+                value.into(),
+            ))
+            .with_body(page(&[], 1, 0, 1))
+            .expect(1)
+            .create();
+        let output = env
+            .api(&server)
+            .args(["alerts", "list", "--severity", value])
+            .output()
+            .expect("run");
+        assert!(output.status.success(), "{value}: {output:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        match expected {
+            Some(warning) => assert!(stderr.contains(warning), "{value}: {stderr}"),
+            None => assert!(!stderr.contains("warning:"), "{value}: {stderr}"),
+        }
         mock.assert();
     }
 }

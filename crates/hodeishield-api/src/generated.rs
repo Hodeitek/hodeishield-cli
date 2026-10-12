@@ -13,7 +13,7 @@
 use serde::{Deserialize, Serialize};
 
 /// `info.version` of the OpenAPI document this client was generated from.
-pub const OPENAPI_VERSION: &str = "2026-09-28";
+pub const OPENAPI_VERSION: &str = "2026-10-16";
 
 /// The server the OpenAPI document declares.
 pub const DEFAULT_SERVER: &str = "https://api.hodeishield.com";
@@ -28,7 +28,7 @@ pub struct ErrorBody {
     pub message: String,
     /// Also the `X-Request-Id` response header.
     pub request_id: String,
-    /// Diagnostic. Not part of the frozen contract.
+    /// Diagnostic, except `code` and the keys the operation’s error descriptions name, which are contract.
     #[serde(default)]
     pub details: Option<serde_json::Map<String, serde_json::Value>>,
 }
@@ -121,7 +121,7 @@ pub struct Alert {
     pub vendor_id: String,
     /// Alert family, e.g. `breach`, `cve`, `rating_drop`.
     pub r#type: String,
-    /// critical | high | medium | low, when classified.
+    /// critical | high | medium | low | info, when classified. Open vocabulary: a new value is a compatible change.
     #[serde(default)]
     pub severity: Option<String>,
     pub title: String,
@@ -168,9 +168,9 @@ pub struct Risk {
     pub title: String,
     #[serde(default)]
     pub description: Option<String>,
-    /// Risk domain, as configured by the tenant.
+    /// Risk domain: vendor | cyber | data | operational | compliance | concentration | strategic | legal | financial | reputational.
     pub domain: String,
-    /// identified | assessed | treated | accepted | closed | …
+    /// Risk lifecycle status: identified | assessed | treatment_planned | treatment_implemented | closed.
     pub status: String,
     /// mitigate | accept | transfer | avoid.
     #[serde(default)]
@@ -334,6 +334,38 @@ pub struct Endpoint {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ListEndpointsResponse {
     pub data: Vec<Endpoint>,
+    pub pagination: Pagination,
+}
+
+/// The organisation the tenant belongs to: the MSSP itself for the tenants it holds directly (including its internal one), or the client organisation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Organization {
+    pub id: String,
+    pub name: String,
+}
+
+/// A client tenant an MSSP portfolio key may select.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PortfolioTenant {
+    /// Stable identifier (lowercase). The ONLY value `X-HS-Tenant` accepts.
+    pub id: String,
+    /// Display name. Untrusted text.
+    pub name: String,
+    /// Short name, unique across the platform. A client may resolve a slug to an `id` from this list; the server never accepts a slug as a selector.
+    pub slug: String,
+    /// The organisation the tenant belongs to: the MSSP itself for the tenants it holds directly (including its internal one), or the client organisation.
+    pub organization: Organization,
+    /// True only for the MSSP’s own internal tenant.
+    pub internal: bool,
+    /// Whether the tenant is enabled. A deactivated tenant is listed but cannot be read.
+    pub active: bool,
+    /// Open vocabulary: `in_force` (licence in force), `grace` (grace period: reads are served), `inactive` (none, suspended, revoked or expired: data operations answer 403 `LICENCE_INACTIVE`). Treat an unknown value as "may not be readable". A tenant is readable when `active` is true and `licence_status` is not `inactive`.
+    pub licence_status: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ListPortfolioTenantsResponse {
+    pub data: Vec<PortfolioTenant>,
     pub pagination: Pagination,
 }
 
@@ -776,6 +808,47 @@ impl std::str::FromStr for EndpointStatus {
     }
 }
 
+/// Accepted values of a query parameter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PortfolioTenantSort {
+    /// `name`
+    Name,
+    /// `slug`
+    Slug,
+}
+
+impl PortfolioTenantSort {
+    /// Every accepted value, as sent on the wire.
+    pub const VALUES: &'static [&'static str] = &["name", "slug"];
+
+    /// The value as sent on the wire.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Name => "name",
+            Self::Slug => "slug",
+        }
+    }
+}
+
+impl std::fmt::Display for PortfolioTenantSort {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for PortfolioTenantSort {
+    type Err = crate::ParseEnumError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "name" => Ok(Self::Name),
+            "slug" => Ok(Self::Slug),
+            _ => Err(crate::ParseEnumError::new(value, Self::VALUES)),
+        }
+    }
+}
+
 /// Query parameters of `listVendors`.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ListVendorsParams {
@@ -843,7 +916,7 @@ pub struct ListAlertsParams {
     pub order: Option<Order>,
     /// Filter by the derived status.
     pub status: Option<AlertStatus>,
-    /// Exact severity match.
+    /// Exact severity match, in the vocabulary the response uses (critical | high | medium | low | info). The legacy Spanish values (critico, alto, medio, bajo, info) are still accepted and mean the same; they are documented as accepted until 2027-01-14, so move to the English ones.
     pub severity: Option<String>,
     /// Only alerts about this vendor.
     pub vendor_id: Option<String>,
@@ -1091,6 +1164,40 @@ impl ListEndpointsParams {
     }
 }
 
+/// Query parameters of `listPortfolioTenants`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ListPortfolioTenantsParams {
+    /// 1-based page number. Defaults to 1.
+    pub page: Option<i64>,
+    /// Items per page, 1..200. Defaults to 50.
+    pub per_page: Option<i64>,
+    /// Field to order by. One of: name, slug.
+    pub sort: Option<PortfolioTenantSort>,
+    /// Sort direction. Defaults to desc.
+    pub order: Option<Order>,
+}
+
+impl ListPortfolioTenantsParams {
+    /// The query string, in document order, without the parameters that are unset.
+    #[must_use]
+    pub fn query_pairs(&self) -> Vec<(&'static str, String)> {
+        let mut pairs = Vec::new();
+        if let Some(value) = &self.page {
+            pairs.push(("page", value.to_string()));
+        }
+        if let Some(value) = &self.per_page {
+            pairs.push(("per_page", value.to_string()));
+        }
+        if let Some(value) = &self.sort {
+            pairs.push(("sort", value.as_str().to_owned()));
+        }
+        if let Some(value) = &self.order {
+            pairs.push(("order", value.as_str().to_owned()));
+        }
+        pairs
+    }
+}
+
 /// Every `/v1` operation, as the OpenAPI document describes it.
 pub mod operations {
     use crate::Operation;
@@ -1103,6 +1210,7 @@ pub mod operations {
         summary: "List third parties",
         scopes: &["supply_risk:read"],
         known_values: &[],
+        deprecated_values: &[],
         tenant_scoped: true,
     };
 
@@ -1114,6 +1222,7 @@ pub mod operations {
         summary: "Fetch one third party",
         scopes: &["supply_risk:read"],
         known_values: &[],
+        deprecated_values: &[],
         tenant_scoped: true,
     };
 
@@ -1124,7 +1233,12 @@ pub mod operations {
         path: "/v1/alerts",
         summary: "List supply-chain alerts",
         scopes: &["supply_risk:read"],
-        known_values: &[],
+        known_values: &[("severity", &["critical", "high", "medium", "low", "info"])],
+        deprecated_values: &[crate::DeprecatedValues {
+            param: "severity",
+            values: &["critico", "alto", "medio", "bajo"],
+            sunset: Some("2027-01-14"),
+        }],
         tenant_scoped: true,
     };
 
@@ -1136,6 +1250,7 @@ pub mod operations {
         summary: "Fetch one alert",
         scopes: &["supply_risk:read"],
         known_values: &[],
+        deprecated_values: &[],
         tenant_scoped: true,
     };
 
@@ -1147,6 +1262,7 @@ pub mod operations {
         summary: "List risk-register entries",
         scopes: &["supply_risk:read"],
         known_values: &[],
+        deprecated_values: &[],
         tenant_scoped: true,
     };
 
@@ -1158,6 +1274,7 @@ pub mod operations {
         summary: "Fetch one risk-register entry",
         scopes: &["supply_risk:read"],
         known_values: &[],
+        deprecated_values: &[],
         tenant_scoped: true,
     };
 
@@ -1169,6 +1286,7 @@ pub mod operations {
         summary: "List control status for a framework",
         scopes: &["compliance.<framework>:read"],
         known_values: &[],
+        deprecated_values: &[],
         tenant_scoped: true,
     };
 
@@ -1180,6 +1298,7 @@ pub mod operations {
         summary: "Framework posture summary",
         scopes: &["compliance.<framework>:read"],
         known_values: &[],
+        deprecated_values: &[],
         tenant_scoped: true,
     };
 
@@ -1191,6 +1310,7 @@ pub mod operations {
         summary: "List security evidence",
         scopes: &["evidence:read"],
         known_values: &[],
+        deprecated_values: &[],
         tenant_scoped: true,
     };
 
@@ -1202,6 +1322,7 @@ pub mod operations {
         summary: "Fetch one evidence item",
         scopes: &["evidence:read"],
         known_values: &[],
+        deprecated_values: &[],
         tenant_scoped: true,
     };
 
@@ -1213,7 +1334,20 @@ pub mod operations {
         summary: "List enrolled endpoint agents",
         scopes: &["endpoints:read"],
         known_values: &[],
+        deprecated_values: &[],
         tenant_scoped: true,
+    };
+
+    /// `GET /v1/portfolio/tenants`: List the client tenants of an MSSP portfolio.
+    pub const LIST_PORTFOLIO_TENANTS: Operation = Operation {
+        id: "listPortfolioTenants",
+        method: "GET",
+        path: "/v1/portfolio/tenants",
+        summary: "List the client tenants of an MSSP portfolio",
+        scopes: &["portfolio:read"],
+        known_values: &[],
+        deprecated_values: &[],
+        tenant_scoped: false,
     };
 
     /// All operations, in document order.
@@ -1229,6 +1363,7 @@ pub mod operations {
         LIST_EVIDENCE,
         GET_EVIDENCE,
         LIST_ENDPOINTS,
+        LIST_PORTFOLIO_TENANTS,
     ];
 }
 
@@ -1460,6 +1595,27 @@ impl crate::Client {
         self.get(
             &operations::LIST_ENDPOINTS,
             "/v1/endpoints".to_owned(),
+            params.query_pairs(),
+        )
+    }
+
+    /// List the client tenants of an MSSP portfolio.
+    ///
+    /// Every tenant the presented PORTFOLIO key may select with `X-HS-Tenant`: the MSSP’s own tenants (its internal one included) and every tenant of its active client organisations, active or not, licensed or not, narrowed to the key’s client subset when it has one. Membership is evaluated live on every request. Only a portfolio key (`hsp_…`) can call this operation; this operation never takes `X-HS-Tenant`.
+    ///
+    /// Required scope: `portfolio:read`. Published in `/v1` since 2026-10-16.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error`] when the request cannot be sent, the API answers with an error, or the
+    /// body does not match the document.
+    pub fn list_portfolio_tenants(
+        &self,
+        params: &ListPortfolioTenantsParams,
+    ) -> Result<crate::ApiResponse<ListPortfolioTenantsResponse>, crate::Error> {
+        self.get(
+            &operations::LIST_PORTFOLIO_TENANTS,
+            "/v1/portfolio/tenants".to_owned(),
             params.query_pairs(),
         )
     }

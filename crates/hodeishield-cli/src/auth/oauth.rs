@@ -10,6 +10,7 @@
 use crate::failure::{Failure, Kind, Result, error_chain};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use hodeishield_api::v1::operations;
 use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -46,8 +47,11 @@ const OFFLINE_ACCESS: &str = "offline_access";
 pub fn default_scopes(metadata: &Metadata) -> Vec<String> {
     let offered = metadata.scopes_supported.as_deref();
     let mut scopes: Vec<String> = Vec::new();
-    let needed = hodeishield_api::v1::operations::ALL
+    let needed = operations::ALL
         .iter()
+        // The tenant listing answers a portfolio key only, never a sign-in: its scope is not
+        // asked for.
+        .filter(|operation| operation.id != operations::LIST_PORTFOLIO_TENANTS.id)
         .flat_map(|operation| operation.scopes.iter().copied())
         .chain([OFFLINE_ACCESS]);
     for scope in needed {
