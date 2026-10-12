@@ -6,6 +6,16 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ## [Unreleased]
 
+### Added
+
+- Every release archive, `.deb`, `.rpm` and the MSI now include the user information
+  (`docs/user-information.md`) as `USER-INFORMATION.md`: next to the binary in the archives, in
+  `/usr/share/doc/hodeishield/` from the `.deb` and `.rpm`, in `%ProgramFiles%\HodeiShield CLI`
+  from the MSI, and in the documentation folder of the Homebrew formula. The release workflow fails
+  if an archive or package lacks it. The container image carries the binary and licence files only;
+  the README says where its user information is.
+  ([#133](https://github.com/Hodeitek/hodeishield-cli/issues/133))
+
 ### Fixed
 
 - Counts on standard error now use the singular for one item: "1 vendor across 2 client tenants",

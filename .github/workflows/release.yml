@@ -137,6 +137,7 @@ jobs:
           mkdir -p "$stage"
           cp "target/${TARGET}/release/${BIN_NAME}" "$stage/"
           cp LICENSE NOTICE README.md "$stage/"
+          cp docs/user-information.md "$stage/USER-INFORMATION.md"
           mkdir -p "$stage/man"
           cp target/man/*.1 "$stage/man/"
           tar -C "$(dirname "$stage")" -czf "hodeishield-${VERSION}-${TARGET}.tar.gz" "$(basename "$stage")"
@@ -190,6 +191,7 @@ jobs:
           set -euo pipefail
           mkdir -p stage/man
           cp "target/universal-apple-darwin/release/${BIN_NAME}" LICENSE NOTICE README.md stage/
+          cp docs/user-information.md stage/USER-INFORMATION.md
           cp target/man/*.1 stage/man/
 
       - name: Upload the unsigned binary
@@ -241,10 +243,11 @@ jobs:
       - name: Refuse anything but the expected files
         run: |
           set -euo pipefail
-          # Top level: exactly the binary, the licence files and the README, plus `man/`. In `man/`:
-          # only regular `hodeishield*.1` files, at least one. Nothing else, of any type.
+          # Top level: exactly the binary, the licence files, the README and the user information,
+          # plus `man/`. In `man/`: only regular `hodeishield*.1` files, at least one. Nothing else,
+          # of any type.
           top="$(cd stage && find . -mindepth 1 -maxdepth 1 | sed 's|^\./||' | LC_ALL=C sort | tr '\n' ' ')"
-          if [ "$top" != "LICENSE NOTICE README.md hodeishield man " ]; then
+          if [ "$top" != "LICENSE NOTICE README.md USER-INFORMATION.md hodeishield man " ]; then
             echo "::error::Unexpected hand-off contents: $top"
             exit 1
           fi
@@ -426,6 +429,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Path stage | Out-Null
           Copy-Item -Path "target/$env:TARGET/release/$env:BIN_NAME.exe", "LICENSE", "NOTICE", "README.md" -Destination stage
+          Copy-Item -Path "docs/user-information.md" -Destination stage/USER-INFORMATION.md
 
       - name: Upload the unsigned executable
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -497,7 +501,7 @@ jobs:
           $found = @(Get-ChildItem -LiteralPath stage -Recurse -Force | ForEach-Object {
             $_.FullName.Substring($root.Length).TrimStart('\', '/')
           } | Sort-Object)
-          $expected = @("hodeishield.exe", "LICENSE", "NOTICE", "README.md") | Sort-Object
+          $expected = @("hodeishield.exe", "LICENSE", "NOTICE", "README.md", "USER-INFORMATION.md") | Sort-Object
           if (Compare-Object $found $expected) {
             Write-Host "::error::Unexpected hand-off contents: $($found -join ', ')"
             exit 1
@@ -761,7 +765,7 @@ jobs:
       # only Windows' own Installer API, check that it carries no custom actions or embedded
       # binaries (so nothing runs at install time but standard actions), then extract it with an
       # administrative install and check its payload is exactly the exe sign-windows signed, plus
-      # LICENSE and NOTICE.
+      # LICENSE, NOTICE and USER-INFORMATION.md.
       - name: Check the MSI before signing it
         shell: powershell
         env:
@@ -788,7 +792,7 @@ jobs:
           }
           $files = [int](Count-Rows "File")
           Write-Host "File rows: $files"
-          if ($files -ne 3) { $bad += "File ($files rows, expected 3)" }
+          if ($files -ne 4) { $bad += "File ($files rows, expected 4)" }
           [System.Runtime.InteropServices.Marshal]::ReleaseComObject($db) | Out-Null
           if ($bad.Count -gt 0) { Write-Host "::error::the MSI has unexpected content: $($bad -join ', ')"; exit 1 }
 
@@ -797,12 +801,12 @@ jobs:
           if ($p.ExitCode -ne 0) { throw "administrative extraction exited with $($p.ExitCode)" }
           $payload = @(Get-ChildItem -LiteralPath $target -Recurse -File | Where-Object { $_.Extension -ne ".msi" })
           $names = @($payload | ForEach-Object { $_.Name } | Sort-Object)
-          if (($names -join ",") -ne "hodeishield.exe,LICENSE,NOTICE") { Write-Host "::error::MSI payload: $($names -join ', ')"; exit 1 }
+          if (($names -join ",") -ne "hodeishield.exe,LICENSE,NOTICE,USER-INFORMATION.md") { Write-Host "::error::MSI payload: $($names -join ', ')"; exit 1 }
           $exe = $payload | Where-Object { $_.Name -eq "hodeishield.exe" }
           $hash = (Get-FileHash -LiteralPath $exe.FullName -Algorithm SHA256).Hash.ToLower()
           if ($hash -ne $env:EXE_SHA256) { Write-Host "::error::the exe in the MSI is $hash, not the signed $env:EXE_SHA256"; exit 1 }
           Remove-Item -Recurse -Force $target
-          Write-Host "MSI content: OK (no custom actions or binaries; payload is the signed exe, LICENSE, NOTICE)"
+          Write-Host "MSI content: OK (no custom actions or binaries; payload is the signed exe, LICENSE, NOTICE, USER-INFORMATION.md)"
 
       - name: Azure login (OIDC)
         if: env.SIGN == 'true'
@@ -905,7 +909,7 @@ jobs:
             mkdir -p "$work"
             tar -xzf "archives/hodeishield-${VERSION}-${target}.tar.gz" -C "$work" --strip-components=1
             mkdir -p "$work/stage/man" "$work/stage/completions"
-            cp "$work/hodeishield" "$work/LICENSE" "$work/NOTICE" "$work/stage/"
+            cp "$work/hodeishield" "$work/LICENSE" "$work/NOTICE" "$work/USER-INFORMATION.md" "$work/stage/"
             for page in "$work"/man/*.1; do
               gzip -9n -c "$page" > "$work/stage/man/$(basename "$page").gz"
             done
