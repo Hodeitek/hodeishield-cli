@@ -121,6 +121,8 @@ separately in [#114](https://github.com/Hodeitek/hodeishield-cli/issues/114).
   Revoking a certificate needs that role and is done in the Azure portal. The app registration has
   no app owners, so its federated credentials can be changed only by holders of the directory roles
   Global Administrator, Application Administrator and Cloud Application Administrator.
+- **Sigstore and SLSA.** No credential exists to hold or change. The identity follows from the
+  repository, the workflow file and the tag.
 
 ### Known gaps
 
@@ -133,8 +135,45 @@ separately in [#114](https://github.com/Hodeitek/hodeishield-cli/issues/114).
 - **Shared app registration.** Deleting the app registration, or changing anything other than this
   repository's federated credential, also affects the other project's release signing. The steps
   below change only this repository's federated credential.
-- **Sigstore and SLSA.** No credential exists to hold or change. The identity follows from the
-  repository, the workflow file and the tag.
+
+## Weekly release integrity check
+
+The `release-integrity.yml` workflow runs every Monday, and on demand
+(`.github/scripts/release-integrity.py`). It compares, in both directions:
+
+- **Runs and releases.** Every run of `release.yml` started by a tag, and every run of
+  `container-image.yml`, must be for a published release, at the commit of its tag. Every published
+  release must have a successful `release.yml` run for its tag at that commit, and from 0.4.0 a
+  successful `container-image.yml` run. Manual runs of `release.yml` are dry runs and are skipped.
+- **Files.** Every file of a release must match its line in the release's `SHA256SUMS`, and nothing
+  but the signature bundles and the provenance may be attached besides.
+- **Rekor.** Every file a release signs is looked up in Rekor by its SHA-256. At least one entry must
+  carry the certificate of `release.yml` at the release's tag, from the GitHub Actions issuer, with
+  the tag's commit and one of that tag's runs. The certificate names the run, so each published file
+  is tied to the run that signed it. An entry with this repository's identity that no published
+  release made is a mismatch. A file that two releases ship unchanged, such as `install.sh`, is
+  signed by both, and that is not a mismatch.
+- **Container images.** Every version tag of `ghcr.io/hodeitek/hodeishield-cli` must be a published
+  release, every release from 0.4.0 must have one, and the signature on its digest must verify with
+  cosign against `container-image.yml` at that tag.
+
+A mismatch, or anything the check cannot read, fails the run and opens an issue labelled
+`release-integrity`, or comments on the open one. The next run that passes closes it.
+
+What the check cannot see:
+
+- A signature made with the release identity for a file that was never published. Rekor cannot be
+  searched by certificate identity
+  ([#158](https://github.com/Hodeitek/hodeishield-cli/issues/158)).
+- A run deleted from the run history: repository administrators can delete runs. Each published
+  file is still tied to its run through its Rekor entry.
+- A draft release: only published releases count. A draft made by a rogue tag still shows as a run
+  whose tag is not a published release.
+
+When it alerts, follow [If the release workflow identity is compromised](#if-the-release-workflow-identity-is-compromised)
+until the cause is known. A mismatch that turns out to be legitimate, such as a tag run that failed
+and whose tag was then moved before the release, is accepted by adding the run to `ACCEPTED_RUNS` in
+the script, with its reason, through a reviewed pull request.
 
 ## If the Windows signing is compromised
 
@@ -223,7 +262,9 @@ advisory, which names the tags not to trust.
 2. **Find what is affected.** List the `v*` tags and the releases, drafts included
    (`gh release list`), the Release workflow runs with the event and the user that started them, and
    the changes to `.github/workflows/release.yml` in the tagged commits. For each release, record
-   its tag, commit and `SHA256SUMS`. A file found elsewhere can be looked up in the Rekor log by its
+   its tag, commit and `SHA256SUMS`. The report of the
+   [weekly release integrity check](#weekly-release-integrity-check) lists the runs, files and Rekor
+   entries that do not match. A file found elsewhere can be looked up in the Rekor log by its
    SHA-256 (`rekor-cli search --sha <digest>`, or [search.sigstore.dev](https://search.sigstore.dev)),
    which shows the identity and commit in its certificate.
 3. **Remove or mark the releases.**
