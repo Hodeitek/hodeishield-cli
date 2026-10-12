@@ -80,7 +80,7 @@ an RFC 3161 timestamp from `http://timestamp.acs.microsoft.com`.
 - **Switch.** The repository variable `WINDOWS_SIGNING_ENABLED` turns the signing on, and only for a
   run started by a pushed `v*` tag.
 
-The signatures of every signed release so far (0.2.0 to 0.4.1) carry:
+The signatures of every signed release so far (0.2.0 to 0.4.2) carry:
 
 | Field | Value |
 |---|---|

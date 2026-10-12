@@ -6,7 +6,7 @@ live in [README.md](../README.md) or [SECURITY.md](../SECURITY.md), it links to 
 
 Each release keeps the copy of this document that applies to it, in that release's tag:
 `https://github.com/Hodeitek/hodeishield-cli/blob/v<version>/docs/user-information.md`. Releases
-after 0.4.1 also ship that copy with the product, as `USER-INFORMATION.md`: next to the binary in
+from 0.4.2 also ship that copy with the product, as `USER-INFORMATION.md`: next to the binary in
 every release archive, in `/usr/share/doc/hodeishield/` from the `.deb` and `.rpm` packages, in
 `%ProgramFiles%\HodeiShield CLI` from the MSI, and in `$(brew --prefix)/share/doc/hodeishield` from
 Homebrew. The container image does not include it. The shipped copy's links to other files are
