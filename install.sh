@@ -16,7 +16,8 @@
 #   --no-verify      skip the cosign signature check (the SHA256SUMS check always runs). Only for
 #                    machines that cannot run cosign; the checksum alone does not prove who built it.
 #
-# Needs curl, tar and sha256sum or shasum; cosign (https://docs.sigstore.dev) unless --no-verify.
+# Needs curl, tar and sha256sum or shasum; cosign v3, or v2.4 or newer (https://docs.sigstore.dev),
+# unless --no-verify.
 
 set -eu
 
@@ -63,6 +64,17 @@ else
 fi
 if [ "$verify" -eq 1 ] && ! command -v cosign > /dev/null 2>&1; then
   die "cosign is required to check the signature: install it (https://docs.sigstore.dev/cosign/system_config/installation/) and run this again. To install without the signature check, pass --no-verify."
+fi
+# The signatures are Sigstore bundles in the format cosign v3 reads by default. cosign v2 reads them
+# from 2.4 on when asked to (--new-bundle-format), and older versions cannot read them at all.
+bundle_format=
+if [ "$verify" -eq 1 ]; then
+  cosign_version=$(cosign version 2> /dev/null | awk '$1 == "GitVersion:" { print $2; exit }')
+  case $cosign_version in
+    v0.* | v1.* | v2.[0-3] | v2.[0-3].*)
+      die "cosign ${cosign_version} cannot read the release's signatures: install cosign v3 (or v2.4 or newer) and run this again." ;;
+    v2.*) bundle_format=--new-bundle-format ;;
+  esac
 fi
 
 case "$(uname -s)" in
@@ -112,7 +124,7 @@ expected=$(awk -v f="${name}.tar.gz" '$2 == f || $2 == "*" f { print $1 }' "${tm
 printf 'Checksum: OK\n'
 
 if [ "$verify" -eq 1 ]; then
-  cosign verify-blob \
+  cosign verify-blob ${bundle_format:+"$bundle_format"} \
     --bundle "${tmp}/${name}.tar.gz.sigstore.json" \
     --certificate-identity "${WORKFLOW}@refs/tags/v${version}" \
     --certificate-oidc-issuer "$ISSUER" \

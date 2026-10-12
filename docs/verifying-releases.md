@@ -50,7 +50,9 @@ what the next two steps are for.
 
 ## 3. Verify the Sigstore signature
 
-Requires [`cosign`](https://github.com/sigstore/cosign) (v2 or newer).
+Requires [`cosign`](https://github.com/sigstore/cosign) v3. With cosign v2 (2.4 or newer), add
+`--new-bundle-format` to each `cosign verify-blob` command below: the signatures are Sigstore bundles
+in the format cosign v3 reads by default. Older cosign versions cannot read them.
 
 ```sh
 cosign verify-blob \

@@ -154,8 +154,10 @@ less install.sh
 sh install.sh --version $v
 ```
 
-It needs `cosign` to check the archive's signature and stops if it is missing; `--no-verify` skips
-that check (the checksum still runs). `sh install.sh --help` lists the options (`--dir`, `--no-man`).
+It needs `cosign` v3, or v2.4 or newer, to check the archive's signature, and stops if it is missing
+or older; `--no-verify` skips that check (the checksum still runs). To check `install.sh` itself with
+cosign v2 as above, add `--new-bundle-format` to `cosign verify-blob`. `sh install.sh --help` lists
+the options (`--dir`, `--no-man`).
 
 ### Container image
 
