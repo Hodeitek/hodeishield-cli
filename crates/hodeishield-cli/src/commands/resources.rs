@@ -12,7 +12,7 @@ use crate::cli::{
 use crate::failure::{ApiContext, CredentialSource, Failure, Kind, Result, from_api};
 use crate::filters::warn_unknown;
 use crate::output::{
-    Rows, cell, clean, print_csv, print_detail, print_json, print_table, short_time, table,
+    Rows, cell, clean, count, print_csv, print_detail, print_json, print_table, short_time, table,
     tenant_table,
 };
 use hodeishield_api::Client;
@@ -127,7 +127,7 @@ pub(super) fn list_one<R, T>(
     } else {
         print_table(out, &render(&items).into_table())?;
     }
-    eprintln!("{} {noun}.", items.len());
+    eprintln!("{}.", count(items.len(), noun));
     Ok(())
 }
 
@@ -223,7 +223,11 @@ fn list_across<R, T>(
     if total == 0 {
         eprintln!("No {noun} found.");
     } else {
-        eprintln!("{total} {noun} across {} client tenants.", collected.len());
+        eprintln!(
+            "{} across {}.",
+            count(total, noun),
+            count(collected.len(), "client tenants")
+        );
     }
     match failures.first() {
         None => Ok(()),

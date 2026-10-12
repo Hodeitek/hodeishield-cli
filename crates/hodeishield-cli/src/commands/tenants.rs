@@ -11,7 +11,7 @@ use super::resources::{collect_pages, list_one};
 use crate::cli::TenantsCommand;
 use crate::config::Settings;
 use crate::failure::{ApiContext, CredentialSource, Failure, Kind, Result};
-use crate::output::{Rows, clean};
+use crate::output::{Rows, clean, count};
 use hodeishield_api::Client;
 use hodeishield_api::portfolio::{
     ListTenantsParams, ListTenantsResponse, Readability, Tenant, is_uuid,
@@ -82,7 +82,8 @@ impl Context {
                     .count();
                 if idle > 0 {
                     eprintln!(
-                        "Skipping {idle} inactive client tenants (see `hodeishield tenants list`)."
+                        "Skipping {} (see `hodeishield tenants list`).",
+                        count(idle, "inactive client tenants")
                     );
                 }
                 portfolio

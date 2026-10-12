@@ -140,6 +140,16 @@ impl Rows {
     }
 }
 
+/// `n` followed by `noun`, a plural ending in "s" ("vendors", "evidence items"), in the singular
+/// when `n` is 1: "1 vendor", "2 vendors".
+pub fn count(n: usize, noun: &str) -> String {
+    if n == 1 {
+        format!("1 {}", noun.strip_suffix('s').unwrap_or(noun))
+    } else {
+        format!("{n} {noun}")
+    }
+}
+
 /// What leads a row of a multi-tenant table. A slug made only of `[a-z0-9-]` is shown as it is. Any
 /// other slug (it may hold look-alike letters, so that two tenants would read the same) is shown
 /// with the start of the tenant's id, which differs. `--json` and `--csv` carry the full values.
@@ -363,6 +373,15 @@ pub fn unix_to_rfc3339(seconds: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_count_of_one_takes_the_singular() {
+        assert_eq!(count(0, "vendors"), "0 vendors");
+        assert_eq!(count(1, "vendors"), "1 vendor");
+        assert_eq!(count(2, "vendors"), "2 vendors");
+        assert_eq!(count(1, "evidence items"), "1 evidence item");
+        assert_eq!(count(1, "client tenants"), "1 client tenant");
+    }
 
     #[test]
     fn control_characters_never_reach_the_terminal() {
