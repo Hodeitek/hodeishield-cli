@@ -438,11 +438,11 @@ hodeishield --all-tenants vendors list --criticality critical --csv > critical-v
   fails with exit code 4 (it lacks the portfolio scope).
 - A client you named that is deactivated, or whose licence is not in force, fails with exit code 8.
 - A portfolio key is limited to 100 requests per minute, and all the portfolio keys of your
-  organisation together to 600 (the API may change these numbers). The CLI waits out a short
-  `Retry-After` and retries; if the wait is longer, or the limit is still exhausted, the command
-  stops with exit code 6 and says which limit it hit (`portfolio_key`, `portfolio_org`,
-  `portfolio_tenant` or `tenant`), instead of asking the next client. Use `--per-page 200` and
-  narrow with filters to need fewer requests.
+  organisation together to 600 (the API may change these numbers); a client tenant's own limits
+  can be lower. The CLI waits out a short `Retry-After` and retries; if the wait is longer, or the
+  limit is still exhausted, the command stops with exit code 6 and says which limit it hit
+  (`portfolio_key`, `portfolio_org`, `portfolio_tenant` or `tenant`), instead of asking the next
+  client. Use `--per-page 200` and narrow with filters to need fewer requests.
 - Against an API that does not offer portfolio access yet, `tenants list`, `--tenant` and
   `--all-tenants` fail with `This API does not offer portfolio access yet.` and exit code 7. Nothing
   else changes.
