@@ -5,16 +5,15 @@ name: Workflow lint
 # - actionlint: syntax, expressions, job and step references, and shellcheck on every `run:` script.
 # - zizmor: security audits such as actions not pinned by commit, broad token permissions,
 #   credentials persisted by checkout, template injection, dangerous triggers, and (online) pinned
-#   actions with a known vulnerability or a commit that is not in the action's repository. Its
-#   results go to the Security tab.
+#   actions with a known vulnerability or a commit that is not in the action's repository. It runs
+#   at its pedantic level, which also asks for concurrency settings and a reason on each permission.
+#   Its results also go to the Security tab.
 #
 # It runs when anything under .github changes, and once a week on main because the online audits
 # depend on advisories published after the workflows last changed.
 #
-# Both report and do not fail the job (actionlint as warnings on the run, zizmor in code scanning)
-# until the findings in the existing workflows are dealt with: then drop the exit-status handling
-# of actionlint and `--no-exit-codes` from zizmor to make them blocking. A failure of either tool
-# itself still fails the job.
+# Any finding fails the job. A finding that is accepted instead of fixed is ignored in
+# .github/zizmor.yml with a one-line reason.
 on:
   pull_request:
     paths:
@@ -60,15 +59,12 @@ jobs:
           echo "${ACTIONLINT_SHA256}  $RUNNER_TEMP/$archive" | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" actionlint
 
-      # Each problem becomes a warning annotation. Exit status 1 means problems were found; 2 and 3
-      # mean actionlint itself failed. shellcheck comes with the runner image.
+      # Each problem becomes an error annotation, and any problem fails the step. shellcheck comes
+      # with the runner image.
       - name: Run actionlint
         env:
-          FORMAT: '{{range $err := .}}::warning file={{$err.Filepath}},line={{$err.Line}},col={{$err.Column}},title=actionlint ({{$err.Kind}})::{{replace $err.Message "%" "%25"}}\n{{end}}'
-        run: |
-          status=0
-          "$RUNNER_TEMP/actionlint" -format "$FORMAT" || status=$?
-          if [ "$status" -gt 1 ]; then exit "$status"; fi
+          FORMAT: '{{range $err := .}}::error file={{$err.Filepath}},line={{$err.Line}},col={{$err.Column}},title=actionlint ({{$err.Kind}})::{{replace $err.Message "%" "%25"}}\n{{end}}'
+        run: '"$RUNNER_TEMP/actionlint" -format "$FORMAT"'
 
   zizmor:
     name: zizmor
@@ -99,18 +95,21 @@ jobs:
           echo "${ZIZMOR_SHA256}  $RUNNER_TEMP/$archive" | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" zizmor
 
-      # Run twice: readable findings in the log, then SARIF for code scanning. The token is the
-      # job's read-only one, used by the online audits to query the GitHub API.
-      - name: Run zizmor
+      # Run twice: SARIF for code scanning first, so it is uploaded even when there are findings,
+      # then readable findings in the log, failing the job if there are any. The token is the job's
+      # read-only one, used by the online audits to query the GitHub API.
+      - name: Write the zizmor results for code scanning
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          "$RUNNER_TEMP/zizmor" --no-exit-codes .
-          "$RUNNER_TEMP/zizmor" --no-exit-codes --format sarif . > "$RUNNER_TEMP/zizmor.sarif"
+        run: '"$RUNNER_TEMP/zizmor" --persona pedantic --no-exit-codes --format sarif . > "$RUNNER_TEMP/zizmor.sarif"'
 
       - name: Upload the results to code scanning
         uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
           sarif_file: ${{ runner.temp }}/zizmor.sarif
           category: zizmor
+
+      - name: Run zizmor
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: '"$RUNNER_TEMP/zizmor" --persona pedantic .'
