@@ -39,6 +39,9 @@ commands, `--json` output and exit codes. Each release's notes start with its se
   ([#135](https://github.com/Hodeitek/hodeishield-cli/issues/135))
 - An API error message that already ends with a full stop no longer gets a second one ("The API
   rejected the request: … ."). ([#136](https://github.com/Hodeitek/hodeishield-cli/issues/136))
+- `logout` now removes a sign-in that the keychain returns in a form the CLI cannot read, and says
+  that nothing was revoked at the app. Before, it failed with the same "unreadable" error whose hint
+  told the user to run `logout`. ([#154](https://github.com/Hodeitek/hodeishield-cli/issues/154))
 
 ## [0.4.1] - 2026-10-12
 
