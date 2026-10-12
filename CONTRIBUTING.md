@@ -64,8 +64,8 @@ Dependabot (`.github/dependabot.yml`) proposes cargo and GitHub Actions updates 
 The pins Dependabot does not cover are reviewed by hand once a month, in the dependency review:
 
 - the Rust toolchain in `rust-toolchain.toml` (latest stable, at least seven days old);
-- `cargo-deny` and `cargo-audit`, installed with `--version` in `.github/workflows/ci.yml`,
-  `cargo-cyclonedx`, `nfpm` (version and SHA-256) and WiX (`WIX_VERSION`; stay on 5.x until the
+- `cargo-deny` and `cargo-audit`, installed with `--version` in `.github/workflows/ci.yml` and,
+  with the same versions, in the `advisories` job of `.github/workflows/release.yml`; `cargo-cyclonedx`, `nfpm` (version and SHA-256) and WiX (`WIX_VERSION`; stay on 5.x until the
   licence terms of later versions have been reviewed) in `.github/workflows/release.yml`, `nfpm`
   again (version and SHA-256, the same as in `release.yml`) in
   `.github/workflows/repo-builder-tests.yml`, `oasdiff` (version and SHA-256) in
@@ -78,6 +78,31 @@ The pins Dependabot does not cover are reviewed by hand once a month, in the dep
 The same monthly review runs `cargo audit` and `cargo outdated`, and checks that every action is
 pinned by full commit SHA. The MSRV (`rust-version` in `Cargo.toml`) is a compatibility promise, not
 a dependency: it changes only by a deliberate decision.
+
+### Known vulnerabilities at release
+
+A release is not published with a known exploitable vulnerability, in the CLI or in a dependency
+(Cyber Resilience Act, Annex I, Part I, point 2(a)).
+
+- **The check.** The `advisories` job of `.github/workflows/release.yml` runs `cargo deny check
+  advisories` and `cargo audit` on the tagged commit, against the current RustSec advisory database.
+  The signing jobs and the publication of the draft wait for it: if it fails, nothing is signed or
+  published. Its result, with the tool versions and the revision of the advisory database, is the
+  last line of the release notes, so it stays with the release.
+- **What counts as exploitable.** Every advisory that the tools report for the tagged commit is
+  treated as exploitable unless the maintainers show otherwise. Fix it by updating or replacing the
+  dependency. An advisory may be accepted only when the affected code is not reachable from the CLI,
+  or its conditions cannot occur in the way the CLI uses the dependency, and the reason says what was
+  checked: the call path, the feature that is off, the input that never reaches it.
+- **Accepting an advisory.** Add an entry to `[advisories] ignore` in `deny.toml`, through a reviewed
+  pull request: `{ id = "RUSTSEC-...", reason = "<what was checked>. Review by YYYY-MM-DD." }`, with
+  a review date no more than three months ahead. CI and the release refuse a bare id, a missing
+  reason and a review date that has passed (`.github/scripts/advisory-exceptions.py`), and `cargo
+  audit` ignores exactly that list. When the date comes, check the advisory again, then fix it or
+  extend the date with a new reason. Remove the entry once the dependency is fixed.
+- **Between releases.** A new advisory makes the `deny` or `audit` job of CI fail on the next change,
+  and Dependabot and the weekly OSV-Scanner run report it (see [Security testing](#security-testing)).
+  A vulnerability in the CLI itself follows [SECURITY.md](SECURITY.md).
 
 ### The API client is generated
 

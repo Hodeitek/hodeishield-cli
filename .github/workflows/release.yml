@@ -94,6 +94,49 @@ jobs:
           echo "sign_windows=$sign_windows" >> "$GITHUB_OUTPUT"
           echo "macOS signing: $sign_macos; Windows signing: $sign_windows"
 
+  # No release with a known exploitable vulnerability (CONTRIBUTING.md, "Known vulnerabilities at
+  # release"): the tagged commit is checked against the RustSec advisory database with the same
+  # pinned tools as CI. Only advisories accepted in deny.toml, each with a reason and a review date,
+  # are let through. The signing jobs and the publication wait for it, so nothing is signed for a
+  # release that cannot be published. Its result goes into the release notes.
+  advisories:
+    name: advisories
+    needs: version
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      result: ${{ steps.check.outputs.result }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned toolchain
+        run: rustup show
+
+      # The versions of the deny and audit jobs in ci.yml.
+      - name: Install cargo-deny and cargo-audit
+        run: |
+          cargo install cargo-deny --locked --version 0.20.2
+          cargo install cargo-audit --locked --version 0.22.2
+
+      # The same script as the audit job of ci.yml; its last line is the result.
+      - name: Check the advisories
+        id: check
+        run: |
+          set -euo pipefail
+          bash .github/scripts/advisory-gate.sh | tee "$RUNNER_TEMP/advisories.txt"
+          result="$(tail -n 1 "$RUNNER_TEMP/advisories.txt")"
+          case "$result" in
+            "No unaddressed security advisory"*) ;;
+            *) echo "::error::the advisory check printed no result"; exit 1 ;;
+          esac
+          echo "result=$result" >> "$GITHUB_OUTPUT"
+          echo "$result" >> "$GITHUB_STEP_SUMMARY"
+
   build-linux:
     name: build (${{ matrix.target }})
     needs: version
@@ -227,7 +270,7 @@ jobs:
   # APPLE_NOTARIZATION_KEY (base64 .p8), APPLE_NOTARIZATION_KEY_ID, APPLE_NOTARIZATION_ISSUER_ID.
   sign-macos:
     name: sign and package (universal-apple-darwin)
-    needs: [version, build-macos]
+    needs: [version, advisories, build-macos]
     runs-on: macos-latest
     timeout-minutes: 60
     # The environment, and its required reviewer, only when this run signs. An empty name means
@@ -463,7 +506,7 @@ jobs:
   # also hosts the x64 dumpbin used to inspect them.
   sign-windows:
     name: sign and package (${{ matrix.target }})
-    needs: [version, build-windows]
+    needs: [version, advisories, build-windows]
     runs-on: windows-latest
     timeout-minutes: 30
     strategy:
@@ -1004,7 +1047,7 @@ jobs:
   # release.
   publish:
     name: publish (draft release)
-    needs: [version, build-linux, sign-macos, sign-windows, sign-msi, sbom, packages]
+    needs: [version, advisories, build-linux, sign-macos, sign-windows, sign-msi, sbom, packages]
     # Only a pushed tag publishes; a manual run is always a dry run, whatever the ref is called.
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && needs.version.outputs.dry_run != 'true'
     runs-on: ubuntu-latest
@@ -1112,12 +1155,15 @@ jobs:
       - name: Write the release notes
         env:
           TAG: ${{ steps.tag.outputs.tag }}
+          ADVISORIES: ${{ needs.advisories.outputs.result }}
         run: |
           set -euo pipefail
           {
             sh .github/scripts/changelog-section.sh "${TAG#v}"
             echo
             echo "Verify the download as described in [Verifying releases](https://github.com/${GITHUB_REPOSITORY}/blob/${TAG}/docs/verifying-releases.md)."
+            echo
+            echo "$ADVISORIES"
           } > "$RUNNER_TEMP/notes.md"
           cat "$RUNNER_TEMP/notes.md"
 
