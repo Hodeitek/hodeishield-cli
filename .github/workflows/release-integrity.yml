@@ -84,6 +84,8 @@ jobs:
             echo "note=$note" >> "$GITHUB_OUTPUT"
           fi
 
+      # Sigstore's trust root (Fulcio's certificate authorities and Rekor's keys), fetched and checked
+      # through TUF by cosign. The check accepts a Rekor entry only if it verifies against it.
       - name: Check the releases
         id: check
         env:
@@ -92,7 +94,11 @@ jobs:
           set -uo pipefail
           report="$RUNNER_TEMP/report.txt"
           status=0
-          python3 -I .github/scripts/release-integrity.py "$GITHUB_REPOSITORY" "$(command -v cosign)" > "$report" 2>&1 || status=$?
+          {
+            cosign initialize &&
+              python3 -I .github/scripts/release-integrity.py "$GITHUB_REPOSITORY" "$(command -v cosign)" \
+                "$HOME/.sigstore/root/tuf-repo-cdn.sigstore.dev/targets/trusted_root.json"
+          } > "$report" 2>&1 || status=$?
           cat "$report"
           if [ "$status" = 0 ]; then result=pass; else result=fail; fi
           echo "result=$result" >> "$GITHUB_OUTPUT"

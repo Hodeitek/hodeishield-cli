@@ -147,9 +147,12 @@ The `release-integrity.yml` workflow runs every Monday, and on demand
   successful `container-image.yml` run. Manual runs of `release.yml` are dry runs and are skipped.
 - **Files.** Every file of a release must match its line in the release's `SHA256SUMS`, and nothing
   but the signature bundles and the provenance may be attached besides.
-- **Rekor.** Every file a release signs is looked up in Rekor by its SHA-256. At least one entry must
-  carry the certificate of `release.yml` at the release's tag, from the GitHub Actions issuer, with
-  the tag's commit and one of that tag's runs. The certificate names the run, so each published file
+- **Rekor.** Every file a release signs is looked up in Rekor by its SHA-256. An entry counts only if
+  Rekor's signature over it verifies and its certificate was issued by Sigstore's certificate
+  authority, valid when the entry was logged, both checked against Sigstore's trust root as cosign
+  fetches it: Rekor itself accepts any certificate, so one that does not chain could claim any
+  identity. At least one entry must carry the certificate of `release.yml` at the release's tag,
+  from the GitHub Actions issuer, with the tag's commit and one of that tag's runs. The certificate names the run, so each published file
   is tied to the run that signed it. An entry with this repository's identity that no published
   release made is a mismatch. A file that two releases ship unchanged, such as `install.sh`, is
   signed by both, and that is not a mismatch.

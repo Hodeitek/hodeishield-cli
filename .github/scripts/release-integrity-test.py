@@ -4,10 +4,14 @@
 """Tests of release-integrity.py that need no network: certificate parsing and the matching rules.
 
 Usage: python3 .github/scripts/release-integrity-test.py
+
+Tests whose names contain "negative" feed changed data on purpose; they run in CI.
 """
 
 import importlib.util
+import json
 import pathlib
+import tempfile
 import unittest
 
 spec = importlib.util.spec_from_file_location(
@@ -129,6 +133,45 @@ class Rekor(unittest.TestCase):
         matched, problems = self.judge(certificate(repo="hodeitek/HodeiShield-CLI"))
         self.assertFalse(matched)
         self.assertEqual(len(problems), 1)
+
+
+FIXTURE = json.loads(pathlib.Path(__file__).with_name("release-integrity-testdata.json").read_text())
+
+
+class TrustRoot(unittest.TestCase):
+    def setUp(self):
+        self.workdir = tempfile.TemporaryDirectory()
+        self.trust = ri.Trust(FIXTURE["trusted_root"], self.workdir.name)
+        self.entry = FIXTURE["entry"]
+        body = json.loads(ri.base64.b64decode(self.entry["body"]))
+        self.der = ri.base64.b64decode(
+            b"".join(
+                line
+                for line in ri.base64.b64decode(body["spec"]["signature"]["publicKey"]["content"]).splitlines()
+                if not line.startswith(b"-----")
+            )
+        )
+
+    def tearDown(self):
+        self.workdir.cleanup()
+
+    def test_rekor_signed_the_real_entry(self):
+        self.assertTrue(self.trust.timestamp_verifies(self.entry))
+
+    def test_the_real_certificate_chains_when_it_was_logged(self):
+        self.assertTrue(self.trust.certificate_chains(self.der, self.entry["integratedTime"]))
+
+    def test_negative_a_changed_entry_is_not_signed_by_rekor(self):
+        for field, value in (("integratedTime", self.entry["integratedTime"] + 1), ("logIndex", 1)):
+            with self.subTest(field=field):
+                self.assertFalse(self.trust.timestamp_verifies({**self.entry, field: value}))
+
+    def test_negative_the_certificate_does_not_chain_outside_its_ten_minutes(self):
+        self.assertFalse(self.trust.certificate_chains(self.der, self.entry["integratedTime"] + 3600))
+
+    def test_negative_a_certificate_whose_signature_does_not_verify_does_not_chain(self):
+        changed = self.der[:-1] + bytes([self.der[-1] ^ 1])  # the last byte of its signature
+        self.assertFalse(self.trust.certificate_chains(changed, self.entry["integratedTime"]))
 
 
 class Parsing(unittest.TestCase):

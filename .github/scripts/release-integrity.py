@@ -3,10 +3,12 @@
 # Copyright 2026 Hodeitek S.L.
 """Checks that every release run, release file, Rekor entry and container image belongs together.
 
-Usage: release-integrity.py <repository> <cosign>
+Usage: release-integrity.py <repository> <cosign> <trusted_root.json>
 
 <repository> is "owner/name". <cosign> is the cosign binary used to verify the container images.
-GH_TOKEN, if set, is used for the GitHub API (read-only: releases, tags, workflow runs).
+<trusted_root.json> is Sigstore's trust root as `cosign initialize` fetched and checked it through
+TUF: the Fulcio certificate authorities and the Rekor public keys. GH_TOKEN, if set, is used for the
+GitHub API (read-only: releases, tags, workflow runs).
 
 What is checked, in both directions:
   runs -> releases   every run of release.yml started by a tag, and every run of container-image.yml,
@@ -16,7 +18,11 @@ What is checked, in both directions:
   files              every release file matches its line in the release's SHA256SUMS, and nothing
                      else is attached;
   Rekor              every file the release signs (it has a `.sigstore.json` bundle) is looked up in
-                     Rekor by its SHA-256. At least one entry must carry a certificate for
+                     Rekor by its SHA-256. An entry counts only if its signed entry timestamp
+                     verifies with Rekor's key and its certificate chains to Sigstore's
+                     certificate authority at the time it was logged: Rekor accepts any
+                     certificate, so one that does not chain could claim any identity. At least
+                     one entry must carry a certificate for
                      release.yml at the release's tag, from the GitHub Actions issuer, with the tag's
                      commit and a run of that tag. An entry with this repository's identity that
                      names anything else is reported. Entries made by others are ignored: anyone can
@@ -39,6 +45,8 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
+import textwrap
 import time
 import urllib.error
 import urllib.parse
@@ -236,11 +244,91 @@ def parse_sha256sums(text: str) -> dict[str, str]:
     return sums
 
 
+# --- Sigstore's trust root ----------------------------------------------------------------------
+
+
+def pem(der: bytes, label: str = "CERTIFICATE") -> str:
+    body = "\n".join(textwrap.wrap(base64.b64encode(der).decode(), 64))
+    return f"-----BEGIN {label}-----\n{body}\n-----END {label}-----\n"
+
+
+class Trust:
+    """Checks a Rekor entry against Sigstore's trust root, with openssl."""
+
+    def __init__(self, trusted_root: dict, workdir: str):
+        self.workdir = workdir
+        roots, intermediates = [], []
+        for authority in trusted_root.get("certificateAuthorities", []):
+            chain = [base64.b64decode(c["rawBytes"]) for c in authority["certChain"]["certificates"]]
+            roots.append(pem(chain[-1]))
+            intermediates.extend(pem(der) for der in chain[:-1])
+        if not roots:
+            raise Unreadable("the trust root lists no certificate authority")
+        self.roots = self._write("roots.pem", "".join(roots))
+        self.intermediates = (
+            self._write("intermediates.pem", "".join(intermediates)) if intermediates else None
+        )
+        self.rekor_keys = {}
+        for log in trusted_root.get("tlogs", []):
+            if log.get("baseUrl", "").rstrip("/") == REKOR:
+                log_id = base64.b64decode(log["logId"]["keyId"]).hex()
+                self.rekor_keys[log_id] = self._write(
+                    f"rekor-{log_id}.pem", pem(base64.b64decode(log["publicKey"]["rawBytes"]), "PUBLIC KEY")
+                )
+        if not self.rekor_keys:
+            raise Unreadable(f"the trust root has no key for {REKOR}")
+
+    def _write(self, name: str, content) -> str:
+        path = f"{self.workdir}/{name}"
+        with open(path, "wb" if isinstance(content, bytes) else "w") as file:
+            file.write(content)
+        return path
+
+    def timestamp_verifies(self, entry: dict) -> bool:
+        """Whether Rekor signed this entry, its log index and the time it was logged."""
+        key = self.rekor_keys.get(entry.get("logID", ""))
+        signature = entry.get("verification", {}).get("signedEntryTimestamp")
+        if not key or not signature:
+            return False
+        payload = json.dumps(
+            {
+                "body": entry["body"],
+                "integratedTime": entry["integratedTime"],
+                "logID": entry["logID"],
+                "logIndex": entry["logIndex"],
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        payload_path = self._write("set-payload", payload.encode())
+        signature_path = self._write("set-signature", base64.b64decode(signature))
+        result = subprocess.run(
+            ["openssl", "dgst", "-sha256", "-verify", key, "-signature", signature_path, payload_path],
+            capture_output=True,
+            check=False,
+        )
+        return result.returncode == 0
+
+    def certificate_chains(self, der: bytes, when: int) -> bool:
+        """Whether a certificate was issued by Sigstore's certificate authority and valid at `when`."""
+        leaf = self._write("leaf.pem", pem(der))
+        command = ["openssl", "verify", "-attime", str(when), "-CAfile", self.roots]
+        if self.intermediates:
+            command += ["-untrusted", self.intermediates]
+        result = subprocess.run([*command, leaf], capture_output=True, check=False)
+        return result.returncode == 0
+
+
 # --- Rekor --------------------------------------------------------------------------------------
 
 
-def rekor_entries(digest: str):
-    """The Rekor entries for an artifact SHA-256, as (log index, certificate identity or None)."""
+def rekor_entries(digest: str, trust: Trust):
+    """The Rekor entries for an artifact SHA-256, as (log index, certificate identity or None).
+
+    The identity is None for an entry that is not a certificate signature, whose timestamp Rekor did
+    not sign, or whose certificate Sigstore's certificate authority did not issue: such an entry can
+    claim any identity, so it says nothing about who signed.
+    """
     status, _, body = http(
         f"{REKOR}/api/v1/index/retrieve",
         data=json.dumps({"hash": f"sha256:{digest}"}).encode(),
@@ -261,9 +349,18 @@ def rekor_entries(digest: str):
             content = spec["spec"]["signature"].get("publicKey", {}).get("content")
             if content:
                 try:
-                    certificate = identity(base64.b64decode(content))
+                    der = base64.b64decode(content)
+                    if der.lstrip().startswith(b"-----BEGIN"):
+                        der = base64.b64decode(
+                            b"".join(l for l in der.strip().splitlines() if not l.startswith(b"-----"))
+                        )
+                    claimed = identity(der)
                 except (ValueError, KeyError, StopIteration, UnicodeDecodeError):
-                    certificate = None  # a public key, not a certificate: not this workflow's
+                    claimed = None  # a public key, not a certificate: not this workflow's
+                if claimed and trust.timestamp_verifies(entry) and trust.certificate_chains(
+                    der, entry["integratedTime"]
+                ):
+                    certificate = claimed
         entries.append((entry["logIndex"], certificate))
     return entries
 
@@ -385,7 +482,7 @@ def stable_version(tag: str):
     return tuple(int(part) for part in match.groups()[:3])
 
 
-def check(repository: str, cosign: str, github: GitHub, out) -> bool:
+def check(repository: str, cosign: str, trust: Trust, github: GitHub, out) -> bool:
     problems: list[str] = []
 
     def problem(text: str):
@@ -483,7 +580,7 @@ def check(repository: str, cosign: str, github: GitHub, out) -> bool:
             problem(f"{tag}: no file has a Sigstore bundle")
         for name in signed:
             matched, wrong = judge_rekor(
-                rekor_entries(digests[name]), repository=repository, tag=tag, releases=signers
+                rekor_entries(digests[name], trust), repository=repository, tag=tag, releases=signers
             )
             for text in wrong:
                 problem(f"{tag}: {name} (sha256:{digests[name]}): {text}")
@@ -533,13 +630,15 @@ def check(repository: str, cosign: str, github: GitHub, out) -> bool:
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 3 or "/" not in argv[1]:
+    if len(argv) != 4 or "/" not in argv[1]:
         print(__doc__.split("\n\n")[1], file=sys.stderr)
         return 1
     github = GitHub(argv[1], os.environ.get("GH_TOKEN") or None)
     try:
-        return 0 if check(argv[1], argv[2], github, sys.stdout) else 1
-    except (Unreadable, ValueError, KeyError) as error:
+        with open(argv[3], encoding="utf-8") as file, tempfile.TemporaryDirectory() as workdir:
+            trust = Trust(json.load(file), workdir)
+            return 0 if check(argv[1], argv[2], trust, github, sys.stdout) else 1
+    except (Unreadable, ValueError, KeyError, OSError) as error:
         print(f"UNREADABLE: {error}", file=sys.stdout)
         return 1
 
