@@ -647,6 +647,8 @@ into the latest 0.x release ([Supported versions](SECURITY.md#supported-versions
 [docs/user-information.md](docs/user-information.md) gathers the manufacturer's contact details, the
 support period, secure use, how to update and remove the CLI, and where the SBOM is published.
 Releases from 0.4.2 ship a copy as `USER-INFORMATION.md` in their archives and packages.
+[docs/technical-documentation.md](docs/technical-documentation.md) is the index of the technical
+documentation required by the Cyber Resilience Act.
 
 ## License
 

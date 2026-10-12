@@ -23,6 +23,10 @@ this document existed; for them, the README and SECURITY.md in their tag apply.
   [releases page](https://github.com/Hodeitek/hodeishield-cli/releases), at
   `https://github.com/Hodeitek/hodeishield-cli/releases/tag/v<version>`. The notes of every
   release, with its date, are also in [CHANGELOG.md](../CHANGELOG.md).
+- **EU declaration of conformity:** a declaration is issued from 11 December 2027. The one for each
+  release is at
+  `https://github.com/Hodeitek/hodeishield-cli/blob/v<version>/docs/declaration-of-conformity.md`.
+  Until then that file is a template, not a declaration.
 
 ## Manufacturer and contact
 

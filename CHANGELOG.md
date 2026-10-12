@@ -6,6 +6,15 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ## [Unreleased]
 
+### Added
+
+- `docs/technical-documentation.md`: the index of the technical documentation of the Cyber
+  Resilience Act (Annex VII), with the product category, the conformity route, who signs the
+  declaration, how the CE marking is shown for software and how the documentation is kept; and
+  `docs/declaration-of-conformity.md`, the template of the EU declaration of conformity. The
+  user information now gives the address of the declaration.
+  ([#129](https://github.com/Hodeitek/hodeishield-cli/issues/129))
+
 ## [0.4.2] - 2026-10-12
 
 ### Added
