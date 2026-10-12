@@ -314,6 +314,7 @@ mkpkgs() {
     printf '# test\n' > "$stage/completions/$completion"
   done
   cp "$root/LICENSE" "$root/NOTICE" "$stage/"
+  cp "$root/docs/user-information.md" "$stage/USER-INFORMATION.md"
   for arch in amd64 arm64; do
     for packager in deb rpm; do
       (cd "$stage" && VERSION=$version ARCH=$arch "$NFPM" package -f "$config" -p "$packager" -t "$out/" > /dev/null)

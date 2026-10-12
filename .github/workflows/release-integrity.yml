@@ -1,0 +1,170 @@
+name: Release integrity
+
+# Once a week (and on demand) checks that the release runs, the published releases, their files, the
+# Rekor transparency log and the container images all belong together, in both directions (see
+# .github/scripts/release-integrity.py and docs/release-signing.md). A run of the release workflow
+# for a tag that is not a published release, a release file that does not match its SHA256SUMS, or a
+# Rekor entry with this repository's identity that no published release made, is a mismatch.
+#
+# It reads public data and the run history only, uses no secret and no environment, and writes
+# nothing but an issue labelled `release-integrity`: opened (or commented on) while the check fails,
+# and closed when it passes again. It fails closed: anything that cannot be read is a failure.
+#
+# Rekor cannot be searched by certificate identity, so a signature made with the release identity
+# for a file that was never published is not seen here (#158).
+on:
+  schedule:
+    - cron: "23 5 * * 1" # Mondays, 05:23 UTC
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/scripts/release-integrity*"
+      - ".github/workflows/release-integrity.yml"
+
+permissions: {}
+
+concurrency:
+  group: release-integrity-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  LABEL: release-integrity
+
+jobs:
+  check:
+    name: check the releases
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read # the checkout, the releases and the tags
+      actions: read # the runs of release.yml and container-image.yml, and of this workflow
+      issues: write # the issue and its label; not used on a pull request
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Test the check
+        run: python3 -I .github/scripts/release-integrity-test.py
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: "v3.1.3"
+
+      # GitHub disables scheduled workflows of a repository without activity for 60 days. A long gap
+      # since the previous run is reported with the result, because a check that did not run cannot
+      # have noticed anything.
+      - name: Look for a gap since the previous run
+        if: github.event_name != 'pull_request'
+        id: gap
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          unreadable="The time of the check's previous run could not be read."
+          if ! last=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/release-integrity.yml/runs?status=completed&per_page=30" \
+            --jq '[.workflow_runs[] | select(.event != "pull_request") | select(.conclusion == "success" or .conclusion == "failure")] | sort_by(.created_at) | last | .created_at // empty'); then
+            echo "::warning::$unreadable"
+            echo "note=$unreadable" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          [ -n "$last" ] || exit 0
+          now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          if ! last_epoch=$(date -d "$last" +%s); then
+            echo "::warning::$unreadable"
+            echo "note=$unreadable" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          days=$(( ($(date +%s) - last_epoch) / 86400 ))
+          if [ "$days" -gt 9 ]; then
+            note="The check did not run between $last and $now ($days days). Scheduled workflows are disabled after 60 days without activity in the repository, so releases may have gone unchecked."
+            echo "::warning::$note"
+            echo "note=$note" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Sigstore's trust root (Fulcio's certificate authorities and Rekor's keys), fetched and checked
+      # through TUF by cosign. The check accepts a Rekor entry only if it verifies against it.
+      - name: Check the releases
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          report="$RUNNER_TEMP/report.txt"
+          status=0
+          {
+            cosign initialize &&
+              python3 -I .github/scripts/release-integrity.py "$GITHUB_REPOSITORY" "$(command -v cosign)" \
+                "$HOME/.sigstore/root/tuf-repo-cdn.sigstore.dev/targets/trusted_root.json"
+          } > "$report" 2>&1 || status=$?
+          cat "$report"
+          if [ "$status" = 0 ]; then result=pass; else result=fail; fi
+          echo "result=$result" >> "$GITHUB_OUTPUT"
+
+      - name: Report the result
+        if: "!cancelled() && github.event_name != 'pull_request'"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESULT: ${{ steps.check.outputs.result }}
+          GAP: ${{ steps.gap.outputs.note }}
+        run: |
+          set -euo pipefail
+          report="$RUNNER_TEMP/report.txt"
+          # An earlier step may have failed before the check wrote its report.
+          print_report() {
+            if [ -f "$report" ]; then
+              head -c 6000 "$report"
+            else
+              echo "No report: an earlier step failed before the check ran (see the run)."
+            fi
+          }
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          {
+            echo "### Release integrity: ${RESULT:-fail}"
+            echo
+            echo '```'
+            print_report
+            echo '```'
+            [ -z "$GAP" ] || { echo; echo "$GAP"; }
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          issue=$(gh issue list -R "$GITHUB_REPOSITORY" --label "$LABEL" --state open --json number --jq '.[0].number // empty')
+          case ${RESULT:-fail} in
+            pass)
+              if [ -n "$issue" ]; then
+                gh issue close "$issue" -R "$GITHUB_REPOSITORY" --reason completed \
+                  --comment "The releases, their runs, their files, Rekor and the container images match again ($run_url)."
+              fi
+              ;;
+            fail)
+              {
+                echo "The weekly release integrity check found something that does not match, or could not read what it needs."
+                echo "Follow \"If the release workflow identity is compromised\" in docs/release-signing.md until the cause is known."
+                echo
+                echo '```'
+                print_report
+                echo '```'
+                [ -z "$GAP" ] || { echo; echo "$GAP"; }
+                echo
+                echo "Run: $run_url"
+              } > "$RUNNER_TEMP/issue.md"
+              if [ -n "$issue" ]; then
+                gh issue comment "$issue" -R "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/issue.md"
+              else
+                gh label list -R "$GITHUB_REPOSITORY" --search "$LABEL" --json name --jq '.[].name' | grep -qx "$LABEL" ||
+                  gh label create "$LABEL" -R "$GITHUB_REPOSITORY" --color B60205 \
+                    --description "A release run, file, Rekor entry or image that does not match a published release"
+                gh issue create -R "$GITHUB_REPOSITORY" --label "$LABEL" \
+                  --title "The release integrity check found a mismatch" \
+                  --body-file "$RUNNER_TEMP/issue.md"
+              fi
+              ;;
+          esac
+
+      - name: Fail if the check failed
+        if: "!cancelled() && steps.check.outputs.result != 'pass'"
+        run: |
+          echo "::error::The release integrity check did not pass; see the report above and the issue labelled release-integrity."
+          exit 1

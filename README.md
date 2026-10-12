@@ -56,14 +56,14 @@ section), and put `hodeishield` (`hodeishield.exe` on Windows) somewhere on your
 | Windows x86_64 | `hodeishield-<version>-x86_64-pc-windows-msvc.zip` |
 | Windows arm64 | `hodeishield-<version>-aarch64-pc-windows-msvc.zip` (from 0.4.0) |
 
-`<version>` has no leading `v`: release `v0.4.1` ships `hodeishield-0.4.1-…`. The Linux binaries are
+`<version>` has no leading `v`: release `v0.4.2` ships `hodeishield-0.4.2-…`. The Linux binaries are
 statically linked and run on any distribution. Homebrew and Scoop packages (next section) and a
 [container image](#container-image) are also available.
 
 From source, with the Rust toolchain installed (pin the release tag you want):
 
 ```sh
-cargo install --locked --git https://github.com/Hodeitek/hodeishield-cli --tag v0.4.1 hodeishield-cli
+cargo install --locked --git https://github.com/Hodeitek/hodeishield-cli --tag v0.4.2 hodeishield-cli
 ```
 
 ### Homebrew and Scoop
@@ -91,6 +91,8 @@ repository; it is not available yet.
 ### Debian, Ubuntu, Fedora, RHEL and other Linux distributions
 
 From 0.3.0, each release also publishes `.deb` and `.rpm` packages for x86_64 and arm64. They install `/usr/bin/hodeishield`, the man pages and the bash, zsh and fish completions.
+From 0.4.2 they also install the [user information](docs/user-information.md) in
+`/usr/share/doc/hodeishield/USER-INFORMATION.md`.
 Verify the package as in the next section (it has its own `.sigstore.json` and is listed in
 `SHA256SUMS`), then:
 
@@ -166,10 +168,12 @@ image at `ghcr.io/hodeitek/hodeishield-cli`, for CI jobs and container pipelines
 release's own `hodeishield` binary on a
 [distroless](https://github.com/GoogleContainerTools/distroless) static base (no shell, no package
 manager, CA certificates included) and runs as a non-root user. There is no `latest` tag: use the
-exact version, or better its digest.
+exact version, or better its digest. The image carries no documentation: the
+[user information](docs/user-information.md) for a version is in that release's tag, and, from
+0.4.2, as `USER-INFORMATION.md` in its archives.
 
 ```sh
-v=0.4.1   # the version you want
+v=0.4.2   # the version you want
 docker pull ghcr.io/hodeitek/hodeishield-cli:$v
 docker run --rm -e HODEISHIELD_API_KEY ghcr.io/hodeitek/hodeishield-cli:$v vendors list
 ```
@@ -182,7 +186,7 @@ The image is signed by digest with cosign (keyless) and carries the release's Cy
 signed attestation. Verify both before you rely on the image:
 
 ```sh
-v=0.4.1
+v=0.4.2
 image=ghcr.io/hodeitek/hodeishield-cli:$v
 cosign verify $image \
   --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/container-image.yml@refs/tags/v$v \
@@ -220,9 +224,9 @@ Each release has a `SHA256SUMS` file, a Sigstore bundle (`*.sigstore.json`) for 
 ```sh
 sha256sum --ignore-missing -c SHA256SUMS
 
-cosign verify-blob hodeishield-0.4.1-x86_64-unknown-linux-musl.tar.gz \
-  --bundle hodeishield-0.4.1-x86_64-unknown-linux-musl.tar.gz.sigstore.json \
-  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.4.1 \
+cosign verify-blob hodeishield-0.4.2-x86_64-unknown-linux-musl.tar.gz \
+  --bundle hodeishield-0.4.2-x86_64-unknown-linux-musl.tar.gz.sigstore.json \
+  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.4.2 \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --certificate-github-workflow-trigger push
 ```
@@ -250,7 +254,7 @@ xattr -d com.apple.quarantine ./hodeishield   # "No such xattr" means there was 
 Or download with `curl`, which does not set that attribute in the first place:
 
 ```sh
-curl -LO https://github.com/Hodeitek/hodeishield-cli/releases/download/v0.4.1/hodeishield-0.4.1-universal-apple-darwin.tar.gz
+curl -LO https://github.com/Hodeitek/hodeishield-cli/releases/download/v0.4.2/hodeishield-0.4.2-universal-apple-darwin.tar.gz
 ```
 
 **Windows, before 0.2.0.** Unblock the archive before unpacking it, so the executable does not
@@ -642,6 +646,7 @@ From 1.0.0, each major version is supported with security fixes for five years; 
 into the latest 0.x release ([Supported versions](SECURITY.md#supported-versions)).
 [docs/user-information.md](docs/user-information.md) gathers the manufacturer's contact details, the
 support period, secure use, how to update and remove the CLI, and where the SBOM is published.
+Releases from 0.4.2 ship a copy as `USER-INFORMATION.md` in their archives and packages.
 
 ## License
 

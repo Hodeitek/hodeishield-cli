@@ -6,8 +6,12 @@ live in [README.md](../README.md) or [SECURITY.md](../SECURITY.md), it links to 
 
 Each release keeps the copy of this document that applies to it, in that release's tag:
 `https://github.com/Hodeitek/hodeishield-cli/blob/v<version>/docs/user-information.md`. Releases
-up to 0.3.1 were published before this document existed; for them, the README and SECURITY.md in
-their tag apply.
+from 0.4.2 also ship that copy with the product, as `USER-INFORMATION.md`: next to the binary in
+every release archive, in `/usr/share/doc/hodeishield/` from the `.deb` and `.rpm` packages, in
+`%ProgramFiles%\HodeiShield CLI` from the MSI, and in `$(brew --prefix)/share/doc/hodeishield` from
+Homebrew. The container image does not include it. The shipped copy's links to other files are
+relative to the repository: open them in the same tag. Releases up to 0.3.1 were published before
+this document existed; for them, the README and SECURITY.md in their tag apply.
 
 ## Product
 
@@ -58,7 +62,8 @@ key.
 
 What the CLI guarantees (read only, credentials never written to disk in clear text, printed or
 logged, HTTPS only, no redirects followed, signed releases) is in
-[SECURITY.md](../SECURITY.md#what-the-cli-guarantees). To use it securely:
+[SECURITY.md](../SECURITY.md#what-the-cli-guarantees), and the risk assessment behind them is in
+[risk-assessment.md](risk-assessment.md). To use it securely:
 
 - **Verify every download** before you run it: [Verify a download](../README.md#verify-a-download)
   and [docs/verifying-releases.md](verifying-releases.md). For the container image, verify it and

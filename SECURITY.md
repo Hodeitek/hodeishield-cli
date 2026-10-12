@@ -17,6 +17,9 @@ if one was exposed, revoke it in the app first.
 We will acknowledge your report, keep you informed while we investigate, and credit you in the
 advisory if you want to be credited.
 
+- Machine-readable contact: [security.txt](https://hodeishield.com/.well-known/security.txt)
+  (RFC 9116), for the whole HodeiShield product. The same file is served on `app.hodeishield.com`
+  and `docs.hodeishield.com`.
 - Encrypted email: not offered at the moment.
 - Bug bounty: there is no bounty programme; we credit reporters publicly in the advisory.
 
@@ -92,6 +95,9 @@ in this order:
    section of [CHANGELOG.md](CHANGELOG.md), which the release workflow uses as the release notes.
    Each entry links to the advisory.
 
+What the maintainers do when a signing credential or the release workflow is compromised, and what
+such a notice then says, is described in [docs/release-signing.md](docs/release-signing.md).
+
 To be told, watch this repository's releases on GitHub (*Watch → Custom → Releases*) or follow
 [its releases feed](https://github.com/Hodeitek/hodeishield-cli/releases.atom), and check the
 advisories page. The CLI's own [new-version notice](README.md#new-version-notice) tells you on an
@@ -164,4 +170,12 @@ them to the right team.
 - Credentials are sent only over HTTPS (plain HTTP is accepted only for `localhost`), and redirects
   are never followed.
 - Releases are signed keylessly with Sigstore from GitHub Actions and carry SLSA provenance; no
-  long-lived signing key exists. See [docs/verifying-releases.md](docs/verifying-releases.md).
+  long-lived key is involved in those signatures. The Windows executable and installer are also
+  signed with Authenticode through Azure Artifact Signing, whose key never leaves that service. The
+  APT and DNF package repository, once published, has its own OpenPGP key
+  ([#114](https://github.com/Hodeitek/hodeishield-cli/issues/114)). See
+  [docs/verifying-releases.md](docs/verifying-releases.md) and
+  [docs/release-signing.md](docs/release-signing.md).
+
+The risks these guarantees address, and how each security requirement of the Cyber Resilience Act is
+met, are in [docs/risk-assessment.md](docs/risk-assessment.md).

@@ -6,6 +6,50 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-10-12
+
+### Added
+
+- Every release archive, `.deb`, `.rpm` and the MSI now include the user information
+  (`docs/user-information.md`) as `USER-INFORMATION.md`: next to the binary in the archives, in
+  `/usr/share/doc/hodeishield/` from the `.deb` and `.rpm`, in `%ProgramFiles%\HodeiShield CLI`
+  from the MSI, and in the documentation folder of the Homebrew formula. The release workflow fails
+  if an archive or package lacks it. The container image carries the binary and licence files only;
+  the README says where its user information is.
+  ([#133](https://github.com/Hodeitek/hodeishield-cli/issues/133))
+- `docs/risk-assessment.md`: the cybersecurity risk assessment. It lists what the CLI protects, the
+  threats considered and the controls. It says how each security requirement of the Cyber Resilience
+  Act is met or why it does not apply, and why the CLI does not update itself or keep an activity
+  log. ([#122](https://github.com/Hodeitek/hodeishield-cli/issues/122),
+  [#123](https://github.com/Hodeitek/hodeishield-cli/issues/123))
+
+### Changed
+
+- `docs/release-signing.md` lists the credentials and identities that sign releases (Sigstore, SLSA
+  provenance, the container image, and Authenticode through Azure Artifact Signing) and who may
+  change them, and describes what the maintainers do if the Windows certificate profile or the
+  release workflow is compromised. `docs/verifying-releases.md` now says how to recognise a release
+  published after such a change and how to check the Authenticode certificate profile. `SECURITY.md`
+  no longer says that no long-lived signing key exists at all, and points to the published
+  `security.txt` ([#126](https://github.com/Hodeitek/hodeishield-cli/issues/126),
+  [#125](https://github.com/Hodeitek/hodeishield-cli/issues/125)).
+- `docs/release-signing.md` also says who controls the Azure access used for Windows signing, with
+  its known gaps, and describes a weekly check that compares the release runs, the published files,
+  their entries in the Rekor transparency log and the container image signatures, and opens an issue
+  when something does not match ([#126](https://github.com/Hodeitek/hodeishield-cli/issues/126),
+  [#152](https://github.com/Hodeitek/hodeishield-cli/issues/152)).
+
+### Fixed
+
+- Counts on standard error now use the singular for one item: "1 vendor across 2 client tenants",
+  "1 vendor." after `--all`, and "Skipping 1 inactive client tenant".
+  ([#135](https://github.com/Hodeitek/hodeishield-cli/issues/135))
+- An API error message that already ends with a full stop no longer gets a second one ("The API
+  rejected the request: … ."). ([#136](https://github.com/Hodeitek/hodeishield-cli/issues/136))
+- `logout` now removes a sign-in that the keychain returns in a form the CLI cannot read, and says
+  that nothing was revoked at the app. Before, it failed with the same "unreadable" error whose hint
+  told the user to run `logout`. ([#154](https://github.com/Hodeitek/hodeishield-cli/issues/154))
+
 ## [0.4.1] - 2026-10-12
 
 ### Fixed
@@ -223,7 +267,8 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 - Profiles (`config`), shell completions, and release archives for Linux, macOS and Windows signed
   with Sigstore and with SLSA provenance.
 
-[Unreleased]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.3.0...v0.3.1

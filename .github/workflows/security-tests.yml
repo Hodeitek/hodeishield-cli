@@ -1,0 +1,79 @@
+name: Security tests
+
+# Static analysis and a known-vulnerability scan of the repository, with the results in the
+# repository's Security tab (code scanning), where they are triaged as CONTRIBUTING.md describes:
+#
+# - CodeQL, with the security-extended queries, over the Rust code and over the GitHub Actions
+#   workflows. Both are analysed from source (`build-mode: none`): nothing is compiled.
+# - OSV-Scanner over the whole repository, which today means Cargo.lock: every locked crate is
+#   looked up in the OSV database, which includes the RustSec advisories that `cargo audit` reads.
+#
+# It runs on every pull request and push to dev and main, and once a week on main (scheduled runs
+# use the default branch) so that new queries and advisories are applied to code that has not
+# changed. A newly published advisory is also reported between runs by Dependabot alerts, which are
+# enabled in the repository settings.
+on:
+  pull_request:
+    branches: [dev, main]
+  push:
+    branches: [dev, main]
+  schedule:
+    - cron: "37 4 * * 1" # Mondays, 04:37 UTC
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: security-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  codeql:
+    name: codeql (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write # upload the results to code scanning
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [rust, actions]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The Rust extractor reads the workspace with cargo, so it needs the toolchain pinned in
+      # rust-toolchain.toml.
+      - name: Install pinned toolchain
+        if: matrix.language == 'rust'
+        run: rustup show
+
+      - name: Initialise CodeQL
+        uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+          queries: security-extended
+
+      - name: Analyse
+        uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          category: /language:${{ matrix.language }}
+
+  # The upstream reusable workflow: it checks out without persisting credentials, scans, uploads
+  # the SARIF to code scanning and fails when a vulnerability is found, like `cargo audit` in CI.
+  # The permissions are the ones its job declares; a caller cannot grant less.
+  osv-scanner:
+    name: osv-scanner
+    permissions:
+      actions: read # read by the SARIF upload
+      contents: read
+      security-events: write # upload the results to code scanning
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@a345acffa64b0eaede81a3d9aae6141214d9c8fc # v2.6.0
+    with:
+      scan-args: |-
+        --recursive
+        ./
