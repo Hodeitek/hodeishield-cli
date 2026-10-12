@@ -24,8 +24,13 @@
 #       the name is the content (or the version): it never changes
 #   InRelease, Release, Release.gpg, repomd.xml, repomd.xml.asc   no-cache
 #       the entry points, which must never be served stale or out of step with each other
-#   everything else (Packages*, per-architecture Release, .repo, gpg.key, index.html)
+#   everything else (Packages*, per-architecture Release, gpg.key, index.html)
 #       public, max-age=60
+#
+# The /gpg.key already in the bucket must be the repository key, PUBLIC_KEY: one key, with the same
+# primary fingerprint. Anything else there means that someone else wrote it, and nothing is published.
+# A different copy of the same key is replaced by PUBLIC_KEY, which is how a renewed key (same
+# fingerprint, new expiry) reaches users. Users check that key against the fingerprint in the README.
 
 set -eu
 
@@ -52,6 +57,26 @@ nocache='Cache-Control: no-cache'
 repo=$(mktemp -d)
 published=$(mktemp -d)
 trap 'rm -rf "$repo" "$published"' EXIT
+
+# primaries <file>: the primary fingerprints of the OpenPGP keys in the file, one per line.
+primaries() {
+  gpg --batch --with-colons --show-keys "$1" 2> /dev/null |
+    awk -F: '$1 == "pub" { want = 1; next } $1 == "fpr" && want { print $10; want = 0 }'
+}
+committed=$(primaries "$PUBLIC_KEY")
+[ -n "$committed" ] && [ "$(printf '%s\n' "$committed" | wc -l)" -eq 1 ] || {
+  printf 'publish.sh: %s does not hold exactly one key\n' "$PUBLIC_KEY" >&2
+  exit 1
+}
+rclone copy "$bucket" "$published" --include /gpg.key
+if [ -e "$published/gpg.key" ]; then
+  stored=$(primaries "$published/gpg.key")
+  [ "$stored" = "$committed" ] || {
+    printf 'publish.sh: the published gpg.key is not the repository key %s (it holds: %s); nothing is published\n' \
+      "$committed" "$(printf '%s' "${stored:-no key}" | tr '\n' ' ')" >&2
+    exit 1
+  }
+fi
 
 # The packages already published, which the indexes are regenerated from. Everything in the pool is
 # downloaded, so that build.sh sees (and refuses) anything that the signed index does not vouch for.
