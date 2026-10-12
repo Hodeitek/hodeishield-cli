@@ -6,6 +6,17 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-10-12
+
+### Fixed
+
+- `install.sh` now checks the release's signature with cosign v2 (2.4 or newer) as well as v3. With
+  cosign v2 it stopped with "the Sigstore signature does not verify" although the release was
+  genuine: the signatures are Sigstore bundles that cosign v2 reads only with `--new-bundle-format`,
+  which the script now adds. With an older cosign it names the version it needs instead. The README
+  and `docs/verifying-releases.md` now say which cosign versions work, and what to add with v2.
+  ([#141](https://github.com/Hodeitek/hodeishield-cli/issues/141))
+
 ## [0.4.0] - 2026-10-12
 
 ### Added
@@ -212,7 +223,8 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 - Profiles (`config`), shell completions, and release archives for Linux, macOS and Windows signed
   with Sigstore and with SLSA provenance.
 
-[Unreleased]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.2.0...v0.3.0
