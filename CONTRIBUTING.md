@@ -131,8 +131,12 @@ implementation plugged into one. **Depth** is the behaviour available per unit o
 - Commits must be signed (GPG or SSH) and use a clear, imperative message in English. Reference
   the issue it resolves with `Closes #N` in the commit message.
 - Commit messages and pull request descriptions must not mention Claude: no session trailer, no
-  co-author line, no claude.ai link, and not the word itself. Enable the local check with
-  `git config core.hooksPath .githooks`; CI runs the same check on every pull request.
+  co-author line, no claude.ai link, and not the word itself. Enable the local check by copying the
+  hook into your clone from a branch you trust, and again when it changes:
+  `cp .githooks/commit-msg .githooks/check-message.sh "$(git rev-parse --git-common-dir)/hooks/"`.
+  Do not point `core.hooksPath` at `.githooks`: git would then run the hooks of whatever branch is
+  checked out. If you set it before, run `git config --unset core.hooksPath`. CI runs the same check
+  on every pull request.
 - Every commit must be signed off: it needs a `Signed-off-by: Name <email>` trailer matching the
   commit author, which certifies the [Developer Certificate of Origin 1.1](https://developercertificate.org/).
   Add it with `git commit -s`. Merge commits count too (`git merge --signoff`). If you forgot, use
