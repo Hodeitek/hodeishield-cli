@@ -64,10 +64,10 @@ primaries() {
     awk -F: '$1 == "pub" { want = 1; next } $1 == "fpr" && want { print $10; want = 0 }'
 }
 committed=$(primaries "$PUBLIC_KEY")
-[ -n "$committed" ] && [ "$(printf '%s\n' "$committed" | wc -l)" -eq 1 ] || {
+if [ -z "$committed" ] || [ "$(printf '%s\n' "$committed" | wc -l)" -ne 1 ]; then
   printf 'publish.sh: %s does not hold exactly one key\n' "$PUBLIC_KEY" >&2
   exit 1
-}
+fi
 rclone copy "$bucket" "$published" --include /gpg.key
 if [ -e "$published/gpg.key" ]; then
   stored=$(primaries "$published/gpg.key")
