@@ -44,6 +44,9 @@ jobs:
           ref: dev
           persist-credentials: false
 
+      - name: Test the issue script
+        run: bash .github/scripts/openapi-drift-issue-test.sh
+
       - name: Compare with the published document
         id: compare
         run: |

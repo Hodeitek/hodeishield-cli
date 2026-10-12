@@ -306,6 +306,23 @@ jobs:
       - name: Run the control cases
         run: sh packaging/repo/freshness-test.sh
 
+  # The script that reports OpenAPI drift in an issue, against a stand-in for gh.
+  openapi-drift-issue:
+    name: openapi-drift-issue
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: shellcheck
+        run: shellcheck .github/scripts/openapi-drift-issue.sh .github/scripts/openapi-drift-issue-test.sh
+
+      - name: Run the tests
+        run: bash .github/scripts/openapi-drift-issue-test.sh
+
   # A pull request into main is a release: the version in Cargo.toml must have its notes.
   changelog:
     name: changelog
