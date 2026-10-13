@@ -236,7 +236,7 @@ jobs:
           persist-credentials: false
 
       - name: shellcheck
-        run: shellcheck -s sh install.sh packaging/repo/*.sh
+        run: shellcheck -s sh install.sh packaging/repo/*.sh packaging/build/*.sh
 
       - name: Every curl call in install.sh is HTTPS-only
         run: |

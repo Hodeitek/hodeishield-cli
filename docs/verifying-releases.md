@@ -192,6 +192,40 @@ also in the public Rekor transparency log: `rekor-cli search --sha <sha256 of th
 [search.sigstore.dev](https://search.sigstore.dev), lists the log entries for a file, with the
 identity and commit in each certificate.
 
+## 7. Rebuild the Linux binaries
+
+For releases after 0.4.2, you can rebuild the Linux binaries from the tag and get the same bytes as
+the release. The build runs in a container image pinned by digest (`packaging/build/image`): the
+Rust toolchain of `rust-toolchain.toml`, the Debian packages from a fixed snapshot of the Debian
+archive, and the crates locked in `Cargo.lock`. The repository is mounted at the same path inside
+the container wherever it is on your machine, so the result does not depend on where you clone it.
+
+You need git, Docker, network access to crates.io and Debian's snapshot archive, and a machine of
+the same architecture as the binary (x86_64 or aarch64).
+
+```sh
+git clone --branch v<version> https://github.com/Hodeitek/hodeishield-cli.git
+cd hodeishield-cli
+packaging/build/build.sh x86_64-unknown-linux-musl
+sha256sum target/build-image/x86_64-unknown-linux-musl/release/hodeishield
+```
+
+Then compare the result with the binary in the release archive, after checking the archive as in
+section 2:
+
+```sh
+tar -xzf hodeishield-<version>-x86_64-unknown-linux-musl.tar.gz
+sha256sum hodeishield-<version>-x86_64-unknown-linux-musl/hodeishield
+```
+
+The two SHA-256 values must be the same. The `.deb` and `.rpm` packages install the same binary as
+`/usr/bin/hodeishield`, and the container image carries it as `/usr/local/bin/hodeishield`.
+
+The `Reproducible build` workflow (`.github/workflows/reproducible-build.yml`) does the same for both
+architectures whenever a release is published, and opens an issue labelled `reproducible-build` if
+the bytes differ. The macOS and Windows binaries cannot be rebuilt this way yet
+([#170](https://github.com/Hodeitek/hodeishield-cli/issues/170)).
+
 ## Not yet
 
 The following distribution methods are not part of the latest release:

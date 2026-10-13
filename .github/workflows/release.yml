@@ -157,23 +157,14 @@ jobs:
         with:
           persist-credentials: false
 
+      # Used for the man pages only; the binary is built in the pinned image.
       - name: Install pinned toolchain
         run: rustup show
 
-      - name: Add musl target
-        run: rustup target add "$TARGET"
-
-      # musl-tools provides the musl-gcc/*-linux-musl-gcc wrapper that the
-      # `cc` crate needs to compile aws-lc-sys's C sources (rustls uses
-      # aws-lc-rs). No cmake/nasm is required: aws-lc-sys ships prebuilt NASM
-      # objects and only invokes a plain C compiler on this target.
-      - name: Install musl-tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends musl-tools
-
+      # In the image pinned in packaging/build/image, so that anyone can rebuild the same bytes from
+      # the tag (docs/verifying-releases.md); reproducible-build.yml does it for every release.
       - name: Build
-        run: cargo build --release --locked --target "$TARGET" -p hodeishield-cli
+        run: packaging/build/build.sh "$TARGET"
 
       - name: Generate man pages
         run: cargo xtask man target/man
@@ -185,7 +176,7 @@ jobs:
           set -euo pipefail
           stage="$(mktemp -d)/hodeishield-${VERSION}-${TARGET}"
           mkdir -p "$stage"
-          cp "target/${TARGET}/release/${BIN_NAME}" "$stage/"
+          cp "target/build-image/${TARGET}/release/${BIN_NAME}" "$stage/"
           cp LICENSE NOTICE README.md "$stage/"
           cp docs/user-information.md "$stage/USER-INFORMATION.md"
           mkdir -p "$stage/man"

@@ -68,7 +68,10 @@ Dependabot (`.github/dependabot.yml`) proposes cargo and GitHub Actions updates 
 
 The pins Dependabot does not cover are reviewed by hand once a month, in the dependency review:
 
-- the Rust toolchain in `rust-toolchain.toml` (latest stable, at least seven days old);
+- the Rust toolchain in `rust-toolchain.toml` (latest stable, at least seven days old), together
+  with the Linux build image in `packaging/build/image` (`IMAGE`, the official Rust image of the
+  same version by digest; `SNAPSHOT`, the Debian snapshot that image was built from; and the exact
+  `PACKAGES` versions), which `packaging/build/build.sh` refuses to use with any other version;
 - `cargo-deny` and `cargo-audit`, installed with `--version` in `.github/workflows/ci.yml` and,
   with the same versions, in the `advisories` job of `.github/workflows/release.yml`; `cargo-cyclonedx`, `nfpm` (version and SHA-256) and WiX (`WIX_VERSION`; stay on 5.x until the
   licence terms of later versions have been reviewed) in `.github/workflows/release.yml`, `nfpm`
@@ -273,6 +276,7 @@ Scheduled runs use `main`, the default branch, every Monday.
 | Repository builder tests (`repo-builder-tests.yml`) | The APT and DNF repository builder refuses forged packages and indexes | Every change to `packaging/repo`, and weekly | The run |
 | Repository freshness (`repo-freshness.yml`) | The published APT and DNF repositories are signed and current | Weekly, once `packaging/gpg.key` is committed | An issue labelled `repo-freshness` |
 | Release integrity (`release-integrity.yml`) | Release runs, published releases, their files, their Rekor entries (looked up by SHA-256) and the container image signatures match, in both directions ([docs/release-signing.md](docs/release-signing.md#weekly-release-integrity-check)) | Weekly, on demand, and on every change to the check | An issue labelled `release-integrity` |
+| Reproducible build (`reproducible-build.yml`) | The Linux binaries of a release, rebuilt from its tag in the pinned build image, are the same bytes as the released ones ([docs/verifying-releases.md](docs/verifying-releases.md#7-rebuild-the-linux-binaries)) | Every published release, and on demand | An issue labelled `reproducible-build` |
 | Proxy and TLS (`proxy-tls.yml`) | Proxy and TLS inspection behaviour against a TLS-inspecting proxy | Every change to the CLI, the API client or `Cargo.lock` | The run |
 | Dependency review (by hand) | The pins Dependabot does not cover, `cargo outdated`, actions pinned by commit | Monthly | A pull request |
 
