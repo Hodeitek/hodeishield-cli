@@ -1,0 +1,119 @@
+name: Reproducible build
+
+# When a release is published (and on demand for a tag), rebuilds its Linux musl binaries from the
+# tag on fresh runners, the way docs/verifying-releases.md tells anyone to ("Rebuild the Linux
+# binaries"), and compares them byte for byte with the binaries in the release archives. The archives
+# are checked against the release's SHA256SUMS first. The deb and rpm packages and the container
+# image carry the same binaries.
+#
+# It runs only for releases, not for every change. A difference, or anything that cannot be read,
+# fails the run and opens (or comments on) an issue labelled `reproducible-build`, which is closed by
+# hand once the cause is known. Releases up to 0.4.2 were built outside the pinned image and do not
+# reproduce.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to rebuild, such as v0.5.0"
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: reproducible-build-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  TAG: ${{ github.event.release.tag_name || inputs.tag }}
+  LABEL: reproducible-build
+
+jobs:
+  rebuild:
+    name: rebuild (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    permissions:
+      contents: read # the checkout and the release files
+    env:
+      TARGET: ${{ matrix.target }}
+    steps:
+      - name: Check the tag
+        run: |
+          set -euo pipefail
+          if ! printf '%s\n' "$TAG" | grep -Eqx 'v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?'; then
+            echo "::error::Not a release tag: $TAG"
+            exit 1
+          fi
+
+      - name: Checkout the tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ env.TAG }}
+          persist-credentials: false
+
+      - name: Rebuild
+        run: packaging/build/build.sh "$TARGET"
+
+      - name: Compare with the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version=${TAG#v}
+          archive="hodeishield-${version}-${TARGET}.tar.gz"
+          dir="$RUNNER_TEMP/release"
+          mkdir -p "$dir"
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -D "$dir" -p "$archive" -p SHA256SUMS
+          (cd "$dir" && grep -E "^[0-9a-f]{64}  ${archive}\$" SHA256SUMS | sha256sum -c -)
+          tar -xzf "$dir/$archive" -C "$dir"
+          released=$(sha256sum "$dir/hodeishield-${version}-${TARGET}/hodeishield" | cut -d' ' -f1)
+          rebuilt=$(sha256sum "target/build-image/${TARGET}/release/hodeishield" | cut -d' ' -f1)
+          {
+            echo "### ${TAG} ${TARGET}"
+            echo
+            echo "- Released: \`${released}\`"
+            echo "- Rebuilt:  \`${rebuilt}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$released" != "$rebuilt" ]; then
+            echo "::error::The rebuilt ${TARGET} binary of ${TAG} (${rebuilt}) differs from the released one (${released})."
+            exit 1
+          fi
+          echo "The rebuilt ${TARGET} binary of ${TAG} is identical to the released one: ${rebuilt}"
+
+  report:
+    name: report a difference
+    needs: rebuild
+    if: failure()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      issues: write # the issue and its label
+    steps:
+      - name: Open or comment on the issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          body="The Linux binaries of ${TAG} could not be rebuilt byte for byte from the tag, or the check could not read what it needs. See the run: ${run_url}"
+          issue=$(gh issue list -R "$GITHUB_REPOSITORY" --label "$LABEL" --state open --json number --jq '.[0].number // empty')
+          if [ -n "$issue" ]; then
+            gh issue comment "$issue" -R "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh label list -R "$GITHUB_REPOSITORY" --search "$LABEL" --json name --jq '.[].name' | grep -qx "$LABEL" ||
+              gh label create "$LABEL" -R "$GITHUB_REPOSITORY" --color B60205 \
+                --description "A release binary that cannot be rebuilt byte for byte from its tag"
+            gh issue create -R "$GITHUB_REPOSITORY" --label "$LABEL" \
+              --title "A release binary could not be rebuilt byte for byte" --body "$body"
+          fi

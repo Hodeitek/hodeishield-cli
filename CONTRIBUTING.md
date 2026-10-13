@@ -54,6 +54,11 @@ edit the expectation on purpose and add a line under `### Changed (scripting sur
 
 ### Dependency updates
 
+How a new dependency is chosen and reviewed, how the checks below fit together, what is done when a
+dependency has a vulnerability and how it is reported to its maintainers are in
+[docs/third-party-components.md](docs/third-party-components.md). A pull request that adds a
+dependency answers its criteria in the description.
+
 Dependabot (`.github/dependabot.yml`) proposes cargo and GitHub Actions updates once a week, against
 `dev`, for versions published at least seven days earlier. Major versions are left to a person.
 
@@ -63,9 +68,12 @@ Dependabot (`.github/dependabot.yml`) proposes cargo and GitHub Actions updates 
 
 The pins Dependabot does not cover are reviewed by hand once a month, in the dependency review:
 
-- the Rust toolchain in `rust-toolchain.toml` (latest stable, at least seven days old);
-- `cargo-deny` and `cargo-audit`, installed with `--version` in `.github/workflows/ci.yml`,
-  `cargo-cyclonedx`, `nfpm` (version and SHA-256) and WiX (`WIX_VERSION`; stay on 5.x until the
+- the Rust toolchain in `rust-toolchain.toml` (latest stable, at least seven days old), together
+  with the Linux build image in `packaging/build/image` (`IMAGE`, the official Rust image of the
+  same version by digest; `SNAPSHOT`, the Debian snapshot that image was built from; and the exact
+  `PACKAGES` versions), which `packaging/build/build.sh` refuses to use with any other version;
+- `cargo-deny` and `cargo-audit`, installed with `--version` in `.github/workflows/ci.yml` and,
+  with the same versions, in the `advisories` job of `.github/workflows/release.yml`; `cargo-cyclonedx`, `nfpm` (version and SHA-256) and WiX (`WIX_VERSION`; stay on 5.x until the
   licence terms of later versions have been reviewed) in `.github/workflows/release.yml`, `nfpm`
   again (version and SHA-256, the same as in `release.yml`) in
   `.github/workflows/repo-builder-tests.yml`, `oasdiff` (version and SHA-256) in
@@ -78,6 +86,31 @@ The pins Dependabot does not cover are reviewed by hand once a month, in the dep
 The same monthly review runs `cargo audit` and `cargo outdated`, and checks that every action is
 pinned by full commit SHA. The MSRV (`rust-version` in `Cargo.toml`) is a compatibility promise, not
 a dependency: it changes only by a deliberate decision.
+
+### Known vulnerabilities at release
+
+A release is not published with a known exploitable vulnerability, in the CLI or in a dependency
+(Cyber Resilience Act, Annex I, Part I, point 2(a)).
+
+- **The check.** The `advisories` job of `.github/workflows/release.yml` runs `cargo deny check
+  advisories` and `cargo audit` on the tagged commit, against the current RustSec advisory database.
+  The signing jobs and the publication of the draft wait for it: if it fails, nothing is signed or
+  published. Its result, with the tool versions and the revision of the advisory database, is the
+  last line of the release notes, so it stays with the release.
+- **What counts as exploitable.** Every advisory that the tools report for the tagged commit is
+  treated as exploitable unless the maintainers show otherwise. Fix it by updating or replacing the
+  dependency. An advisory may be accepted only when the affected code is not reachable from the CLI,
+  or its conditions cannot occur in the way the CLI uses the dependency, and the reason says what was
+  checked: the call path, the feature that is off, the input that never reaches it.
+- **Accepting an advisory.** Add an entry to `[advisories] ignore` in `deny.toml`, through a reviewed
+  pull request: `{ id = "RUSTSEC-...", reason = "<what was checked>. Review by YYYY-MM-DD." }`, with
+  a review date no more than three months ahead. CI and the release refuse a bare id, a missing
+  reason and a review date that has passed (`.github/scripts/advisory-exceptions.py`), and `cargo
+  audit` ignores exactly that list. When the date comes, check the advisory again, then fix it or
+  extend the date with a new reason. Remove the entry once the dependency is fixed.
+- **Between releases.** A new advisory makes the `deny` or `audit` job of CI fail on the next change,
+  and Dependabot and the weekly OSV-Scanner run report it (see [Security testing](#security-testing)).
+  A vulnerability in the CLI itself follows [SECURITY.md](SECURITY.md).
 
 ### The API client is generated
 
@@ -243,6 +276,7 @@ Scheduled runs use `main`, the default branch, every Monday.
 | Repository builder tests (`repo-builder-tests.yml`) | The APT and DNF repository builder refuses forged packages and indexes | Every change to `packaging/repo`, and weekly | The run |
 | Repository freshness (`repo-freshness.yml`) | The published APT and DNF repositories are signed and current | Weekly, once `packaging/gpg.key` is committed | An issue labelled `repo-freshness` |
 | Release integrity (`release-integrity.yml`) | Release runs, published releases, their files, their Rekor entries (looked up by SHA-256) and the container image signatures match, in both directions ([docs/release-signing.md](docs/release-signing.md#weekly-release-integrity-check)) | Weekly, on demand, and on every change to the check | An issue labelled `release-integrity` |
+| Reproducible build (`reproducible-build.yml`) | The Linux binaries of a release, rebuilt from its tag in the pinned build image, are the same bytes as the released ones ([docs/verifying-releases.md](docs/verifying-releases.md#7-rebuild-the-linux-binaries)) | Every published release, and on demand | An issue labelled `reproducible-build` |
 | Proxy and TLS (`proxy-tls.yml`) | Proxy and TLS inspection behaviour against a TLS-inspecting proxy | Every change to the CLI, the API client or `Cargo.lock` | The run |
 | Dependency review (by hand) | The pins Dependabot does not cover, `cargo outdated`, actions pinned by commit | Monthly | A pull request |
 

@@ -6,6 +6,36 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-10-14
+
+### Added
+
+- `docs/technical-documentation.md`: the index of the technical documentation of the Cyber
+  Resilience Act (Annex VII), with the product category, the conformity route, who signs the
+  declaration, how the CE marking is shown for software and how the documentation is kept; and
+  `docs/declaration-of-conformity.md`, the template of the EU declaration of conformity. The
+  user information now gives the address of the declaration.
+  ([#129](https://github.com/Hodeitek/hodeishield-cli/issues/129))
+- `docs/third-party-components.md`: the criteria for adding a dependency and who reviews it, how
+  the dependency checks fit together, what is done when a dependency has a vulnerability, and how
+  it is reported to the component's maintainers with any fix. SECURITY.md, CONTRIBUTING.md and the
+  pull request template point to it.
+  ([#130](https://github.com/Hodeitek/hodeishield-cli/issues/130))
+- The Linux binaries can be rebuilt from the release tag with the same bytes:
+  `packaging/build/build.sh` builds them in a container image pinned by digest, with Debian packages
+  from a fixed snapshot, and the release builds them the same way. `docs/verifying-releases.md`
+  describes the rebuild, and a workflow repeats it for every published release.
+  ([#43](https://github.com/Hodeitek/hodeishield-cli/issues/43))
+
+### Changed
+
+- A release is no longer signed or published while a security advisory is open for its tagged
+  commit: the release workflow checks it with `cargo deny` and `cargo audit` against the RustSec
+  advisory database, and the release notes end with the result. An advisory can only be accepted
+  in `deny.toml` with a written reason and a review date, which CI checks; `CONTRIBUTING.md`
+  ("Known vulnerabilities at release") has the rule.
+  ([#121](https://github.com/Hodeitek/hodeishield-cli/issues/121))
+
 ## [0.4.2] - 2026-10-12
 
 ### Added
@@ -267,7 +297,8 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 - Profiles (`config`), shell completions, and release archives for Linux, macOS and Windows signed
   with Sigstore and with SLSA provenance.
 
-[Unreleased]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.4.3...HEAD
+[0.4.3]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.3.1...v0.4.0
