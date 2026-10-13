@@ -19,6 +19,11 @@ commands, `--json` output and exit codes. Each release's notes start with its se
   it is reported to the component's maintainers with any fix. SECURITY.md, CONTRIBUTING.md and the
   pull request template point to it.
   ([#130](https://github.com/Hodeitek/hodeishield-cli/issues/130))
+- The Linux binaries can be rebuilt from the release tag with the same bytes:
+  `packaging/build/build.sh` builds them in a container image pinned by digest, with Debian packages
+  from a fixed snapshot, and the release builds them the same way. `docs/verifying-releases.md`
+  describes the rebuild, and a workflow repeats it for every published release.
+  ([#43](https://github.com/Hodeitek/hodeishield-cli/issues/43))
 
 ### Changed
 
