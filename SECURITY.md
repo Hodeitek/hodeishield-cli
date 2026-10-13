@@ -159,6 +159,10 @@ here, in the security notice block at the top of [README.md](README.md) (see
 - The release pipeline: a download that verifies (checksum, Sigstore signature, SLSA provenance) but
   was not built by this repository's release workflow.
 
+A vulnerability in a component the CLI is built from is in scope when it affects the CLI. We pass it
+to the component's maintainers and share any fix, as described in
+[docs/third-party-components.md](docs/third-party-components.md#reporting-a-vulnerability-to-the-components-maintainers).
+
 Vulnerabilities in the HodeiShield service itself are also welcome through the same channel; we route
 them to the right team.
 

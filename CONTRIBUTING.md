@@ -54,6 +54,11 @@ edit the expectation on purpose and add a line under `### Changed (scripting sur
 
 ### Dependency updates
 
+How a new dependency is chosen and reviewed, how the checks below fit together, what is done when a
+dependency has a vulnerability and how it is reported to its maintainers are in
+[docs/third-party-components.md](docs/third-party-components.md). A pull request that adds a
+dependency answers its criteria in the description.
+
 Dependabot (`.github/dependabot.yml`) proposes cargo and GitHub Actions updates once a week, against
 `dev`, for versions published at least seven days earlier. Major versions are left to a person.
 
