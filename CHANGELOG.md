@@ -14,6 +14,11 @@ commands, `--json` output and exit codes. Each release's notes start with its se
   `docs/declaration-of-conformity.md`, the template of the EU declaration of conformity. The
   user information now gives the address of the declaration.
   ([#129](https://github.com/Hodeitek/hodeishield-cli/issues/129))
+- `docs/third-party-components.md`: the criteria for adding a dependency and who reviews it, how
+  the dependency checks fit together, what is done when a dependency has a vulnerability, and how
+  it is reported to the component's maintainers with any fix. SECURITY.md, CONTRIBUTING.md and the
+  pull request template point to it.
+  ([#130](https://github.com/Hodeitek/hodeishield-cli/issues/130))
 
 ### Changed
 
