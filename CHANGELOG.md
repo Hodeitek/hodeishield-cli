@@ -6,6 +6,18 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ## [Unreleased]
 
+### Added
+
+- `reports list`, `reports get` and `reports download`: the reports generated for the tenant, and
+  their files. `reports list` filters by `--type`, `--status` and `--since` and takes the usual
+  paging, `--json` and `--csv`; `reports get` shows the formats a report can be downloaded in.
+  `reports download` saves a completed report as PDF or XLSX (`--format`, `--locale`) in the current
+  directory under the name the API suggests, reduced to a plain file name, or at `--output <PATH>`;
+  `--output -` writes it to standard output when that is not a terminal. An existing file is only
+  replaced with `--force`, and a file is never left half written. A report that is still being
+  generated, failed, has no file in that format or is too large fails with a message that says so.
+  ([#55](https://github.com/Hodeitek/hodeishield-cli/issues/55))
+
 ### Changed
 
 - `risks list --domain` and `--status` and `compliance controls --status` now list the values the

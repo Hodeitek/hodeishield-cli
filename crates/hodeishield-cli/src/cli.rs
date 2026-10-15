@@ -10,8 +10,10 @@ use hodeishield_api::ParseEnumError;
 use hodeishield_api::v1::operations;
 use hodeishield_api::v1::{
     AlertSort, AlertStatus, BusinessCriticality, ComplianceControlSort, EndpointSort,
-    EndpointStatus, EvidenceSort, Order, RiskSort, VendorSort,
+    EndpointStatus, EvidenceSort, Format, Locale, Order, ReportSort, RiskSort, VendorSort,
 };
+use std::io::IsTerminal;
+use std::path::PathBuf;
 use std::str::FromStr;
 
 const AFTER_HELP: &str = "\
@@ -108,6 +110,9 @@ pub enum Command {
     /// Enrolled endpoint agents.
     #[command(subcommand)]
     Endpoints(EndpointsCommand),
+    /// Reports generated for the tenant, and their files.
+    #[command(subcommand)]
+    Reports(ReportsCommand),
     /// Client tenants a portfolio (MSSP) credential may read.
     #[command(subcommand)]
     Tenants(TenantsCommand),
@@ -168,6 +173,15 @@ impl Cli {
                 .error(clap::error::ErrorKind::ArgumentConflict, message)
                 .exit();
         }
+        if cli.command.downloads_to_stdout() && std::io::stdout().is_terminal() {
+            Self::command()
+                .error(
+                    clap::error::ErrorKind::InvalidValue,
+                    "'--output -' writes the file to standard output, which is a terminal here; \
+                     redirect it to a file or a pipe, or give a path",
+                )
+                .exit();
+        }
         cli
     }
 
@@ -214,6 +228,7 @@ impl Cli {
         self.json
             || matches!(self.command, Command::Completions { .. })
             || self.command.paging().is_some_and(|paging| paging.csv)
+            || self.command.downloads_to_stdout()
     }
 }
 
@@ -228,7 +243,13 @@ impl Command {
                 | Self::Compliance(_)
                 | Self::Evidence(_)
                 | Self::Endpoints(_)
+                | Self::Reports(_)
         )
+    }
+
+    /// Whether this is a download whose file goes to standard output (`--output -`).
+    fn downloads_to_stdout(&self) -> bool {
+        matches!(self, Self::Reports(ReportsCommand::Download(download)) if download.to_stdout())
     }
 
     /// The paging options, for the commands that list.
@@ -240,6 +261,7 @@ impl Command {
             Self::Compliance(ComplianceCommand::Controls(list)) => Some(&list.paging),
             Self::Evidence(EvidenceCommand::List(list)) => Some(&list.paging),
             Self::Endpoints(EndpointsCommand::List(list)) => Some(&list.paging),
+            Self::Reports(ReportsCommand::List(list)) => Some(&list.paging),
             Self::Tenants(TenantsCommand::List(list)) => Some(&list.paging),
             _ => None,
         }
@@ -462,6 +484,77 @@ pub struct EndpointsList {
     pub sort: Option<EndpointSort>,
     #[command(flatten)]
     pub paging: Paging,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ReportsCommand {
+    /// List generated reports, newest first.
+    List(ReportsList),
+    /// Show one report, with the formats it can be downloaded in.
+    Get {
+        /// Report id.
+        id: String,
+    },
+    /// Download a report's file (PDF or XLSX).
+    #[command(long_about = DOWNLOAD_ABOUT)]
+    Download(ReportsDownload),
+}
+
+const DOWNLOAD_ABOUT: &str = "\
+Download a report's file (PDF or XLSX). Only a completed report has one; `reports get` lists the \
+formats it can be downloaded in.
+
+By default the file is saved in the current directory under the name the API suggests, reduced to \
+letters, digits, `.`, `_` and `-` (or report-<id>.<format> when nothing usable is left). An existing \
+file is never replaced without --force, and the file appears in full or not at all.";
+
+#[derive(Debug, Args)]
+pub struct ReportsList {
+    /// Exact report type.
+    #[arg(
+        long = "type",
+        visible_alias = "report-type",
+        value_name = "TYPE",
+        help = filters::help("Exact report type.", &operations::LIST_REPORTS, "report_type")
+    )]
+    pub report_type: Option<String>,
+    /// Exact status.
+    #[arg(long, help = filters::help("Exact status.", &operations::LIST_REPORTS, "status"))]
+    pub status: Option<String>,
+    /// Only reports created at or after this RFC 3339 instant, e.g. 2026-01-31T00:00:00Z.
+    #[arg(long, value_name = "INSTANT")]
+    pub since: Option<String>,
+    /// Field to order by.
+    #[arg(long, value_parser = choice::<ReportSort>(ReportSort::VALUES))]
+    pub sort: Option<ReportSort>,
+    #[command(flatten)]
+    pub paging: Paging,
+}
+
+#[derive(Debug, Args)]
+pub struct ReportsDownload {
+    /// Report id.
+    pub id: String,
+    /// File format; the API sends pdf when it is not given.
+    #[arg(long, value_parser = choice::<Format>(Format::VALUES))]
+    pub format: Option<Format>,
+    /// Language of the file; the API uses en when it is not given.
+    #[arg(long, value_parser = choice::<Locale>(Locale::VALUES))]
+    pub locale: Option<Locale>,
+    /// Where to save the file: a file path, a directory to save it in under the suggested name, or
+    /// `-` for standard output (not a terminal).
+    #[arg(long, short, value_name = "PATH")]
+    pub output: Option<PathBuf>,
+    /// Replace the file if it exists.
+    #[arg(long)]
+    pub force: bool,
+}
+
+impl ReportsDownload {
+    /// Whether the file goes to standard output (`--output -`).
+    pub fn to_stdout(&self) -> bool {
+        self.output.as_deref() == Some(std::path::Path::new("-"))
+    }
 }
 
 #[derive(Debug, Subcommand)]

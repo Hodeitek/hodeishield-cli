@@ -4,10 +4,11 @@
 //! The read commands: one per `/v1` collection.
 
 use super::Context;
+use super::save;
 use super::tenants::{Selection, Target};
 use crate::cli::{
-    AlertsCommand, ComplianceCommand, EndpointsCommand, EvidenceCommand, Paging, RisksCommand,
-    VendorsCommand,
+    AlertsCommand, ComplianceCommand, EndpointsCommand, EvidenceCommand, Paging, ReportsCommand,
+    ReportsDownload, RisksCommand, VendorsCommand,
 };
 use crate::failure::{ApiContext, CredentialSource, Failure, Kind, Result, from_api};
 use crate::filters::warn_unknown;
@@ -18,9 +19,9 @@ use crate::output::{
 use hodeishield_api::Client;
 use hodeishield_api::portfolio::Tenant;
 use hodeishield_api::v1::{
-    Alert, ComplianceControl, Endpoint, Evidence, ListAlertsParams, ListComplianceControlsParams,
-    ListEndpointsParams, ListEvidenceParams, ListRisksParams, ListVendorsParams, Pagination, Risk,
-    Vendor, operations,
+    Alert, ComplianceControl, DownloadReportParams, Endpoint, Evidence, Format, ListAlertsParams,
+    ListComplianceControlsParams, ListEndpointsParams, ListEvidenceParams, ListReportsParams,
+    ListRisksParams, ListVendorsParams, Pagination, Report, Risk, Vendor, operations,
 };
 use hodeishield_api::{ApiResponse, Error};
 use serde::Serialize;
@@ -726,6 +727,147 @@ fn endpoint_table(items: &[Endpoint]) -> Rows {
             })
             .collect(),
     )
+}
+
+pub fn reports(ctx: &Context, command: ReportsCommand, out: &mut dyn Write) -> Result<()> {
+    let settings = ctx.settings()?;
+    match command {
+        ReportsCommand::List(args) => {
+            warn_unknown(
+                &operations::LIST_REPORTS,
+                &[
+                    ("report_type", args.report_type.as_deref()),
+                    ("status", args.status.as_deref()),
+                ],
+            );
+            let (targets, source) = ctx.targets(&settings)?;
+            let base = ListReportsParams {
+                report_type: args.report_type,
+                status: args.status,
+                since: args.since,
+                sort: args.sort,
+                order: args.paging.order,
+                ..ListReportsParams::default()
+            };
+            list(
+                ctx,
+                out,
+                &args.paging,
+                "reports",
+                plain(ctx, source),
+                &targets,
+                &mut |client, page, per_page| {
+                    client.list_reports(&ListReportsParams {
+                        page,
+                        per_page,
+                        ..base.clone()
+                    })
+                },
+                |r| (r.data, r.pagination),
+                report_table,
+            )
+        }
+        ReportsCommand::Get { id } => {
+            let (client, source) = ctx.single(&settings)?;
+            show(ctx, out, plain(ctx, source), client.get_report(&id), |r| {
+                &r.data
+            })
+        }
+        ReportsCommand::Download(args) => download(ctx, &settings, &args, out),
+    }
+}
+
+fn report_table(items: &[Report]) -> Rows {
+    Rows::new(
+        &["ID", "TYPE", "TITLE", "PERIOD", "STATUS", "CREATED"],
+        items
+            .iter()
+            .map(|r| {
+                vec![
+                    clean(&r.id),
+                    clean(&r.report_type),
+                    clean(&r.title),
+                    format!("{} to {}", clean(&r.period_start), clean(&r.period_end)),
+                    clean(&r.status),
+                    short_time(Some(&r.created_at)),
+                ]
+            })
+            .collect(),
+    )
+}
+
+/// What `reports download --json` prints once the file is saved.
+#[derive(Serialize)]
+struct Saved<'a> {
+    path: String,
+    bytes: usize,
+    content_type: Option<&'a str>,
+}
+
+/// Downloads a report's file and saves it (see `ReportsDownload`), or writes it to standard output.
+fn download(
+    ctx: &Context,
+    settings: &crate::config::Settings,
+    args: &ReportsDownload,
+    out: &mut dyn Write,
+) -> Result<()> {
+    // A path given up front is checked before the download, which the API records in the audit
+    // trail: no point fetching a file that cannot be saved. The save checks again.
+    let directory = args.output.as_deref().filter(|path| path.is_dir());
+    if let Some(path) = &args.output
+        && !args.to_stdout()
+        && directory.is_none()
+        && !args.force
+        && save::exists(path)
+    {
+        return Err(save::already_exists(path));
+    }
+    let (client, source) = ctx.single(settings)?;
+    let params = DownloadReportParams {
+        format: args.format,
+        locale: args.locale,
+    };
+    let file = client
+        .download_report(&args.id, &params)
+        .map_err(|e| from_api(e, &plain(ctx, source)))?;
+    if args.to_stdout() {
+        out.write_all(&file.bytes)?;
+        if !ctx.json {
+            eprintln!(
+                "Wrote {} to standard output.",
+                count(file.bytes.len(), "bytes")
+            );
+        }
+        return Ok(());
+    }
+    let path = match (&args.output, directory) {
+        (Some(path), None) => path.clone(),
+        (_, directory) => {
+            let extension = args.format.unwrap_or(Format::Pdf).as_str();
+            let name = save::file_name(file.file_name.as_deref(), &args.id, extension);
+            match directory {
+                Some(directory) => directory.join(name),
+                None => name.into(),
+            }
+        }
+    };
+    save::write_new(&path, &file.bytes, args.force)?;
+    if ctx.json {
+        let saved = Saved {
+            path: path.display().to_string(),
+            bytes: file.bytes.len(),
+            content_type: file.content_type.as_deref(),
+        };
+        let value = serde_json::to_value(saved)
+            .map_err(|e| crate::failure::Failure::general(e.to_string()))?;
+        return Ok(print_json(out, &value)?);
+    }
+    eprintln!(
+        "Saved {} ({}).",
+        clean(&path.display().to_string()),
+        count(file.bytes.len(), "bytes")
+    );
+    Ok(())
 }
 
 #[cfg(test)]

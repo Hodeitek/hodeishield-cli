@@ -499,7 +499,7 @@ fn only_get_is_ever_sent() {
     let gets = server
         .mock("GET", mockito::Matcher::Any)
         .with_body(page(&[], 1, 0, 0))
-        .expect(6)
+        .expect(7)
         .create();
     for args in [
         vec!["vendors", "list"],
@@ -507,6 +507,7 @@ fn only_get_is_ever_sent() {
         vec!["risks", "list"],
         vec!["evidence", "list"],
         vec!["endpoints", "list"],
+        vec!["reports", "list"],
         vec!["compliance", "controls", "-f", "ens"],
     ] {
         env.api(&server).args(&args).assert().success();
@@ -1365,6 +1366,8 @@ fn the_selection_is_refused_where_it_cannot_apply() {
         &["--tenant", "acme", "whoami"][..],
         &["--all-tenants", "tenants", "list"][..],
         &["--all-tenants", "vendors", "get", "v1"][..],
+        &["--all-tenants", "reports", "get", "r1"][..],
+        &["--all-tenants", "reports", "download", "r1"][..],
         &["--all-tenants", "compliance", "posture", "nis2"][..],
         &["--all-tenants", "vendors", "list", "--page", "2"][..],
     ] {
@@ -2201,5 +2204,454 @@ fn the_client_wording_of_a_tenant_rate_limit_needs_a_selected_client() {
             String::from_utf8_lossy(&output.stderr).contains(wording),
             "{scope} {args:?}: {output:?}"
         );
+    }
+}
+
+const REPORT_ID: &str = "0b8f2a52-6a0e-4d5c-9d3e-1f2a3b4c5d6e";
+
+fn report(id: &str, title: &str, status: &str) -> String {
+    format!(
+        r#"{{"id":"{id}","report_type":"monthly","title":"{title}","period_start":"2026-09-01","period_end":"2026-09-30","status":"{status}","created_at":"2026-10-01T06:00:00.000Z"}}"#
+    )
+}
+
+/// A mock of the download of [`REPORT_ID`] that serves `body` under `disposition`.
+fn mock_download(server: &mut mockito::Server, disposition: &str, body: &[u8]) -> mockito::Mock {
+    server
+        .mock("GET", format!("/v1/reports/{REPORT_ID}/download").as_str())
+        .match_query(mockito::Matcher::Any)
+        .with_header("content-type", "application/pdf")
+        .with_header("content-disposition", disposition)
+        .with_body(body)
+        .create()
+}
+
+/// The names of the entries of `dir`, sorted.
+fn entries(dir: &std::path::Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .expect("list")
+        .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+#[test]
+fn reports_list_prints_a_table_and_the_json_body() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    server
+        .mock("GET", "/v1/reports")
+        .match_query(mockito::Matcher::AllOf(vec![
+            mockito::Matcher::UrlEncoded("report_type".into(), "monthly".into()),
+            mockito::Matcher::UrlEncoded("status".into(), "completed".into()),
+            mockito::Matcher::UrlEncoded("sort".into(), "period_end".into()),
+        ]))
+        .with_body(page(
+            &[report(REPORT_ID, "September summary", "completed")],
+            1,
+            1,
+            1,
+        ))
+        .expect(2)
+        .create();
+    let args = [
+        "reports",
+        "list",
+        "--type",
+        "monthly",
+        "--status",
+        "completed",
+        "--sort",
+        "period_end",
+    ];
+    let output = env.api(&server).args(args).output().expect("run");
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let header: Vec<&str> = stdout
+        .lines()
+        .next()
+        .expect("header")
+        .split_whitespace()
+        .collect();
+    assert_eq!(
+        header,
+        ["ID", "TYPE", "TITLE", "PERIOD", "STATUS", "CREATED"]
+    );
+    assert!(
+        stdout.contains("September summary")
+            && stdout.contains("2026-09-01 to 2026-09-30")
+            && stdout.contains("2026-10-01 06:00Z"),
+        "{stdout}"
+    );
+    assert!(output.stderr.is_empty(), "{output:?}");
+
+    let output = env
+        .api(&server)
+        .arg("--json")
+        .args(args)
+        .output()
+        .expect("run");
+    assert!(output.status.success(), "{output:?}");
+    let body: serde_json::Value = serde_json::from_slice(&output.stdout).expect("json");
+    assert_eq!(body["data"][0]["title"], "September summary");
+}
+
+#[test]
+fn listed_report_filters_warn_and_are_sent_as_typed() {
+    for (args, param, value, expected) in [
+        (
+            vec!["reports", "list", "--type", "Monthly"],
+            "report_type",
+            "Monthly",
+            Some(
+                "for --report-type (monthly, vendor_risk, nis2_compliance, ens, cyberbrief, compliance, security_posture, board_report); did you mean `monthly`? Sending it anyway.",
+            ),
+        ),
+        (
+            vec!["reports", "list", "--report-type", "ens"],
+            "report_type",
+            "ens",
+            None,
+        ),
+        (
+            vec!["reports", "list", "--status", "ready"],
+            "status",
+            "ready",
+            Some(
+                "warning: `ready` is not one of the values the API lists for --status (generating, completed, failed); sending it anyway.",
+            ),
+        ),
+    ] {
+        let env = Env::new();
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock("GET", "/v1/reports")
+            .match_query(mockito::Matcher::UrlEncoded(param.into(), value.into()))
+            .with_body(page(&[], 1, 0, 1))
+            .expect(1)
+            .create();
+        let output = env.api(&server).args(&args).output().expect("run");
+        assert!(output.status.success(), "{args:?}: {output:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        match expected {
+            Some(warning) => assert!(stderr.contains(warning), "{args:?}: {stderr}"),
+            None => assert!(!stderr.contains("warning:"), "{args:?}: {stderr}"),
+        }
+        mock.assert();
+    }
+}
+
+#[test]
+fn reports_get_shows_the_download_formats() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    let detail = report(REPORT_ID, "September summary", "completed")
+        .replace('}', r#","download_formats":["pdf","xlsx"]}"#);
+    server
+        .mock("GET", format!("/v1/reports/{REPORT_ID}").as_str())
+        .with_body(format!(r#"{{"data":{detail}}}"#))
+        .expect(2)
+        .create();
+    let output = env
+        .api(&server)
+        .args(["reports", "get", REPORT_ID])
+        .output()
+        .expect("run");
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("download_formats  pdf, xlsx"), "{stdout}");
+    let output = env
+        .api(&server)
+        .args(["--json", "reports", "get", REPORT_ID])
+        .output()
+        .expect("run");
+    assert!(output.status.success(), "{output:?}");
+    let body: serde_json::Value = serde_json::from_slice(&output.stdout).expect("json");
+    assert_eq!(body["data"]["download_formats"][1], "xlsx");
+}
+
+#[test]
+fn a_download_is_saved_in_the_current_directory_under_the_suggested_name() {
+    let env = Env::new();
+    let cwd = tempfile::tempdir().expect("tempdir");
+    let mut server = mockito::Server::new();
+    let bytes = b"%PDF-1.7\n\x00\x01binary\xff";
+    let mock = server
+        .mock("GET", format!("/v1/reports/{REPORT_ID}/download").as_str())
+        .match_query(mockito::Matcher::AllOf(vec![
+            mockito::Matcher::UrlEncoded("format".into(), "xlsx".into()),
+            mockito::Matcher::UrlEncoded("locale".into(), "es".into()),
+        ]))
+        .with_header(
+            "content-type",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        .with_header(
+            "content-disposition",
+            r#"attachment; filename="monthly-2026-09.xlsx""#,
+        )
+        .with_body(bytes)
+        .expect(1)
+        .create();
+    let output = env
+        .api(&server)
+        .current_dir(cwd.path())
+        .args([
+            "reports", "download", REPORT_ID, "--format", "xlsx", "--locale", "es",
+        ])
+        .output()
+        .expect("run");
+    assert!(output.status.success(), "{output:?}");
+    mock.assert();
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        format!("Saved monthly-2026-09.xlsx ({} bytes).\n", bytes.len())
+    );
+    assert_eq!(entries(cwd.path()), ["monthly-2026-09.xlsx"]);
+    assert_eq!(
+        std::fs::read(cwd.path().join("monthly-2026-09.xlsx")).expect("read"),
+        bytes
+    );
+}
+
+#[test]
+fn a_download_goes_to_the_output_path_or_into_the_output_directory() {
+    let env = Env::new();
+    let cwd = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir(cwd.path().join("out")).expect("mkdir");
+    let mut server = mockito::Server::new();
+    mock_download(&mut server, r#"attachment; filename="r.pdf""#, b"%PDF-");
+    let target = cwd.path().join("chosen.pdf");
+    env.api(&server)
+        .current_dir(cwd.path())
+        .args(["reports", "download", REPORT_ID, "-o"])
+        .arg(&target)
+        .assert()
+        .success();
+    assert_eq!(std::fs::read(&target).expect("read"), b"%PDF-");
+    env.api(&server)
+        .current_dir(cwd.path())
+        .args(["reports", "download", REPORT_ID, "--output", "out"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("r.pdf (5 bytes)"));
+    assert_eq!(entries(&cwd.path().join("out")), ["r.pdf"]);
+    assert_eq!(entries(cwd.path()), ["chosen.pdf", "out"]);
+}
+
+#[test]
+fn an_existing_file_is_not_replaced_without_force() {
+    let env = Env::new();
+    let cwd = tempfile::tempdir().expect("tempdir");
+    let target = cwd.path().join("keep.pdf");
+    std::fs::write(&target, b"mine").expect("write");
+    std::fs::write(cwd.path().join("r.pdf"), b"also mine").expect("write");
+    let mut server = mockito::Server::new();
+    let mock = mock_download(&mut server, r#"attachment; filename="r.pdf""#, b"theirs");
+
+    // A path given with -o is checked before anything is downloaded.
+    let output = env
+        .api(&server)
+        .current_dir(cwd.path())
+        .args(["reports", "download", REPORT_ID, "-o", "keep.pdf"])
+        .output()
+        .expect("run");
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("keep.pdf already exists") && stderr.contains("--force"),
+        "{stderr}"
+    );
+    assert_eq!(std::fs::read(&target).expect("read"), b"mine");
+
+    // The suggested name is only known after the download; it is not replaced either.
+    let output = env
+        .api(&server)
+        .current_dir(cwd.path())
+        .args(["reports", "download", REPORT_ID])
+        .output()
+        .expect("run");
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert_eq!(
+        std::fs::read(cwd.path().join("r.pdf")).expect("read"),
+        b"also mine"
+    );
+    assert_eq!(entries(cwd.path()), ["keep.pdf", "r.pdf"]);
+    mock.expect(1).assert();
+
+    // --force replaces both.
+    for args in [&["-o", "keep.pdf", "--force"][..], &["--force"][..]] {
+        env.api(&server)
+            .current_dir(cwd.path())
+            .args(["reports", "download", REPORT_ID])
+            .args(args)
+            .assert()
+            .success();
+    }
+    assert_eq!(std::fs::read(&target).expect("read"), b"theirs");
+    assert_eq!(
+        std::fs::read(cwd.path().join("r.pdf")).expect("read"),
+        b"theirs"
+    );
+    assert_eq!(entries(cwd.path()), ["keep.pdf", "r.pdf"]);
+}
+
+#[test]
+fn a_hostile_suggested_name_is_saved_as_a_plain_name_in_the_current_directory() {
+    let fallback = format!("report-{REPORT_ID}.pdf");
+    for (disposition, expected) in [
+        (r#"attachment; filename="../../etc/passwd""#, "passwd"),
+        (r#"attachment; filename="a/b\\c.pdf""#, "c.pdf"),
+        (r#"attachment; filename="..""#, fallback.as_str()),
+        (r#"attachment; filename=".hidden rc""#, "hidden_rc"),
+        (r#"attachment; filename="-rf *.pdf""#, "rf__.pdf"),
+        (
+            "attachment; filename=\"\u{202e}fdp.exe\"",
+            fallback.as_str(),
+        ),
+        ("attachment", fallback.as_str()),
+    ] {
+        let env = Env::new();
+        let root = tempfile::tempdir().expect("tempdir");
+        let cwd = root.path().join("work");
+        std::fs::create_dir(&cwd).expect("mkdir");
+        let mut server = mockito::Server::new();
+        mock_download(&mut server, disposition, b"%PDF-");
+        let output = env
+            .api(&server)
+            .current_dir(&cwd)
+            .args(["reports", "download", REPORT_ID])
+            .output()
+            .expect("run");
+        assert!(output.status.success(), "{disposition}: {output:?}");
+        assert_eq!(entries(&cwd), [expected], "{disposition}");
+        assert_eq!(entries(root.path()), ["work"], "{disposition}");
+        assert!(!output.stderr.contains(&0x1b), "{disposition}");
+    }
+}
+
+#[test]
+fn output_dash_writes_the_file_to_standard_output() {
+    let env = Env::new();
+    let cwd = tempfile::tempdir().expect("tempdir");
+    let mut server = mockito::Server::new();
+    let bytes = b"%PDF-\x00\x1b\xff";
+    mock_download(&mut server, r#"attachment; filename="r.pdf""#, bytes);
+    for json in [false, true] {
+        let mut cmd = env.api(&server);
+        if json {
+            cmd.arg("--json");
+        }
+        let output = cmd
+            .current_dir(cwd.path())
+            .args(["reports", "download", REPORT_ID, "-o", "-"])
+            .output()
+            .expect("run");
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(output.stdout, bytes, "nothing but the file on stdout");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if json {
+            assert!(stderr.is_empty(), "{stderr}");
+        } else {
+            assert_eq!(stderr, "Wrote 8 bytes to standard output.\n");
+        }
+    }
+    assert!(entries(cwd.path()).is_empty());
+}
+
+#[test]
+fn a_report_that_cannot_be_served_yet_explains_why() {
+    for (details, message, hint) in [
+        (
+            r#"{"code":"REPORT_NOT_READY","status":"generating"}"#,
+            "The report is still being generated, so it has no file yet.",
+            "Try again later",
+        ),
+        (
+            r#"{"code":"REPORT_NOT_READY","status":"failed"}"#,
+            "The report failed to generate, so it has no file.",
+            "Generate it again",
+        ),
+        (
+            r#"{"code":"FORMAT_UNSUPPORTED","formats":["pdf"]}"#,
+            "The report cannot be downloaded in that format.",
+            "Choose one of its formats with --format: pdf.",
+        ),
+        (
+            r#"{"code":"FORMAT_UNSUPPORTED","formats":[]}"#,
+            "The report cannot be downloaded in that format.",
+            "reports get <id>` lists the formats",
+        ),
+        (
+            r#"{"code":"FILE_TOO_LARGE","limit_bytes":20971520}"#,
+            "larger than the API serves (20971520 bytes)",
+            "",
+        ),
+    ] {
+        let env = Env::new();
+        let cwd = tempfile::tempdir().expect("tempdir");
+        let mut server = mockito::Server::new();
+        server
+            .mock("GET", format!("/v1/reports/{REPORT_ID}/download").as_str())
+            .match_query(mockito::Matcher::Any)
+            .with_status(409)
+            .with_body(format!(
+                r#"{{"error":{{"code":"conflict","message":"no","request_id":"req_409","details":{details}}}}}"#
+            ))
+            .create();
+        let output = env
+            .api(&server)
+            .current_dir(cwd.path())
+            .args(["reports", "download", REPORT_ID])
+            .output()
+            .expect("run");
+        assert_eq!(output.status.code(), Some(1), "{details}: {output:?}");
+        assert!(output.stdout.is_empty(), "{details}: {output:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(message) && stderr.contains(hint),
+            "{details}: {stderr}"
+        );
+        assert!(stderr.contains("request id: req_409"), "{stderr}");
+        assert!(entries(cwd.path()).is_empty(), "{details}");
+    }
+}
+
+#[test]
+fn server_text_about_a_download_cannot_drive_the_terminal() {
+    let env = Env::new();
+    let cwd = tempfile::tempdir().expect("tempdir");
+    let mut server = mockito::Server::new();
+    server
+        .mock("GET", format!("/v1/reports/{REPORT_ID}/download").as_str())
+        .match_query(mockito::Matcher::Any)
+        .with_status(409)
+        .with_body(r#"{"error":{"code":"conflict","message":"busy \u001b]0;pwned\u0007 \u009b31m","request_id":"r\u001b[5m","details":{"code":"FORMAT_UNSUPPORTED","formats":["pdf\u001b[2J","xlsx"]}}}"#)
+        .create();
+    server
+        .mock("GET", "/v1/reports/other/download")
+        .match_query(mockito::Matcher::Any)
+        .with_status(409)
+        .with_body(r#"{"error":{"code":"conflict","message":"busy \u001b]0;pwned\u0007 \u009b31m","request_id":"r","details":{"code":"SOMETHING_NEW"}}}"#)
+        .create();
+    for id in [REPORT_ID, "other"] {
+        let output = env
+            .api(&server)
+            .current_dir(cwd.path())
+            .args(["reports", "download", id])
+            .output()
+            .expect("run");
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        let all = [output.stdout.as_slice(), output.stderr.as_slice()].concat();
+        assert!(!all.contains(&0x1b) && !all.contains(&0x07), "{output:?}");
+        let text = String::from_utf8_lossy(&all);
+        assert!(!text.contains('\u{9b}'), "{text}");
+        if id == "other" {
+            assert!(text.contains("The API refused the request: busy"), "{text}");
+        } else {
+            assert!(text.contains("--format: xlsx."), "{text}");
+        }
     }
 }
