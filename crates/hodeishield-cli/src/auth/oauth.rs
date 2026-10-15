@@ -896,6 +896,7 @@ mod tests {
                 "supply_risk:read",
                 "evidence:read",
                 "endpoints:read",
+                "reports:read",
                 "offline_access"
             ]
         );
