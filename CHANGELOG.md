@@ -6,6 +6,14 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ## [Unreleased]
 
+### Fixed
+
+- The README installs with Homebrew by the full name, `brew install hodeitek/hodeishield/hodeishield`,
+  which adds the tap and trusts only this formula. Homebrew now refuses a formula from a tap that is
+  not trusted, so the earlier `brew tap` then `brew install hodeishield` failed. The README also says
+  how to trust the formula when the tap was added before.
+  ([#179](https://github.com/Hodeitek/hodeishield-cli/issues/179))
+
 ## [0.4.4] - 2026-10-15
 
 ### Security
