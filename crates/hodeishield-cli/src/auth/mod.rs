@@ -3,6 +3,7 @@
 
 //! Credentials: a tenant API key from the environment, or a sign-in token from the keychain.
 
+pub mod file_store;
 pub mod loopback;
 pub mod oauth;
 pub mod store;
@@ -101,6 +102,15 @@ pub fn not_signed_in(settings: &Settings) -> Failure {
 /// Windows): it is "not authenticated" (exit code 3), with a pointer to the API key. Any other
 /// store failure (a corrupt entry, say) passes through unchanged: it already says what happened.
 pub fn explain_store_failure(failure: Failure) -> Failure {
+    if failure.message.starts_with(file_store::TOKEN_FILE_REFUSED) {
+        // A token file that is refused is not a credential: "not authenticated", with the store's
+        // own hint, which already names the API key.
+        let refused = Failure::new(Kind::NotAuthenticated, failure.message);
+        return match failure.hint {
+            Some(own) => refused.hint(own),
+            None => refused,
+        };
+    }
     let Some(rest) = failure.message.strip_prefix(store::KEYCHAIN_UNAVAILABLE) else {
         return failure;
     };
@@ -221,10 +231,13 @@ pub fn issuer_url(token: &StoredToken) -> Result<url::Url> {
 }
 
 /// Whether a stored token is the one that would be sent, for `whoami`.
-pub fn describe_source(source: CredentialSource) -> &'static str {
-    match source {
-        CredentialSource::ApiKey => "tenant API key (HODEISHIELD_API_KEY)",
-        CredentialSource::OAuth => "sign-in token in the system keychain",
+pub fn describe_source(source: CredentialSource, file: Option<&std::path::Path>) -> String {
+    match (source, file) {
+        (CredentialSource::ApiKey, _) => "tenant API key (HODEISHIELD_API_KEY)".to_owned(),
+        (CredentialSource::OAuth, None) => "sign-in token in the system keychain".to_owned(),
+        (CredentialSource::OAuth, Some(path)) => {
+            format!("sign-in token in a plain-text file ({})", path.display())
+        }
     }
 }
 
@@ -534,7 +547,7 @@ mod tests {
         let hint = err.hint.expect("hint");
         // The platform's own advice stays, followed by the remote-session one.
         assert!(
-            hint.starts_with("Sign-in tokens are only kept in the system keychain."),
+            hint.starts_with("Sign-in tokens are kept in the system keychain."),
             "{hint}"
         );
         assert!(

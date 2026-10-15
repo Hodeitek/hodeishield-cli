@@ -131,6 +131,13 @@ fn login_with(
         .ok()
         .flatten()
         .and_then(|info| user_label(&info));
+    if let Some(path) = store.location(&settings.profile) {
+        eprintln!(
+            "The sign-in is stored unencrypted in {}, protected only by its permissions. \
+             `hodeishield logout` revokes it and deletes the file.",
+            path.display()
+        );
+    }
     eprintln!(
         "Signed in to {}{} (profile {}).",
         settings.app_url.host_str().unwrap_or("the app"),
@@ -291,7 +298,11 @@ fn whoami_with(
     let me = match source.map(|_| me()) {
         Some(Ok(me)) => Some(me),
         Some(Err(reason)) => {
-            eprintln!("warning: could not read from the API who this credential is: {reason}");
+            // The reason can carry the API's own message: untrusted text.
+            eprintln!(
+                "warning: could not read from the API who this credential is: {}",
+                clean(&reason)
+            );
             None
         }
         None => None,
@@ -324,7 +335,7 @@ fn whoami_with(
                 "Credential",
                 source.map_or_else(
                     || "none".to_owned(),
-                    |s| auth::describe_source(s).to_owned(),
+                    |s| auth::describe_source(s, store.location(&settings.profile).as_deref()),
                 ),
             ),
         ];

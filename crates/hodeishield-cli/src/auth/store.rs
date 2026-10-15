@@ -1,10 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Hodeitek S.L.
 
-//! Where sign-in tokens are kept: the system keychain, and nowhere else.
+//! Where sign-in tokens are kept: the system keychain, or, only when the person opts in, a
+//! plain-text file.
 //!
-//! macOS Keychain, Windows Credential Manager, or the Secret Service on Linux and the BSDs (GNOME
-//! Keyring, KWallet). If none is available, signing in fails: there is no fallback to a file.
+//! The keychain is the default: macOS Keychain, Windows Credential Manager, or the Secret Service
+//! on Linux and the BSDs (GNOME Keyring, KWallet). The other store is
+//! [`file_store`](super::file_store), chosen by `HODEISHIELD_TOKEN_STORE=plaintext-file` or the
+//! `token_store` setting. Neither is ever used as a fallback for the other: if the chosen one is
+//! not available, signing in fails.
 
 use crate::failure::{Failure, Result};
 use secrecy::{ExposeSecret, SecretString};
@@ -50,7 +54,7 @@ pub struct StoredToken {
 
 /// The keychain payload. Plain strings live only for the instant of (de)serialisation.
 #[derive(Serialize, Deserialize)]
-struct Payload {
+pub(super) struct Payload {
     v: u32,
     access_token: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -65,7 +69,7 @@ struct Payload {
 }
 
 impl StoredToken {
-    fn to_payload(&self) -> Payload {
+    pub(super) fn to_payload(&self) -> Payload {
         Payload {
             v: 1,
             access_token: self.access_token.expose_secret().to_owned(),
@@ -81,7 +85,7 @@ impl StoredToken {
         }
     }
 
-    fn from_payload(payload: Payload) -> Self {
+    pub(super) fn from_payload(payload: Payload) -> Self {
         Self {
             access_token: SecretString::from(payload.access_token),
             refresh_token: payload.refresh_token.map(SecretString::from),
@@ -109,11 +113,63 @@ pub trait TokenStore {
     /// Whether tokens can be kept for this profile, without writing anything. Sign-in checks it
     /// before it asks the person to approve anything.
     fn check_available(&self, profile: &str) -> Result<()>;
+    /// The file that holds the profile's tokens, for stores that are files. `None` for the
+    /// keychain.
+    fn location(&self, _profile: &str) -> Option<std::path::PathBuf> {
+        None
+    }
 }
 
 /// The system keychain.
 #[derive(Debug, Default)]
 pub struct Keychain;
+
+/// The store the settings choose. The choice is made at the first use and kept for the rest of
+/// the process, so one command checks, reads and saves in the same store even if the environment
+/// or the configuration file changed meanwhile. The environment and the configuration file are
+/// read at that point, so a command that never needs a token never fails on them. A value that is
+/// not a store, or a platform that cannot have it, is an error at the first use, and nothing
+/// falls back to the other store.
+#[derive(Debug, Default)]
+pub struct Configured {
+    kind: OnceLock<crate::config::TokenStoreKind>,
+}
+
+impl Configured {
+    fn chosen(&self) -> Result<Box<dyn TokenStore>> {
+        let kind = match self.kind.get() {
+            Some(kind) => *kind,
+            None => {
+                let chosen = crate::config::token_store()?;
+                *self.kind.get_or_init(|| chosen)
+            }
+        };
+        Ok(match kind {
+            crate::config::TokenStoreKind::Keychain => Box::new(Keychain),
+            crate::config::TokenStoreKind::PlaintextFile => {
+                Box::new(super::file_store::FileStore::platform()?)
+            }
+        })
+    }
+}
+
+impl TokenStore for Configured {
+    fn load(&self, profile: &str) -> Result<Option<StoredToken>> {
+        self.chosen()?.load(profile)
+    }
+    fn save(&self, profile: &str, token: &StoredToken) -> Result<()> {
+        self.chosen()?.save(profile, token)
+    }
+    fn delete(&self, profile: &str) -> Result<bool> {
+        self.chosen()?.delete(profile)
+    }
+    fn check_available(&self, profile: &str) -> Result<()> {
+        self.chosen()?.check_available(profile)
+    }
+    fn location(&self, profile: &str) -> Option<std::path::PathBuf> {
+        self.chosen().ok()?.location(profile)
+    }
+}
 
 static STORE_READY: OnceLock<std::result::Result<(), String>> = OnceLock::new();
 
@@ -131,16 +187,20 @@ fn unavailable(reason: &str) -> Failure {
 /// What to do about a missing keychain, for the platform this build runs on.
 fn unavailable_hint() -> &'static str {
     if cfg!(target_os = "macos") {
-        "Sign-in tokens are only kept in the system keychain. Allow access when the Keychain \
-         prompt appears (or in Keychain Access), or use a tenant API key in HODEISHIELD_API_KEY \
-         instead."
+        "Sign-in tokens are kept in the system keychain. Allow access when the Keychain prompt \
+         appears (or in Keychain Access), or use a tenant API key in HODEISHIELD_API_KEY \
+         instead, or opt in to a plain-text token file with \
+         HODEISHIELD_TOKEN_STORE=plaintext-file (tokens are then stored unencrypted in a file \
+         only you can read)."
     } else if cfg!(windows) {
-        "Sign-in tokens are only kept in the system keychain. Check that Windows Credential \
-         Manager is available, or use a tenant API key in HODEISHIELD_API_KEY instead."
+        "Sign-in tokens are kept in the system keychain. Check that Windows Credential Manager \
+         is available, or use a tenant API key in HODEISHIELD_API_KEY instead."
     } else {
-        "Sign-in tokens are only kept in the system keychain. Start a Secret Service \
-         (GNOME Keyring or KWallet); on a server without one, use a tenant API key in \
-         HODEISHIELD_API_KEY instead."
+        "Sign-in tokens are kept in the system keychain. Start a Secret Service (GNOME Keyring \
+         or KWallet); on a server without one, use a tenant API key in HODEISHIELD_API_KEY \
+         instead, or opt in to a plain-text token file with \
+         HODEISHIELD_TOKEN_STORE=plaintext-file (tokens are then stored unencrypted in a file \
+         only you can read)."
     }
 }
 
