@@ -255,6 +255,9 @@ jobs:
   # - a .pkg that installs /usr/local/bin/hodeishield, signed with Developer ID Installer,
   #   notarized and stapled, so it also passes Gatekeeper offline and can be deployed by MDM.
   #
+  # The same import, sign, notarize and verify chain runs without a release in
+  # macos-signing-check.yml; keep the two in step.
+  #
   # Environment secrets (release-signing): MACOS_CERTIFICATE and MACOS_CERTIFICATE_PASSWORD
   # (Developer ID Application, base64 .p12), MACOS_SIGNING_IDENTITY, MACOS_INSTALLER_CERTIFICATE,
   # MACOS_INSTALLER_CERTIFICATE_PASSWORD, MACOS_INSTALLER_IDENTITY (Developer ID Installer),
@@ -304,6 +307,22 @@ jobs:
           fi
           chmod 0755 "stage/${BIN_NAME}"
           find stage/man -type f -exec chmod 0644 {} \;
+
+      # A skip must never read as a pass: say so in the run summary and as an annotation.
+      - name: Record that macOS signing was skipped
+        if: env.SIGN != 'true'
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = push ]; then
+            why="MACOS_SIGNING_ENABLED is not true"
+          else
+            why="this is a manual dry run, which never signs"
+          fi
+          msg="macOS signing: skipped — ${why}; the binary is not Developer ID signed or notarized."
+          echo "::notice title=macOS signing skipped::${msg}"
+          printf '### macOS signing\n\n%s\n' "$msg" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Check the signing inputs are present
         if: env.SIGN == 'true'
@@ -367,7 +386,21 @@ jobs:
             --keychain "$RUNNER_TEMP/signing.keychain-db" \
             --sign "$MACOS_SIGNING_IDENTITY" "stage/${BIN_NAME}"
           codesign --verify --strict --verbose=2 "stage/${BIN_NAME}"
-          codesign --display --verbose=2 "stage/${BIN_NAME}"
+          # The signature must come from a Developer ID Application certificate of a team, with the
+          # hardened runtime and a secure timestamp. codesign prints no secrets.
+          details="$(codesign --display -vv "stage/${BIN_NAME}" 2>&1)"
+          echo "$details"
+          team="$(sed -n 's/^TeamIdentifier=//p' <<< "$details")"
+          for expected in '^Authority=Developer ID Application: ' '^CodeDirectory .*flags=.*runtime' '^Timestamp='; do
+            if ! grep -q -- "$expected" <<< "$details"; then
+              echo "::error::The signature lacks the expected '${expected#^}'."
+              exit 1
+            fi
+          done
+          if [ -z "$team" ] || [ "$team" = "not set" ]; then
+            echo "::error::The signature carries no TeamIdentifier."
+            exit 1
+          fi
 
       - name: Build and sign the installer package
         if: env.SIGN == 'true'
@@ -417,6 +450,48 @@ jobs:
           xcrun stapler staple "$pkg"
           xcrun stapler validate "$pkg"
           spctl --assess --type install --verbose=2 "$pkg"
+
+      # What Gatekeeper and the system tools say about the finished files, and the run summary. The
+      # binary cannot be stapled, so Gatekeeper looks its ticket up online; that can lag a little
+      # behind the notarization, hence the retries.
+      - name: Verify the signed and notarized files
+        if: env.SIGN == 'true'
+        run: |
+          set -euo pipefail
+          bin="stage/${BIN_NAME}"
+          pkg="dist/hodeishield-${VERSION}-${TARGET}.pkg"
+          team="$(codesign --display -vv "$bin" 2>&1 | sed -n 's/^TeamIdentifier=//p')"
+          if [ -z "$team" ] || [ "$team" = "not set" ]; then
+            echo "::error::The signature carries no TeamIdentifier."
+            exit 1
+          fi
+          accepted=false
+          for _ in 1 2 3 4 5 6; do
+            out="$(spctl --assess --type execute --verbose=2 "$bin" 2>&1 || true)"
+            if grep -qx 'source=Notarized Developer ID' <<< "$out"; then accepted=true; break; fi
+            sleep 20
+          done
+          echo "$out"
+          if [ "$accepted" != true ]; then
+            echo "::error::Gatekeeper does not report the binary as 'Notarized Developer ID'."
+            exit 1
+          fi
+          sig="$(pkgutil --check-signature "$pkg")"
+          echo "$sig"
+          if ! grep -q 'Developer ID Installer: ' <<< "$sig"; then
+            echo "::error::The package is not signed with a Developer ID Installer certificate."
+            exit 1
+          fi
+          xcrun stapler validate "$pkg"
+          spctl --assess --type install --verbose=2 "$pkg"
+          {
+            printf '### macOS signing\n\n'
+            printf 'macOS signing: signed and notarized with the Developer ID of team %s.\n\n' "$team"
+            printf -- "- \`codesign --verify --strict\`: passed; Developer ID Application authority, hardened runtime and secure timestamp present.\n"
+            printf -- "- \`spctl --assess --type execute\` on the binary: \`source=Notarized Developer ID\`.\n"
+            printf -- "- \`pkgutil --check-signature\` on the package: signed with a Developer ID Installer certificate.\n"
+            printf -- "- \`xcrun stapler validate\` and \`spctl --assess --type install\` on the package: passed.\n"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Package archive
         run: |

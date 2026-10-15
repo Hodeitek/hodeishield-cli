@@ -115,7 +115,7 @@ This confirms the archive was built by the `release.yml` GitHub Actions
 workflow, from the `Hodeitek/hodeishield-cli` source repository, at the tag
 you expect — not from a modified build or a malicious fork.
 
-## 5. Platform signatures (Windows; macOS in a later release)
+## 5. Platform signatures (Windows, macOS)
 
 From 0.2.0, `hodeishield.exe` also carries an Authenticode signature, which Windows checks by
 itself. It does not replace the steps above: it says the file comes from Hodeitek, not which
@@ -142,9 +142,33 @@ starts with `1.3.6.1.4.1.311.97.`. To list the EKU values:
 From 0.2.0 the profile EKU is `1.3.6.1.4.1.311.97.449523565.535854065.272767902.439799148`
 ([release-signing.md](release-signing.md#authenticode-windows) lists it with the subject).
 
-The macOS binary is not yet signed with a Developer ID or notarized; that, and a signed and
-notarized `.pkg` installer, come in a later release
-([#50](https://github.com/Hodeitek/hodeishield-cli/issues/50)).
+### macOS
+
+This applies from the first release signed with a Developer ID; earlier macOS binaries are not
+signed or notarized, and the release's run summary says whether a release's macOS files are. For a
+release that is signed, the binary carries a Developer ID Application signature and is notarized by
+Apple, and the `.pkg` installer carries a Developer ID Installer signature, is notarized and has its
+ticket stapled.
+
+```sh
+# The binary: signed by Hodeitek's Developer ID, with the hardened runtime and a timestamp.
+codesign -dvv ./hodeishield 2>&1 | grep -E 'Authority|TeamIdentifier|Timestamp|flags'
+codesign --verify --strict --verbose=2 ./hodeishield
+
+# Gatekeeper's verdict. Expect "accepted" and "source=Notarized Developer ID". A bare
+# executable cannot be stapled, so this check needs a network connection.
+spctl -a -vv -t exec ./hodeishield
+
+# The installer package.
+pkgutil --check-signature hodeishield-<version>-universal-apple-darwin.pkg
+xcrun stapler validate hodeishield-<version>-universal-apple-darwin.pkg
+```
+
+`Authority` must list `Developer ID Application: Hodeitek S.L.`, and `TeamIdentifier` must be the
+Team ID that [release-signing.md](release-signing.md#developer-id-macos) and the release notes give.
+The package must show a `Developer ID Installer: Hodeitek S.L.` certificate. As with Windows, this
+says the file comes from Hodeitek; the Sigstore and SLSA checks above say which workflow run built
+it.
 
 ## 6. Releases after a signing change
 
