@@ -1,0 +1,8 @@
+# Security contact for the hodeishield command-line client (RFC 9116).
+# The policy, response times and disclosure terms are in SECURITY.md.
+Contact: https://github.com/Hodeitek/hodeishield-cli/security/advisories/new
+Contact: mailto:security@hodeitek.com
+Expires: 2027-09-15T00:00:00.000Z
+Preferred-Languages: en, es
+Policy: https://github.com/Hodeitek/hodeishield-cli/blob/main/SECURITY.md
+Canonical: https://raw.githubusercontent.com/Hodeitek/hodeishield-cli/main/.well-known/security.txt

@@ -1,0 +1,112 @@
+name: security.txt
+
+# Once a week (and on demand) checks .well-known/security.txt against RFC 9116 and that it does not
+# expire within 60 days, so that the maintainers renew it in time (see
+# .github/scripts/security-txt-check.py and SECURITY.md). On a pull request that changes the file or
+# the check, it runs the check's tests and the check, and fails on the same conditions.
+#
+# It reads the repository only, uses no secret and no environment, and writes nothing but an issue
+# labelled `security-txt`: opened (or commented on) while the check fails, and closed when it passes
+# again.
+on:
+  schedule:
+    - cron: "41 6 * * 1" # Mondays, 06:41 UTC
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".well-known/security.txt"
+      - ".github/scripts/security-txt-check*"
+      - ".github/workflows/security-txt.yml"
+
+permissions: {}
+
+concurrency:
+  group: security-txt-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  LABEL: security-txt
+
+jobs:
+  check:
+    name: check security.txt
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read # the checkout
+      issues: write # the issue and its label; not used on a pull request
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Test the check
+        run: python3 -I .github/scripts/security-txt-check-test.py
+
+      - name: Check the file
+        id: check
+        run: |
+          set -uo pipefail
+          report="$RUNNER_TEMP/report.txt"
+          status=0
+          python3 -I .github/scripts/security-txt-check.py --warn-days 60 > "$report" 2>&1 || status=$?
+          cat "$report"
+          if [ "$status" = 0 ]; then result=pass; else result=fail; fi
+          echo "result=$result" >> "$GITHUB_OUTPUT"
+
+      - name: Report the result
+        if: "!cancelled() && github.event_name != 'pull_request'"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESULT: ${{ steps.check.outputs.result }}
+        run: |
+          set -euo pipefail
+          report="$RUNNER_TEMP/report.txt"
+          [ -f "$report" ] || echo "No report: an earlier step failed before the check ran (see the run)." > "$report"
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          {
+            echo "### security.txt: ${RESULT:-fail}"
+            echo
+            echo '```'
+            head -c 6000 "$report"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          issue=$(gh issue list -R "$GITHUB_REPOSITORY" --label "$LABEL" --state open --json number --jq '.[0].number // empty')
+          case ${RESULT:-fail} in
+            pass)
+              if [ -n "$issue" ]; then
+                gh issue close "$issue" -R "$GITHUB_REPOSITORY" --reason completed \
+                  --comment "security.txt is valid and does not expire soon ($run_url)."
+              fi
+              ;;
+            *)
+              {
+                echo "The weekly check of \`.well-known/security.txt\` failed: the file is invalid, has expired, or expires in less than 60 days."
+                echo "Renew it by moving \`Expires:\` to about eleven months ahead (RFC 9116 recommends less than a year), in a pull request."
+                echo
+                echo '```'
+                head -c 6000 "$report"
+                echo '```'
+                echo
+                echo "Run: $run_url"
+              } > "$RUNNER_TEMP/issue.md"
+              if [ -n "$issue" ]; then
+                gh issue comment "$issue" -R "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/issue.md"
+              else
+                gh label list -R "$GITHUB_REPOSITORY" --search "$LABEL" --json name --jq '.[].name' | grep -qx "$LABEL" ||
+                  gh label create "$LABEL" -R "$GITHUB_REPOSITORY" --color B60205 \
+                    --description "security.txt is invalid or about to expire"
+                gh issue create -R "$GITHUB_REPOSITORY" --label "$LABEL" \
+                  --title "security.txt needs to be renewed or fixed" \
+                  --body-file "$RUNNER_TEMP/issue.md"
+              fi
+              ;;
+          esac
+
+      - name: Fail if the check failed
+        if: "!cancelled() && steps.check.outputs.result != 'pass'"
+        run: |
+          echo "::error::The security.txt check did not pass; see the report above."
+          exit 1
