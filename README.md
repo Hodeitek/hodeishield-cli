@@ -332,7 +332,7 @@ With `--device`, open the address the CLI prints on any device and **type the co
 does not accept a link with the code filled in, on purpose.
 
 The CLI asks for the read scopes its commands need (vendors, alerts and risks; every compliance
-framework the app offers; evidence; endpoints) and for a refresh token. To ask for fewer, set them:
+framework the app offers; evidence; endpoints; reports) and for a refresh token. To ask for fewer, set them:
 `hodeishield config set oauth_scopes "supply_risk:read offline_access"`.
 
 The token is kept in the system keychain (macOS Keychain, Windows Credential Manager, or the Secret
@@ -422,6 +422,7 @@ hodeishield compliance posture nis2
 hodeishield compliance controls --framework nis2 --status failing
 hodeishield evidence list --expiring-before 2026-12-31T00:00:00Z
 hodeishield endpoints list --status active
+hodeishield reports list --type monthly --status completed
 ```
 
 ```console
@@ -435,6 +436,43 @@ Lists show one page (50 items by default); `--page`, `--per-page` (up to 200) an
 rest. `--all` stops with an error past 100,000 items (or 1,000 pages); narrow the list with filters
 or walk it with `--page`. Every list takes `--sort` and `--order`; `--help` on any command lists
 what it accepts.
+
+### Reports
+
+`reports list` and `reports get` show the reports generated for the tenant; `reports download`
+saves a completed report's file:
+
+```console
+$ hodeishield reports list --status completed
+ID                                    TYPE     TITLE              PERIOD                    STATUS     CREATED
+7d3e1f2a-4b5c-4d6e-8f70-81a2b3c4d5e6  monthly  September summary  2026-09-01 to 2026-09-30  completed  2026-10-01 06:00Z
+$ hodeishield reports get 7d3e1f2a-4b5c-4d6e-8f70-81a2b3c4d5e6     # includes download_formats
+$ hodeishield reports download 7d3e1f2a-4b5c-4d6e-8f70-81a2b3c4d5e6 --format xlsx --locale es
+Saved monthly-2026-09.xlsx (48213 bytes).
+```
+
+- `--type` (also `--report-type`) and `--status` list the values the API publishes in `--help`; like
+  the other listed filters, a value that is not listed gets a warning and is still sent as typed.
+- `--format` is `pdf` (the default) or `xlsx`, and `--locale` one of `es`, `en` (the default), `de`,
+  `fr`, `it` and `eu`. `reports get` lists the formats a report can be downloaded in.
+- Without `--output`, the file is saved in the current directory under the name the API suggests,
+  reduced to a plain stem: only its last part is kept, every character other than a letter, a
+  digit, `.`, `_` and `-` becomes `_`, leading dots are dropped and everything from the first `.`
+  on is cut. The extension is always that of the format (`.pdf` or `.xlsx`), never the one the API
+  suggested, so `conftest.py` is saved as `conftest.pdf`. When nothing usable is left, the name is
+  `report-<id>.<format>`. The name is never used as a path.
+- `--output <PATH>` saves it there instead; a directory saves it there under the suggested name.
+  `--output -` writes the file to standard output, and is refused (exit code 2) when standard
+  output is a terminal.
+- An existing file is never replaced unless `--force` is given. The file is written next to its
+  destination and then put in place, so the path never holds part of a file. On Unix, the saved
+  file is readable only by you (mode 0600); `--force` keeps the permissions of the file it replaces.
+  The directory is checked before the download starts.
+- The note `Saved <path> (<size>).` goes to standard error. With `--json`, standard output holds
+  `{"path": ..., "bytes": ..., "content_type": ...}` instead, and there is no note.
+- A report that is still being generated, that failed, that has no file in that format, or whose file
+  is larger than the API serves (20 MiB) fails with exit code 1 and says which. Each download is
+  recorded in the tenant's audit trail.
 
 ### Several tenants (MSSP)
 
@@ -484,7 +522,8 @@ hodeishield --tenant acme vendors list            # one client, by slug or id
 hodeishield --all-tenants alerts list --status open
 ```
 
-- `--tenant <slug|id>` works on every read command (`list`, `get`, `compliance posture`). The CLI
+- `--tenant <slug|id>` works on every read command (`list`, `get`, `compliance posture`,
+  `reports download`). The CLI
   prints `Client tenant: acme (<id>)` on standard error, so a log shows which client was read;
   standard output is exactly what it is without a selection.
 - `--all-tenants` works on `list` commands and `compliance controls`. It fetches every page of each

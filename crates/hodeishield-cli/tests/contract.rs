@@ -247,7 +247,7 @@ struct Resource {
     csv_header: &'static str,
 }
 
-const RESOURCES: [Resource; 5] = [
+const RESOURCES: [Resource; 6] = [
     Resource {
         command: &["vendors"],
         list_args: &[],
@@ -275,6 +275,13 @@ const RESOURCES: [Resource; 5] = [
         path: "/v1/evidence",
         item: r#"{"id":"e1","evidence_type":"policy","source_type":"manual","source_id":"s1","title":"Example evidence","description":null,"vendor_id":null,"asset_id":null,"auto_generated":false,"valid_until":null,"created_at":"2026-01-01T00:00:00Z","added_later":7}"#,
         csv_header: "id,evidence_type,source_type,source_id,title,description,vendor_id,asset_id,auto_generated,valid_until,created_at,added_later",
+    },
+    Resource {
+        command: &["reports"],
+        list_args: &[],
+        path: "/v1/reports",
+        item: r#"{"id":"0b8f2a52-6a0e-4d5c-9d3e-1f2a3b4c5d6e","report_type":"monthly","title":"Example report","period_start":"2026-09-01","period_end":"2026-09-30","status":"completed","created_at":"2026-10-01T00:00:00Z","added_later":{"k":"v"}}"#,
+        csv_header: "id,report_type,title,period_start,period_end,status,created_at,added_later",
     },
     Resource {
         command: &["endpoints"],
@@ -394,11 +401,19 @@ fn json_all_is_an_array_of_the_items() {
 #[test]
 fn json_get_is_the_api_body_with_unknown_fields_passed_through() {
     let env = Env::new();
-    for resource in &RESOURCES[..4] {
+    for resource in &RESOURCES[..5] {
         let name = resource.command[0];
         let id = "x1";
         let path = format!("{}/{id}", resource.path);
-        let body = format!(r#"{{"data":{},"added_later_top":1}}"#, resource.item);
+        // A single report also says which formats it can be downloaded in.
+        let item = if name == "reports" {
+            resource
+                .item
+                .replacen('{', r#"{"download_formats":["pdf"],"#, 1)
+        } else {
+            resource.item.to_owned()
+        };
+        let body = format!(r#"{{"data":{item},"added_later_top":1}}"#);
         let mut server = mockito::Server::new();
         server.mock("GET", path.as_str()).with_body(&body).create();
         let output = env.api(&server.url(), &["--json", name, "get", id]);
@@ -412,6 +427,40 @@ fn json_get_is_the_api_body_with_unknown_fields_passed_through() {
         let top: Vec<&String> = printed.as_object().expect("object").keys().collect();
         assert_eq!(top, ["data", "added_later_top"], "{name}");
     }
+}
+
+/// `reports download --json` prints where the file went, its size and its type, and nothing else.
+#[test]
+fn json_report_download_fields() {
+    let env = Env::new();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut server = mockito::Server::new();
+    server
+        .mock("GET", "/v1/reports/r1/download")
+        .with_header("content-type", "application/pdf")
+        .with_header(
+            "content-disposition",
+            r#"attachment; filename="report.pdf""#,
+        )
+        .with_body("%PDF-")
+        .create();
+    let output = env
+        .cmd()
+        .env("HODEISHIELD_API_KEY", KEY)
+        .env("HODEISHIELD_API_URL", server.url())
+        .current_dir(dir.path())
+        .args(["--json", "reports", "download", "r1"])
+        .output()
+        .expect("run");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let printed: Value = serde_json::from_str(&out(&output)).expect("json");
+    assert_eq!(
+        printed,
+        json!({"path": "report.pdf", "bytes": 5, "content_type": "application/pdf"})
+    );
+    let keys: Vec<&String> = printed.as_object().expect("object").keys().collect();
+    assert_eq!(keys, ["path", "bytes", "content_type"]);
+    assert!(err(&output).is_empty(), "{}", err(&output));
 }
 
 /// `compliance posture` prints the API's body, `{"data": {...}}`.

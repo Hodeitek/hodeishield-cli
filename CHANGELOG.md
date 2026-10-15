@@ -22,6 +22,16 @@ commands, `--json` output and exit codes. Each release's notes start with its se
   decision. A copy of the file stays usable at most 90 days from the sign-in, the limit the
   service sets. A configuration file that contains `token_store` is refused by older CLIs.
   ([#39](https://github.com/Hodeitek/hodeishield-cli/issues/39))
+- `reports list`, `reports get` and `reports download`: the reports generated for the tenant, and
+  their files. `reports list` filters by `--type`, `--status` and `--since` and takes the usual
+  paging, `--json` and `--csv`; `reports get` shows the formats a report can be downloaded in.
+  `reports download` saves a completed report as PDF or XLSX (`--format`, `--locale`) in the current
+  directory under the name the API suggests, reduced to a plain stem with the extension of the
+  format, or at `--output <PATH>`;
+  `--output -` writes it to standard output when that is not a terminal. An existing file is only
+  replaced with `--force`, a file is never left half written, and on Unix it is readable only by you. A report that is still being
+  generated, failed, has no file in that format or is too large fails with a message that says so.
+  ([#55](https://github.com/Hodeitek/hodeishield-cli/issues/55))
 
 ### Changed
 

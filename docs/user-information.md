@@ -57,8 +57,8 @@ advisories are under
 
 `hodeishield` is a read-only command-line client for the public `/v1` API of
 [HodeiShield](https://hodeishield.com). It reads one organisation's third-party inventory,
-supply-chain alerts, risk register, compliance posture, evidence and endpoint agents, from a
-terminal or a script. Every command reads: its requests to the API are `GET` only, and it cannot
+supply-chain alerts, risk register, compliance posture, evidence, endpoint agents and reports, from
+a terminal or a script. Every command reads: its requests to the API are `GET` only, and it cannot
 change data in your organisation. It needs a HodeiShield account to sign in with, or a tenant API
 key.
 

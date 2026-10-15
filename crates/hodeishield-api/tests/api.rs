@@ -1295,3 +1295,18 @@ fn a_report_that_is_not_ready_is_an_api_error_with_its_code() {
     assert_eq!(api.code(), Some("REPORT_NOT_READY"));
     assert_eq!(api.operation, "downloadReport");
 }
+
+#[test]
+fn the_body_of_an_error_is_read_with_the_normal_limit_not_the_download_one() {
+    use hodeishield_api::v1::DownloadReportParams;
+    let mut server = mockito::Server::new();
+    server
+        .mock("GET", "/v1/reports/r-3/download")
+        .with_status(500)
+        .with_body(vec![b'x'; 9 * 1024 * 1024])
+        .create();
+    let err = client(&server)
+        .download_report("r-3", &DownloadReportParams::default())
+        .expect_err("too large");
+    assert!(matches!(err, hodeishield_api::Error::Body(_)), "{err:?}");
+}
