@@ -69,7 +69,7 @@ cargo install --locked --git https://github.com/Hodeitek/hodeishield-cli --tag v
 ### Homebrew and Scoop
 
 ```sh
-brew tap hodeitek/hodeishield && brew install hodeishield      # macOS and Linux
+brew install hodeitek/hodeishield/hodeishield                  # macOS and Linux
 ```
 
 ```powershell
@@ -80,6 +80,12 @@ scoop install hodeishield                                       # Windows, per u
 `scoop bucket add` needs Git: on a fresh Scoop, run `scoop install git` first. Scoop's own installer
 refuses an elevated (administrator) shell unless it is run with `-RunAsAdmin`; installing per user,
 from a normal shell, is the recommended way and needs no administrator rights.
+
+Homebrew asks you to trust a formula from a tap other than its own before it loads it
+([Tap Trust](https://docs.brew.sh/Tap-Trust)). The full name above adds the tap and trusts only
+this formula. If you added the tap before and see "Refusing to load formula … from untrusted
+tap", run `brew trust --formula hodeitek/hodeishield/hodeishield` once. There is no need to trust
+the whole tap or to turn tap trust off.
 
 The [Homebrew tap](https://github.com/Hodeitek/homebrew-hodeishield) and the
 [Scoop bucket](https://github.com/Hodeitek/scoop-hodeishield) are updated from each release's own
