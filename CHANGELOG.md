@@ -37,6 +37,12 @@ commands, `--json` output and exit codes. Each release's notes start with its se
   `SECURITY.md`; `SECURITY.md` points to it. A weekly check validates the file and opens an issue
   when it is invalid or has less than 60 days left before its expiry date.
   ([#125](https://github.com/Hodeitek/hodeishield-cli/issues/125))
+- The release workflow can sign and notarize the macOS binaries with a Developer ID: the universal
+  binary is signed with the hardened runtime and notarized, and a `.pkg` installer is signed,
+  notarized and stapled. A new on-demand workflow, "macOS signing check", tests the stored signing
+  secrets without a release. Until the signing identity is stored, releases say in their run summary
+  that macOS signing was skipped.
+  ([#50](https://github.com/Hodeitek/hodeishield-cli/issues/50))
 
 ### Changed
 
