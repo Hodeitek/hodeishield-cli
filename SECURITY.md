@@ -20,6 +20,10 @@ advisory if you want to be credited.
 - Machine-readable contact: [security.txt](https://hodeishield.com/.well-known/security.txt)
   (RFC 9116), for the whole HodeiShield product. The same file is served on `app.hodeishield.com`
   and `docs.hodeishield.com`.
+- Machine-readable contact for this CLI: [security.txt](.well-known/security.txt) (RFC 9116), published in
+  this repository at `.well-known/security.txt` on `main`, where it is served as
+  <https://raw.githubusercontent.com/Hodeitek/hodeishield-cli/main/.well-known/security.txt>. It is
+  not signed. A weekly check validates it and opens an issue when it has less than 60 days left.
 - Encrypted email: not offered at the moment.
 - Bug bounty: there is no bounty programme; we credit reporters publicly in the advisory.
 

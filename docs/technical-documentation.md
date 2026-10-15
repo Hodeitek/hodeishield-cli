@@ -91,7 +91,7 @@ first one that contains this file were published before this documentation exist
 | Identification and monitoring of vulnerabilities and components | [risk-assessment.md](risk-assessment.md#requirements-of-annex-i-part-ii), point (1), and [CONTRIBUTING.md](../CONTRIBUTING.md#security-testing) |
 | Vulnerabilities in third-party components | Assessment, fix and release rule, reporting to the component's maintainers with any fix, and the record of reports ([third-party-components.md](third-party-components.md#when-a-component-has-a-vulnerability); Article 13(6)) |
 | Coordinated vulnerability disclosure policy | [SECURITY.md](../SECURITY.md#coordinated-disclosure) |
-| Point of contact for reports | Private reporting on GitHub and security@hodeitek.com; `security.txt` ([SECURITY.md](../SECURITY.md#reporting-a-vulnerability)) |
+| Point of contact for reports | Private reporting on GitHub and security@hodeitek.com; `security.txt` ([.well-known/security.txt](../.well-known/security.txt); [SECURITY.md](../SECURITY.md#reporting-a-vulnerability)) |
 | What happens after a report, fix targets and advisories | [SECURITY.md](../SECURITY.md#what-happens-after-you-report), [fix targets](../SECURITY.md#severity-and-fix-targets) and [advisories](../SECURITY.md#how-advisories-are-published); the advisory template is [security-advisory-template.md](security-advisory-template.md) |
 | Secure distribution of updates | Signed releases with checksums, Sigstore signatures and SLSA provenance ([verifying-releases.md](verifying-releases.md), [release-signing.md](release-signing.md)); the update command of each channel is in [user-information.md](user-information.md#updating). The CLI does not update itself ([risk-assessment.md](risk-assessment.md#no-automatic-updates)) |
 

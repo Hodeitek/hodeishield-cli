@@ -32,6 +32,11 @@ commands, `--json` output and exit codes. Each release's notes start with its se
   replaced with `--force`, a file is never left half written, and on Unix it is readable only by you. A report that is still being
   generated, failed, has no file in that format or is too large fails with a message that says so.
   ([#55](https://github.com/Hodeitek/hodeishield-cli/issues/55))
+- A `security.txt` (RFC 9116) for this repository, at `.well-known/security.txt` on `main`, with the
+  private reporting link, the security address, the preferred languages and the link to
+  `SECURITY.md`; `SECURITY.md` points to it. A weekly check validates the file and opens an issue
+  when it is invalid or has less than 60 days left before its expiry date.
+  ([#125](https://github.com/Hodeitek/hodeishield-cli/issues/125))
 
 ### Changed
 
