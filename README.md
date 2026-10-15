@@ -350,11 +350,10 @@ a code. You have two options, in this order of preference:
    a jump host. You opt in explicitly, and the trade-off is that the tokens are stored
    **unencrypted** in a file that only your user can read. Anyone who can read your files, such as
    `root`, a backup, a snapshot or a copy of your home directory, can use the refresh token:
-   - **How long.** Today, up to 30 days after the CLI last refreshed the session (every refresh
-     starts a new 30 days), unless you end it earlier with `hodeishield logout` or by revoking the
-     access in the app under **Account › Applications**. The service is adding an absolute limit of
-     90 days from the sign-in, and will also end these sessions when you change your password; this
-     section will say so once that is in place.
+   - **How long.** At most 90 days from the sign-in, however often the session is refreshed, and
+     at most 30 days after the CLI last refreshed it. It ends earlier with `hodeishield logout`, when
+     you change or reset your password, when an administrator revokes it, when you are removed from
+     the tenant, or when you revoke the access in the app under **Account › Applications**.
    - **Reuse is detected.** Each refresh replaces the refresh token. If someone refreshes with a
      copy of your file, the next refresh by your own CLI is seen as a reuse of an old token and
      ends the session for both. An unexpected "sign in again" is a reason to revoke the access in
