@@ -124,7 +124,7 @@ pub fn run(cli: Cli, out: &mut dyn Write) -> Result<()> {
             (None, true) => Selection::All,
             (None, false) => Selection::Own,
         },
-        store: Arc::new(auth::store::Keychain),
+        store: Arc::new(auth::store::Configured::default()),
         is_portfolio_key: Cell::new(None),
     };
     match cli.command {
