@@ -528,6 +528,33 @@ fn json_whoami_fields() {
     me.assert();
 }
 
+/// A key has no user: whatever `user` the API sends in `GET /v1/me`, neither the table nor `--json`
+/// shows one, and the fields stay as they were.
+#[test]
+fn whoami_with_a_key_ignores_a_user_in_the_answer() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    server
+        .mock("GET", "/v1/me")
+        .with_body(
+            r#"{"data":{"credential":{"type":"tenant","prefix":null,"scopes":["supply_risk:read"]},
+                "tenant":{"id":"6f1c2d3e-4b5a-4c6d-8e7f-0a1b2c3d4e5f","name":"Acme S.L.","type":"direct"},
+                "organization":{"id":"7a1c2d3e-4b5a-4c6d-8e7f-0a1b2c3d4e5f","name":"Acme Group","type":"direct"},
+                "portfolio":null,
+                "user":{"id":"u-1","name":"Ana Ruiz","email":"ana@acme.example"}}}"#,
+        )
+        .expect(2)
+        .create();
+    let output = env.api(&server.url(), &["--json", "whoami"]);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let printed: Value = serde_json::from_str(&out(&output)).expect("json");
+    assert!(printed.get("user").is_none(), "{printed}");
+    assert!(!out(&output).contains("Ana Ruiz"));
+    let output = env.api(&server.url(), &["whoami"]);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(!out(&output).contains("User") && !out(&output).contains("Ana"));
+}
+
 /// When `GET /v1/me` fails, `whoami` still succeeds with the local fields; the API's are null and
 /// standard error says why.
 #[test]
