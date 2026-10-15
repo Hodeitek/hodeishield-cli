@@ -16,6 +16,12 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 - The generated `/v1` client follows version 2026-10-19 of the API document, which adds `GET /v1/me`
   and the reports operations, including the download of a report file. `hodeishield login` now also
   asks for `reports:read` when the app offers it.
+- `whoami` shows the tenant the credential reads (name and id), its organisation and, for a key, its
+  scopes; for a portfolio key, the MSSP and the number of client tenants. It reads them from the
+  new `GET /v1/me`, so it now makes one API call. `--json` gains the `tenant`, `organization`,
+  `portfolio` and `credential_scopes` fields, null when the API cannot be read; the exit code does
+  not depend on that call.
+  ([#48](https://github.com/Hodeitek/hodeishield-cli/issues/48))
 
 ## [0.4.4] - 2026-10-15
 
