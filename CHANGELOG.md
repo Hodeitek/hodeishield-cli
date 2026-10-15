@@ -6,6 +6,104 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-10-15
+
+### Security
+
+- rustls, the TLS library behind every connection the CLI makes, is updated from 0.23.45 to
+  0.23.46. It fixes RUSTSEC-2026-0346 (`Debug` output of client session values exposed TLS
+  secrets), RUSTSEC-2026-0347 (buffered data sent to the outer server after an ECH rejection),
+  RUSTSEC-2026-0348 (Brotli certificate decompression could allocate up to 1 GiB before
+  authentication) and RUSTSEC-2026-0349 (an unauthenticated ServerHello could downgrade later
+  connections to classical key exchange). Releases up to 0.4.3 include the affected version.
+
+## [0.4.3] - 2026-10-14
+
+### Added
+
+- `docs/technical-documentation.md`: the index of the technical documentation of the Cyber
+  Resilience Act (Annex VII), with the product category, the conformity route, who signs the
+  declaration, how the CE marking is shown for software and how the documentation is kept; and
+  `docs/declaration-of-conformity.md`, the template of the EU declaration of conformity. The
+  user information now gives the address of the declaration.
+  ([#129](https://github.com/Hodeitek/hodeishield-cli/issues/129))
+- `docs/third-party-components.md`: the criteria for adding a dependency and who reviews it, how
+  the dependency checks fit together, what is done when a dependency has a vulnerability, and how
+  it is reported to the component's maintainers with any fix. SECURITY.md, CONTRIBUTING.md and the
+  pull request template point to it.
+  ([#130](https://github.com/Hodeitek/hodeishield-cli/issues/130))
+- The Linux binaries can be rebuilt from the release tag with the same bytes:
+  `packaging/build/build.sh` builds them in a container image pinned by digest, with Debian packages
+  from a fixed snapshot, and the release builds them the same way. `docs/verifying-releases.md`
+  describes the rebuild, and a workflow repeats it for every published release.
+  ([#43](https://github.com/Hodeitek/hodeishield-cli/issues/43))
+
+### Changed
+
+- A release is no longer signed or published while a security advisory is open for its tagged
+  commit: the release workflow checks it with `cargo deny` and `cargo audit` against the RustSec
+  advisory database, and the release notes end with the result. An advisory can only be accepted
+  in `deny.toml` with a written reason and a review date, which CI checks; `CONTRIBUTING.md`
+  ("Known vulnerabilities at release") has the rule.
+  ([#121](https://github.com/Hodeitek/hodeishield-cli/issues/121))
+
+## [0.4.2] - 2026-10-12
+
+### Added
+
+- Every release archive, `.deb`, `.rpm` and the MSI now include the user information
+  (`docs/user-information.md`) as `USER-INFORMATION.md`: next to the binary in the archives, in
+  `/usr/share/doc/hodeishield/` from the `.deb` and `.rpm`, in `%ProgramFiles%\HodeiShield CLI`
+  from the MSI, and in the documentation folder of the Homebrew formula. The release workflow fails
+  if an archive or package lacks it. The container image carries the binary and licence files only;
+  the README says where its user information is.
+  ([#133](https://github.com/Hodeitek/hodeishield-cli/issues/133))
+- `docs/risk-assessment.md`: the cybersecurity risk assessment. It lists what the CLI protects, the
+  threats considered and the controls. It says how each security requirement of the Cyber Resilience
+  Act is met or why it does not apply, and why the CLI does not update itself or keep an activity
+  log. ([#122](https://github.com/Hodeitek/hodeishield-cli/issues/122),
+  [#123](https://github.com/Hodeitek/hodeishield-cli/issues/123))
+
+### Changed
+
+- `docs/release-signing.md` lists the credentials and identities that sign releases (Sigstore, SLSA
+  provenance, the container image, and Authenticode through Azure Artifact Signing) and who may
+  change them, and describes what the maintainers do if the Windows certificate profile or the
+  release workflow is compromised. `docs/verifying-releases.md` now says how to recognise a release
+  published after such a change and how to check the Authenticode certificate profile. `SECURITY.md`
+  no longer says that no long-lived signing key exists at all, and points to the published
+  `security.txt` ([#126](https://github.com/Hodeitek/hodeishield-cli/issues/126),
+  [#125](https://github.com/Hodeitek/hodeishield-cli/issues/125)).
+- `docs/release-signing.md` also says who controls the Azure access used for Windows signing, with
+  its known gaps, and describes a weekly check that compares the release runs, the published files,
+  their entries in the Rekor transparency log and the container image signatures, and opens an issue
+  when something does not match ([#126](https://github.com/Hodeitek/hodeishield-cli/issues/126),
+  [#152](https://github.com/Hodeitek/hodeishield-cli/issues/152)).
+
+### Fixed
+
+- Counts on standard error now use the singular for one item: "1 vendor across 2 client tenants",
+  "1 vendor." after `--all`, and "Skipping 1 inactive client tenant".
+  ([#135](https://github.com/Hodeitek/hodeishield-cli/issues/135))
+- An API error message that already ends with a full stop no longer gets a second one ("The API
+  rejected the request: … ."). ([#136](https://github.com/Hodeitek/hodeishield-cli/issues/136))
+- `logout` now removes a sign-in that the keychain returns in a form the CLI cannot read, and says
+  that nothing was revoked at the app. Before, it failed with the same "unreadable" error whose hint
+  told the user to run `logout`. ([#154](https://github.com/Hodeitek/hodeishield-cli/issues/154))
+
+## [0.4.1] - 2026-10-12
+
+### Fixed
+
+- `install.sh` now checks the release's signature with cosign v2 (2.4 or newer) as well as v3. With
+  cosign v2 it stopped with "the Sigstore signature does not verify" although the release was
+  genuine: the signatures are Sigstore bundles that cosign v2 reads only with `--new-bundle-format`,
+  which the script now adds. With an older cosign it names the version it needs instead. The README
+  and `docs/verifying-releases.md` now say which cosign versions work, and what to add with v2.
+  ([#141](https://github.com/Hodeitek/hodeishield-cli/issues/141))
+
+## [0.4.0] - 2026-10-12
+
 ### Added
 
 - An opt-in plain-text token store, for machines that have no system keychain (an SSH or jump host,
@@ -40,6 +138,25 @@ commands, `--json` output and exit codes. Each release's notes start with its se
   for each stable release: the release's own binary on a distroless base, running as a non-root
   user, tagged with the exact version only. It is signed by digest with Sigstore and carries the
   release's SBOM as a signed attestation. ([#36](https://github.com/Hodeitek/hodeishield-cli/issues/36))
+- Several client tenants with one portfolio key. `hodeishield tenants list` lists the client
+  tenants the key may read. The key is created by an organisation administrator of an active MSSP
+  organisation and goes in `HODEISHIELD_API_KEY`. The global `--tenant <slug|id>` selects one client
+  for any read command, including `get` and `compliance posture`, and prints the line
+  `Client tenant: <slug> (<id>)` on standard error. `--all-tenants` reads every client on a `list` command and adds
+  `tenant_id`, `tenant_slug` and `tenant_name` to each row in `--json` and `--csv` (a `TENANT`
+  column in the table). An unknown client fails with exit code 5, before any data is read. Without
+  these options nothing changes. `--all-tenants` asks one client at a time and skips clients that
+  are inactive or whose licence is not in force, with a note on standard error; the command still
+  exits 0 when only inactive clients are skipped. A client whose licence status the CLI does not
+  know is not read and is named on standard error. A client that fails when it is read because its
+  licence is not in force (exit code 8) or it is not found (exit code 5) is also named and skipped.
+  In both cases the other clients' data is printed and the command then exits non-zero (with the
+  code of the first client that failed, or 1 for an unknown licence status), so a script never takes
+  a partial result for a complete one. Any other failure stops the run before anything is printed,
+  for example exit code 6 (naming the limit) when a rate limit is exhausted. Against an API without
+  portfolio access the commands fail with exit code 7. The README has a new "Several tenants (MSSP)"
+  section. ([#54](https://github.com/Hodeitek/hodeishield-cli/issues/54),
+  [#45](https://github.com/Hodeitek/hodeishield-cli/issues/45))
 
 ### Changed (scripting surface)
 
@@ -69,6 +186,28 @@ commands, `--json` output and exit codes. Each release's notes start with its se
   TLS inspection ([#25](https://github.com/Hodeitek/hodeishield-cli/issues/25), [#89](https://github.com/Hodeitek/hodeishield-cli/pull/89)); the beta programme and its terms
   ([#52](https://github.com/Hodeitek/hodeishield-cli/issues/52), [#90](https://github.com/Hodeitek/hodeishield-cli/pull/90)); defining a profile before signing in to it, and waiting for
   `msiexec` in a silent install ([#87](https://github.com/Hodeitek/hodeishield-cli/pull/87)).
+  `SECURITY.md` now says what happens after a vulnerability report, where a notice about an affected
+  release appears (the README has an empty place for it), and how advisories are published, from
+  a template kept in `docs/` ([#120](https://github.com/Hodeitek/hodeishield-cli/issues/120)).
+  `SECURITY.md` now states the support period (from 1.0.0, five years of security fixes per major
+  version; until then, the latest 0.x release), and `docs/user-information.md` gathers the contact
+  details, secure use, updating, removal and where the SBOM is published
+  ([#127](https://github.com/Hodeitek/hodeishield-cli/issues/127),
+  [#128](https://github.com/Hodeitek/hodeishield-cli/issues/128)).
+- The alerts `--severity` filter now shows in `--help` the values the API lists (`critical`, `high`,
+  `medium`, `low`, `info`), and warns on standard error about a value the API does not list or has
+  deprecated. For the deprecated values (`critico`, `alto`, `medio`, `bajo`, accepted until
+  2027-01-14) the warning names the value to use instead. The value is still sent as typed, and exit
+  codes do not change. The CLI now follows version 2026-10-16 of the API document.
+  ([#53](https://github.com/Hodeitek/hodeishield-cli/issues/53))
+- Errors that involve a client tenant now say so and what to do. An unknown client tenant (404
+  `TENANT_NOT_FOUND`) points to `hodeishield tenants list`; a portfolio key rejected for a missing
+  scope points to an organisation administrator; a rate limit names whether it is the key's, the
+  organisation's or the client tenant's own, and says whether other clients are affected; a
+  credential that covers several clients without `--tenant` or `--all-tenants` is told to pick one;
+  and `--tenant` with a credential for one tenant only is told to leave it out. Messages and
+  hints go to standard error; exit codes do not change. ([#54](https://github.com/Hodeitek/hodeishield-cli/issues/54),
+  [#45](https://github.com/Hodeitek/hodeishield-cli/issues/45))
 
 ### Fixed
 
@@ -182,7 +321,12 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 - Profiles (`config`), shell completions, and release archives for Linux, macOS and Windows signed
   with Sigstore and with SLSA provenance.
 
-[Unreleased]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.4.4...HEAD
+[0.4.4]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.4.3...v0.4.4
+[0.4.3]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.4.2...v0.4.3
+[0.4.2]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.4.1...v0.4.2
+[0.4.1]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.1.1...v0.2.0

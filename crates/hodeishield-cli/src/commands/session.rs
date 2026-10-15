@@ -172,9 +172,25 @@ pub fn logout(ctx: &Context) -> Result<()> {
 }
 
 fn logout_with(settings: &crate::config::Settings, store: &dyn auth::TokenStore) -> Result<()> {
-    let Some(token) = store.load(&settings.profile)? else {
-        eprintln!("Not signed in (profile {}).", settings.profile);
-        return Ok(());
+    let token = match store.load(&settings.profile) {
+        Ok(Some(token)) => token,
+        Ok(None) => {
+            eprintln!("Not signed in (profile {}).", settings.profile);
+            return Ok(());
+        }
+        // There is no token to revoke, but the entry must not stay: remove it and say so.
+        Err(failure) if auth::store::is_unreadable(&failure) => {
+            store.delete(&settings.profile)?;
+            eprintln!(
+                "Removed the sign-in of profile {}, which could not be read, so nothing was revoked \
+                 at the app. Revoke the CLI's access from the app's settings if it may still be in \
+                 use.",
+                settings.profile
+            );
+            note_api_key();
+            return Ok(());
+        }
+        Err(failure) => return Err(failure),
     };
     // Revoke at the app first, so a copy of the token elsewhere stops working too; then forget it
     // here whatever the app said.
@@ -191,10 +207,14 @@ fn logout_with(settings: &crate::config::Settings, store: &dyn auth::TokenStore)
             clean(&failure.message)
         );
     }
+    note_api_key();
+    Ok(())
+}
+
+fn note_api_key() {
     if auth::api_key_from_env().is_some() {
         eprintln!("Note: {} is still set in this shell.", auth::API_KEY_ENV);
     }
-    Ok(())
 }
 
 pub fn whoami(ctx: &Context, out: &mut dyn Write) -> Result<()> {
@@ -990,5 +1010,41 @@ mod tests {
                 .is_some_and(|h| h.contains("HODEISHIELD_API_KEY"))
         );
         assert_eq!(err.kind, crate::failure::Kind::General);
+    }
+
+    #[test]
+    fn logout_removes_a_sign_in_it_cannot_read_without_asking_the_app() {
+        let (mut api, mut app) = (mockito::Server::new(), mockito::Server::new());
+        let api_never = api.mock("GET", mockito::Matcher::Any).expect(0).create();
+        let app_never_get = app.mock("GET", mockito::Matcher::Any).expect(0).create();
+        let app_never_post = app.mock("POST", mockito::Matcher::Any).expect(0).create();
+        let settings = settings_for(&api, &app);
+        let store = MemoryStore::default();
+        store.put_raw(&settings.profile, "{ not a sign-in");
+        assert!(crate::auth::store::is_unreadable(
+            &store.load(&settings.profile).expect_err("unreadable")
+        ));
+
+        logout_with(&settings, &store).expect("logout removes it");
+
+        assert!(store.load(&settings.profile).expect("load").is_none());
+        api_never.assert();
+        app_never_get.assert();
+        app_never_post.assert();
+    }
+
+    #[test]
+    fn logout_with_an_unreachable_keychain_still_fails() {
+        let (api, app) = (mockito::Server::new(), mockito::Server::new());
+        let settings = settings_for(&api, &app);
+        // `UnreachableStore::delete` panics, so this also shows nothing is deleted.
+        let err = logout_with(&settings, &UnreachableStore).expect_err("keychain unreachable");
+        assert_eq!(err.kind, crate::failure::Kind::General);
+        assert!(
+            err.message
+                .starts_with(crate::auth::store::KEYCHAIN_UNAVAILABLE),
+            "{}",
+            err.message
+        );
     }
 }

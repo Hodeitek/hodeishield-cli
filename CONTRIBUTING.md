@@ -55,20 +55,64 @@ edit the expectation on purpose and add a line under `### Changed (scripting sur
 
 ### Dependency updates
 
+How a new dependency is chosen and reviewed, how the checks below fit together, what is done when a
+dependency has a vulnerability and how it is reported to its maintainers are in
+[docs/third-party-components.md](docs/third-party-components.md). A pull request that adds a
+dependency answers its criteria in the description.
+
 Dependabot (`.github/dependabot.yml`) proposes cargo and GitHub Actions updates once a week, against
 `dev`, for versions published at least seven days earlier. Major versions are left to a person.
 
-Seven pins are not covered by Dependabot and are reviewed by hand in the periodic dependency review:
+`cargo deny check` and `cargo audit` run in CI on every pull request and every push to `dev` and
+`main`. Between changes, the weekly OSV-Scanner run and Dependabot alerts report new advisories
+(see [Security testing](#security-testing)).
 
-- the Rust toolchain in `rust-toolchain.toml` (latest stable, at least seven days old);
-- `cargo-deny` and `cargo-audit`, installed with `--version` in `.github/workflows/ci.yml`,
-  `cargo-cyclonedx`, `nfpm` (version and SHA-256) and WiX (`WIX_VERSION`; stay on 5.x until the
-  licence terms of later versions have been reviewed) in `.github/workflows/release.yml`, and
-  `oasdiff` (version and SHA-256) in `.github/workflows/openapi-sync.yml`.
+The pins Dependabot does not cover are reviewed by hand once a month, in the dependency review:
 
-The same review runs `cargo audit` and `cargo outdated`, and checks that every action is pinned by
-full commit SHA. The MSRV (`rust-version` in `Cargo.toml`) is a compatibility promise, not a
-dependency: it changes only by a deliberate decision.
+- the Rust toolchain in `rust-toolchain.toml` (latest stable, at least seven days old), together
+  with the Linux build image in `packaging/build/image` (`IMAGE`, the official Rust image of the
+  same version by digest; `SNAPSHOT`, the Debian snapshot that image was built from; and the exact
+  `PACKAGES` versions), which `packaging/build/build.sh` refuses to use with any other version;
+- `cargo-deny` and `cargo-audit`, installed with `--version` in `.github/workflows/ci.yml` and,
+  with the same versions, in the `advisories` job of `.github/workflows/release.yml`; `cargo-cyclonedx`, `nfpm` (version and SHA-256) and WiX (`WIX_VERSION`; stay on 5.x until the
+  licence terms of later versions have been reviewed) in `.github/workflows/release.yml`, `nfpm`
+  again (version and SHA-256, the same as in `release.yml`) in
+  `.github/workflows/repo-builder-tests.yml`, `oasdiff` (version and SHA-256) in
+  `.github/workflows/openapi-sync.yml`, `mitmproxy` (version and SHA-256) in
+  `.github/workflows/proxy-tls.yml`, and `actionlint` and `zizmor` (version and SHA-256) in
+  `.github/workflows/workflow-lint.yml`;
+- the image of the APT and DNF repository builder in `packaging/repo/image` (`IMAGE`, by digest, and
+  the exact `PACKAGES` versions).
+
+The same monthly review runs `cargo audit` and `cargo outdated`, and checks that every action is
+pinned by full commit SHA. The MSRV (`rust-version` in `Cargo.toml`) is a compatibility promise, not
+a dependency: it changes only by a deliberate decision.
+
+### Known vulnerabilities at release
+
+A release is not published with a known exploitable vulnerability, in the CLI or in a dependency
+(Cyber Resilience Act, Annex I, Part I, point 2(a)).
+
+- **The check.** The `advisories` job of `.github/workflows/release.yml` runs `cargo deny check
+  advisories` and `cargo audit` on the tagged commit, against the current RustSec advisory database.
+  The signing jobs and the publication of the draft wait for it: if it fails, nothing is signed or
+  published. Its result, with the tool versions and the revision of the advisory database, is the
+  last line of the release's own notes (before GitHub's list of merged pull requests), so it stays
+  with the release.
+- **What counts as exploitable.** Every advisory that the tools report for the tagged commit is
+  treated as exploitable unless the maintainers show otherwise. Fix it by updating or replacing the
+  dependency. An advisory may be accepted only when the affected code is not reachable from the CLI,
+  or its conditions cannot occur in the way the CLI uses the dependency, and the reason says what was
+  checked: the call path, the feature that is off, the input that never reaches it.
+- **Accepting an advisory.** Add an entry to `[advisories] ignore` in `deny.toml`, through a reviewed
+  pull request: `{ id = "RUSTSEC-...", reason = "<what was checked>. Review by YYYY-MM-DD." }`, with
+  a review date no more than three months ahead. CI and the release refuse a bare id, a missing
+  reason and a review date that has passed (`.github/scripts/advisory-exceptions.py`), and `cargo
+  audit` ignores exactly that list. When the date comes, check the advisory again, then fix it or
+  extend the date with a new reason. Remove the entry once the dependency is fixed.
+- **Between releases.** A new advisory makes the `deny` or `audit` job of CI fail on the next change,
+  and Dependabot and the weekly OSV-Scanner run report it (see [Security testing](#security-testing)).
+  A vulnerability in the CLI itself follows [SECURITY.md](SECURITY.md).
 
 ### The API client is generated
 
@@ -122,8 +166,12 @@ implementation plugged into one. **Depth** is the behaviour available per unit o
 - Commits must be signed (GPG or SSH) and use a clear, imperative message in English. Reference
   the issue it resolves with `Closes #N` in the commit message.
 - Commit messages and pull request descriptions must not mention Claude: no session trailer, no
-  co-author line, no claude.ai link, and not the word itself. Enable the local check with
-  `git config core.hooksPath .githooks`; CI runs the same check on every pull request.
+  co-author line, no claude.ai link, and not the word itself. Enable the local check by copying the
+  hook into your clone from a branch you trust, and again when it changes:
+  `cp .githooks/commit-msg .githooks/check-message.sh "$(git rev-parse --git-common-dir)/hooks/"`.
+  Do not point `core.hooksPath` at `.githooks`: git would then run the hooks of whatever branch is
+  checked out. If you set it before, run `git config --unset core.hooksPath`. CI runs the same check
+  on every pull request.
 - Every commit must be signed off: it needs a `Signed-off-by: Name <email>` trailer matching the
   commit author, which certifies the [Developer Certificate of Origin 1.1](https://developercertificate.org/).
   Add it with `git commit -s`. Merge commits count too (`git merge --signoff`). If you forgot, use
@@ -132,6 +180,10 @@ implementation plugged into one. **Depth** is the behaviour available per unit o
 - By contributing you agree that your contribution is licensed under the Apache License 2.0.
 
 ## Releases and package managers
+
+A release starts with a signed `vX.Y.Z` tag on `main`. Release tags are protected: only members of
+the organisation's release team can create, move or delete a `v*` tag, and the tag runs the
+`release.yml` of the commit it points to ([docs/release-signing.md](docs/release-signing.md)).
 
 Publishing a release (not the draft) starts the **Package managers** workflow. It verifies the
 release's `SHA256SUMS` with cosign and writes the Homebrew formula, the Scoop manifest and the
@@ -208,6 +260,42 @@ An issue is closed as soon as the fix reaches `main`, never left open once fixed
 
 Significant design choices are written up in [docs/decisions](docs/decisions), one numbered
 file each, with a status (Proposed, Accepted, Rejected or Superseded).
+
+## Security testing
+
+The security of the CLI and of its release pipeline is tested on every change and on a schedule.
+Scheduled runs use `main`, the default branch, every Monday.
+
+| Test | What it checks | When | Results |
+|---|---|---|---|
+| `cargo test`, `cargo clippy` (`ci.yml`) | Behaviour, including that credentials are never written, printed or logged | Every pull request and push to `dev` and `main` | The CI run |
+| `cargo deny check`, `cargo audit` (`ci.yml`) | Dependencies against the RustSec advisories, and the licence, banned-crate and source policy in `deny.toml` | Every pull request and push to `dev` and `main` | The CI run |
+| CodeQL (`security-tests.yml`) | Static analysis of the Rust code and of the workflows, with the `security-extended` queries | Every pull request and push to `dev` and `main`, and weekly | Security tab |
+| OSV-Scanner (`security-tests.yml`) | Every dependency in `Cargo.lock` against the OSV database | Every pull request and push to `dev` and `main`, and weekly | Security tab; the run fails |
+| actionlint, zizmor (`workflow-lint.yml`) | Workflow mistakes and unsafe patterns: actions not pinned by commit, broad token permissions, template injection, persisted credentials | Every change under `.github`, and weekly | The run fails; zizmor's results also go to the Security tab |
+| OpenSSF Scorecard (`scorecard.yml`) | Supply-chain practices of the repository, such as pinning, token permissions, branch protection and signed releases | Every push to `main`, weekly, and when branch protection changes | Security tab, and published on [scorecard.dev](https://scorecard.dev) |
+| Dependabot alerts and security updates | Dependencies against the GitHub Advisory Database, which includes RustSec | When an advisory is published or a dependency changes | Security tab, and a pull request when a fixed version exists |
+| Repository builder tests (`repo-builder-tests.yml`) | The APT and DNF repository builder refuses forged packages and indexes | Every change to `packaging/repo`, and weekly | The run |
+| Repository freshness (`repo-freshness.yml`) | The published APT and DNF repositories are signed and current | Weekly, once `packaging/gpg.key` is committed | An issue labelled `repo-freshness` |
+| Release integrity (`release-integrity.yml`) | Release runs, published releases, their files, their Rekor entries (looked up by SHA-256) and the container image signatures match, in both directions ([docs/release-signing.md](docs/release-signing.md#weekly-release-integrity-check)) | Weekly, on demand, and on every change to the check | An issue labelled `release-integrity` |
+| Reproducible build (`reproducible-build.yml`) | The Linux binaries of a release, rebuilt from its tag in the pinned build image, are the same bytes as the released ones ([docs/verifying-releases.md](docs/verifying-releases.md#7-rebuild-the-linux-binaries)) | Every published release, and on demand | An issue labelled `reproducible-build` |
+| Proxy and TLS (`proxy-tls.yml`) | Proxy and TLS inspection behaviour against a TLS-inspecting proxy | Every change to the CLI, the API client or `Cargo.lock` | The run |
+| Dependency review (by hand) | The pins Dependabot does not cover, `cargo outdated`, actions pinned by commit | Monthly | A pull request |
+
+Any actionlint or zizmor finding fails the run; zizmor runs at its pedantic level. A finding that is
+accepted instead of fixed is ignored in `.github/zizmor.yml` with a one-line reason.
+
+What happens with the findings:
+
+- The maintainers triage every new alert in the Security tab within 10 business days, the
+  first-assessment time in [SECURITY.md](SECURITY.md): they fix it, or dismiss it with the reason
+  (false positive, used in tests, will not fix) and a comment saying why.
+- A finding that could be exploitable in a released version is handled as a vulnerability report
+  under [SECURITY.md](SECURITY.md): a private security advisory, a CVSS v3.1 severity and the fix
+  targets there. It is not discussed in a public issue.
+- Any other finding that needs work becomes an issue, written as described in [Issues](#issues).
+- A failed scheduled run is treated like a failed CI run on `main`: it is looked at before the next
+  release.
 
 ## Security issues
 

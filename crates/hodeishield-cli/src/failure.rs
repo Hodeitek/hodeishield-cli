@@ -20,9 +20,10 @@ pub enum Kind {
     NotFound,
     /// A rate limit is exhausted (429). Exit code 6.
     RateLimited,
-    /// The API could not be reached or failed (network, 5xx). Exit code 7.
+    /// The API could not be reached, failed (network, 5xx), or lacks a feature the command needs
+    /// (no portfolio listing). Exit code 7.
     Unavailable,
-    /// The tenant holds no licence in force (403 `LICENCE_INACTIVE`). Exit code 8.
+    /// The tenant holds no licence in force, or is deactivated (403 `LICENCE_INACTIVE`). Exit code 8.
     LicenceInactive,
 }
 
@@ -139,10 +140,12 @@ pub fn from_api(error: hodeishield_api::Error, context: &ApiContext<'_>) -> Fail
                                 && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
                         })
                         .map_or_else(String::new, |s| format!(" (licence: {s})"));
-                    Failure::new(
-                        Kind::LicenceInactive,
-                        format!("The tenant's licence is not in force{state}."),
-                    )
+                    let message = if detail(&api, "licence") == Some("tenant_inactive") {
+                        "The tenant is deactivated.".to_owned()
+                    } else {
+                        format!("The tenant's licence is not in force{state}.")
+                    };
+                    Failure::new(Kind::LicenceInactive, message)
                     .hint(
                         "Ask a tenant administrator to renew or reactivate it. Signing in again or \
                          using another key of this tenant will not help.",
@@ -154,6 +157,12 @@ pub fn from_api(error: hodeishield_api::Error, context: &ApiContext<'_>) -> Fail
                         .iter()
                         .map(|s| context.fill_scope(s))
                         .collect();
+                    let hint = if context.is_portfolio_key {
+                        "Ask an organisation administrator of your MSSP organisation for a key or \
+                         access with that scope."
+                    } else {
+                        "Ask a tenant administrator for a key or access with that scope."
+                    };
                     Failure::new(
                         Kind::Forbidden,
                         format!(
@@ -161,27 +170,80 @@ pub fn from_api(error: hodeishield_api::Error, context: &ApiContext<'_>) -> Fail
                             scopes.join(", ")
                         ),
                     )
-                    .hint("Ask a tenant administrator for a key or access with that scope.")
+                    .hint(hint)
                 }
-                404 => Failure::new(
-                    Kind::NotFound,
-                    server_message.unwrap_or_else(|| "Not found.".to_owned()),
-                ),
+                404 => {
+                    let failure = Failure::new(
+                        Kind::NotFound,
+                        server_message.unwrap_or_else(|| "Not found.".to_owned()),
+                    );
+                    if detail(&api, "code") == Some("TENANT_NOT_FOUND") {
+                        failure.hint(
+                            "The client tenant is not in this credential's portfolio (or it left \
+                             it). `hodeishield tenants list` shows the ones you may read.",
+                        )
+                    } else {
+                        failure
+                    }
+                }
                 429 => {
                     let wait = api
                         .meta
                         .retry_after
                         .map_or_else(String::new, |s| format!(" Try again in {s} s."));
                     let scope = detail(&api, "scope").map_or_else(String::new, |s| format!(" (limit: {s})"));
-                    Failure::new(
+                    let hint = match detail(&api, "scope") {
+                        Some("portfolio_key") => Some(
+                            "This portfolio key has used its requests for the minute. A script \
+                             that reads many client tenants should pause between runs.",
+                        ),
+                        Some("portfolio_org") => Some(
+                            "All portfolio keys of your organisation share this limit; another key \
+                             or script may be using it.",
+                        ),
+                        Some("portfolio_tenant") => Some(
+                            "This client tenant's own limit is used up; other client tenants are \
+                             not affected.",
+                        ),
+                        // The plain `tenant` limit is also what a single-tenant key hits: the
+                        // client wording fits only when a client tenant was selected.
+                        Some("tenant") if context.tenant_selected => Some(
+                            "This client tenant's own limit is used up; other client tenants are \
+                             not affected.",
+                        ),
+                        _ => None,
+                    };
+                    let failure = Failure::new(
                         Kind::RateLimited,
                         format!("Rate limit exhausted{scope}.{wait}"),
-                    )
+                    );
+                    match hint {
+                        Some(hint) => failure.hint(hint),
+                        None => failure,
+                    }
                 }
-                400 => Failure::general(format!(
-                    "The API rejected the request: {}.",
-                    server_message.unwrap_or_else(|| "invalid request".to_owned())
-                )),
+                400 => {
+                    let failure = Failure::general(format!(
+                        "The API rejected the request: {}.",
+                        server_message.as_deref().map_or("invalid request", sentence_body)
+                    ));
+                    match detail(&api, "code") {
+                        Some("TENANT_REQUIRED") => failure.hint(
+                            "This credential covers several client tenants: pick one with \
+                             --tenant <slug|id>, or every one with --all-tenants on a list. \
+                             `hodeishield tenants list` shows them.",
+                        ),
+                        Some("TENANT_SELECTOR_NOT_SUPPORTED") => failure.hint(
+                            "This credential reads one tenant only; leave out --tenant and \
+                             --all-tenants.",
+                        ),
+                        Some("TENANT_HEADER_INVALID") => failure.hint(
+                            "The CLI sent a tenant selection the API could not read. This is a \
+                             bug: please report it.",
+                        ),
+                        _ => failure,
+                    }
+                }
                 status if status >= 500 => Failure::new(
                     Kind::Unavailable,
                     format!(
@@ -191,7 +253,7 @@ pub fn from_api(error: hodeishield_api::Error, context: &ApiContext<'_>) -> Fail
                 ),
                 status => Failure::general(format!(
                     "Unexpected answer from the API: HTTP {status}{}.",
-                    server_message.map_or_else(String::new, |m| format!(": {m}"))
+                    server_message.map_or_else(String::new, |m| format!(": {}", sentence_body(&m)))
                 )),
             };
             failure.request_id = request_id;
@@ -202,11 +264,31 @@ pub fn from_api(error: hodeishield_api::Error, context: &ApiContext<'_>) -> Fail
             "The answer to {operation} does not match the API description this CLI was built from: {source}."
         ))
         .hint("Your CLI may be older than the API. Check for a newer release."),
+        hodeishield_api::Error::PortfolioNotOffered { .. } => Failure::new(
+            Kind::Unavailable,
+            "This API does not offer portfolio access yet.",
+        )
+        .hint(
+            "Reading several client tenants with one credential needs a newer API, or the API URL \
+             is not the HodeiShield /v1 API. Without --tenant and --all-tenants the CLI reads the \
+             credential's own tenant as before.",
+        ),
+        other @ hodeishield_api::Error::TenantMismatch { .. } => Failure::general(other.to_string())
+            .hint(
+                "Nothing was shown, so that no client's data appears under another's name. Check \
+                 the API URL and try again; if it persists, contact support.",
+            ),
         other => Failure::general(other.to_string()),
     }
 }
 
 /// A string member of `error.details`.
+/// The server's message without its closing punctuation, for a sentence the CLI ends itself, so
+/// that "Bad value." does not become "Bad value..".
+fn sentence_body(message: &str) -> &str {
+    message.trim_end().trim_end_matches(['.', '!', '?'])
+}
+
 fn detail<'a>(api: &'a hodeishield_api::ApiError, key: &str) -> Option<&'a str> {
     api.body
         .as_ref()
@@ -244,6 +326,10 @@ pub struct ApiContext<'a> {
     pub source: CredentialSource,
     /// The framework of a compliance call, to fill `compliance.<framework>:read`.
     pub framework: Option<&'a str>,
+    /// Whether the call reads a selected client tenant (`--tenant` or `--all-tenants`).
+    pub tenant_selected: bool,
+    /// Whether the credential is a portfolio key (starts with `hsp_`).
+    pub is_portfolio_key: bool,
 }
 
 impl ApiContext<'_> {
@@ -269,6 +355,14 @@ mod tests {
                 .closed_stdout()
                 .closed_pipe
         );
+    }
+
+    #[test]
+    fn a_sentence_body_drops_only_the_closing_punctuation() {
+        assert_eq!(sentence_body("Bad value."), "Bad value");
+        assert_eq!(sentence_body("Bad value!  "), "Bad value");
+        assert_eq!(sentence_body("send X-HS-Tenant.."), "send X-HS-Tenant");
+        assert_eq!(sentence_body("version 1.2 is old"), "version 1.2 is old");
     }
 
     #[test]

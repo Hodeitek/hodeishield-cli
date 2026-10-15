@@ -34,6 +34,11 @@ pub fn api_key_from_env() -> Option<SecretString> {
         .map(SecretString::from)
 }
 
+/// Whether a credential string is a portfolio key (starts with `hsp_`).
+pub fn is_portfolio_key(credential: &SecretString) -> bool {
+    credential.expose_secret().starts_with("hsp_")
+}
+
 /// The credential for an API call: the environment's API key, else the profile's sign-in token,
 /// refreshed if it is about to expire.
 pub fn credential_for_api(

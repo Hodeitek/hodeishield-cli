@@ -14,6 +14,12 @@ on:
 permissions:
   contents: read
 
+# One run at a time per tag (or per branch for a manual dry run). A running release is never
+# cancelled: a later run for the same ref waits for it, and GitHub keeps one waiting run per group.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   CARGO_TERM_COLOR: always
   BIN_NAME: hodeishield
@@ -88,6 +94,49 @@ jobs:
           echo "sign_windows=$sign_windows" >> "$GITHUB_OUTPUT"
           echo "macOS signing: $sign_macos; Windows signing: $sign_windows"
 
+  # No release with a known exploitable vulnerability (CONTRIBUTING.md, "Known vulnerabilities at
+  # release"): the tagged commit is checked against the RustSec advisory database with the same
+  # pinned tools as CI. Only advisories accepted in deny.toml, each with a reason and a review date,
+  # are let through. The signing jobs and the publication wait for it, so nothing is signed for a
+  # release that cannot be published. Its result goes into the release notes.
+  advisories:
+    name: advisories
+    needs: version
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      result: ${{ steps.check.outputs.result }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned toolchain
+        run: rustup show
+
+      # The versions of the deny and audit jobs in ci.yml.
+      - name: Install cargo-deny and cargo-audit
+        run: |
+          cargo install cargo-deny --locked --version 0.20.2
+          cargo install cargo-audit --locked --version 0.22.2
+
+      # The same script as the audit job of ci.yml; its last line is the result.
+      - name: Check the advisories
+        id: check
+        run: |
+          set -euo pipefail
+          bash .github/scripts/advisory-gate.sh | tee "$RUNNER_TEMP/advisories.txt"
+          result="$(tail -n 1 "$RUNNER_TEMP/advisories.txt")"
+          case "$result" in
+            "No unaddressed security advisory"*) ;;
+            *) echo "::error::the advisory check printed no result"; exit 1 ;;
+          esac
+          echo "result=$result" >> "$GITHUB_OUTPUT"
+          echo "$result" >> "$GITHUB_STEP_SUMMARY"
+
   build-linux:
     name: build (${{ matrix.target }})
     needs: version
@@ -100,29 +149,22 @@ jobs:
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
     runs-on: ${{ matrix.os }}
+    env:
+      TARGET: ${{ matrix.target }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
+      # Used for the man pages only; the binary is built in the pinned image.
       - name: Install pinned toolchain
         run: rustup show
 
-      - name: Add musl target
-        run: rustup target add ${{ matrix.target }}
-
-      # musl-tools provides the musl-gcc/*-linux-musl-gcc wrapper that the
-      # `cc` crate needs to compile aws-lc-sys's C sources (rustls uses
-      # aws-lc-rs). No cmake/nasm is required: aws-lc-sys ships prebuilt NASM
-      # objects and only invokes a plain C compiler on this target.
-      - name: Install musl-tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends musl-tools
-
+      # In the image pinned in packaging/build/image, so that anyone can rebuild the same bytes from
+      # the tag (docs/verifying-releases.md); reproducible-build.yml does it for every release.
       - name: Build
-        run: cargo build --release --locked --target ${{ matrix.target }} -p hodeishield-cli
+        run: packaging/build/build.sh "$TARGET"
 
       - name: Generate man pages
         run: cargo xtask man target/man
@@ -130,13 +172,13 @@ jobs:
       - name: Package archive
         env:
           VERSION: ${{ needs.version.outputs.version }}
-          TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
           stage="$(mktemp -d)/hodeishield-${VERSION}-${TARGET}"
           mkdir -p "$stage"
-          cp "target/${TARGET}/release/${BIN_NAME}" "$stage/"
+          cp "target/build-image/${TARGET}/release/${BIN_NAME}" "$stage/"
           cp LICENSE NOTICE README.md "$stage/"
+          cp docs/user-information.md "$stage/USER-INFORMATION.md"
           mkdir -p "$stage/man"
           cp target/man/*.1 "$stage/man/"
           tar -C "$(dirname "$stage")" -czf "hodeishield-${VERSION}-${TARGET}.tar.gz" "$(basename "$stage")"
@@ -190,6 +232,7 @@ jobs:
           set -euo pipefail
           mkdir -p stage/man
           cp "target/universal-apple-darwin/release/${BIN_NAME}" LICENSE NOTICE README.md stage/
+          cp docs/user-information.md stage/USER-INFORMATION.md
           cp target/man/*.1 stage/man/
 
       - name: Upload the unsigned binary
@@ -218,7 +261,7 @@ jobs:
   # APPLE_NOTARIZATION_KEY (base64 .p8), APPLE_NOTARIZATION_KEY_ID, APPLE_NOTARIZATION_ISSUER_ID.
   sign-macos:
     name: sign and package (universal-apple-darwin)
-    needs: [version, build-macos]
+    needs: [version, advisories, build-macos]
     runs-on: macos-latest
     timeout-minutes: 60
     # The environment, and its required reviewer, only when this run signs. An empty name means
@@ -241,10 +284,11 @@ jobs:
       - name: Refuse anything but the expected files
         run: |
           set -euo pipefail
-          # Top level: exactly the binary, the licence files and the README, plus `man/`. In `man/`:
-          # only regular `hodeishield*.1` files, at least one. Nothing else, of any type.
+          # Top level: exactly the binary, the licence files, the README and the user information,
+          # plus `man/`. In `man/`: only regular `hodeishield*.1` files, at least one. Nothing else,
+          # of any type.
           top="$(cd stage && find . -mindepth 1 -maxdepth 1 | sed 's|^\./||' | LC_ALL=C sort | tr '\n' ' ')"
-          if [ "$top" != "LICENSE NOTICE README.md hodeishield man " ]; then
+          if [ "$top" != "LICENSE NOTICE README.md USER-INFORMATION.md hodeishield man " ]; then
             echo "::error::Unexpected hand-off contents: $top"
             exit 1
           fi
@@ -407,6 +451,8 @@ jobs:
           - os: windows-11-arm
             target: aarch64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
+    env:
+      TARGET: ${{ matrix.target }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -417,15 +463,15 @@ jobs:
         run: rustup show
 
       - name: Build
-        run: cargo build --release --locked --target ${{ matrix.target }} -p hodeishield-cli
+        shell: pwsh
+        run: cargo build --release --locked --target "$env:TARGET" -p hodeishield-cli
 
       - name: Stage the unsigned executable for the signing job
         shell: pwsh
-        env:
-          TARGET: ${{ matrix.target }}
         run: |
           New-Item -ItemType Directory -Path stage | Out-Null
           Copy-Item -Path "target/$env:TARGET/release/$env:BIN_NAME.exe", "LICENSE", "NOTICE", "README.md" -Destination stage
+          Copy-Item -Path "docs/user-information.md" -Destination stage/USER-INFORMATION.md
 
       - name: Upload the unsigned executable
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -451,7 +497,7 @@ jobs:
   # also hosts the x64 dumpbin used to inspect them.
   sign-windows:
     name: sign and package (${{ matrix.target }})
-    needs: [version, build-windows]
+    needs: [version, advisories, build-windows]
     runs-on: windows-latest
     timeout-minutes: 30
     strategy:
@@ -497,7 +543,7 @@ jobs:
           $found = @(Get-ChildItem -LiteralPath stage -Recurse -Force | ForEach-Object {
             $_.FullName.Substring($root.Length).TrimStart('\', '/')
           } | Sort-Object)
-          $expected = @("hodeishield.exe", "LICENSE", "NOTICE", "README.md") | Sort-Object
+          $expected = @("hodeishield.exe", "LICENSE", "NOTICE", "README.md", "USER-INFORMATION.md") | Sort-Object
           if (Compare-Object $found $expected) {
             Write-Host "::error::Unexpected hand-off contents: $($found -join ', ')"
             exit 1
@@ -761,7 +807,7 @@ jobs:
       # only Windows' own Installer API, check that it carries no custom actions or embedded
       # binaries (so nothing runs at install time but standard actions), then extract it with an
       # administrative install and check its payload is exactly the exe sign-windows signed, plus
-      # LICENSE and NOTICE.
+      # LICENSE, NOTICE and USER-INFORMATION.md.
       - name: Check the MSI before signing it
         shell: powershell
         env:
@@ -788,7 +834,7 @@ jobs:
           }
           $files = [int](Count-Rows "File")
           Write-Host "File rows: $files"
-          if ($files -ne 3) { $bad += "File ($files rows, expected 3)" }
+          if ($files -ne 4) { $bad += "File ($files rows, expected 4)" }
           [System.Runtime.InteropServices.Marshal]::ReleaseComObject($db) | Out-Null
           if ($bad.Count -gt 0) { Write-Host "::error::the MSI has unexpected content: $($bad -join ', ')"; exit 1 }
 
@@ -797,12 +843,12 @@ jobs:
           if ($p.ExitCode -ne 0) { throw "administrative extraction exited with $($p.ExitCode)" }
           $payload = @(Get-ChildItem -LiteralPath $target -Recurse -File | Where-Object { $_.Extension -ne ".msi" })
           $names = @($payload | ForEach-Object { $_.Name } | Sort-Object)
-          if (($names -join ",") -ne "hodeishield.exe,LICENSE,NOTICE") { Write-Host "::error::MSI payload: $($names -join ', ')"; exit 1 }
+          if (($names -join ",") -ne "hodeishield.exe,LICENSE,NOTICE,USER-INFORMATION.md") { Write-Host "::error::MSI payload: $($names -join ', ')"; exit 1 }
           $exe = $payload | Where-Object { $_.Name -eq "hodeishield.exe" }
           $hash = (Get-FileHash -LiteralPath $exe.FullName -Algorithm SHA256).Hash.ToLower()
           if ($hash -ne $env:EXE_SHA256) { Write-Host "::error::the exe in the MSI is $hash, not the signed $env:EXE_SHA256"; exit 1 }
           Remove-Item -Recurse -Force $target
-          Write-Host "MSI content: OK (no custom actions or binaries; payload is the signed exe, LICENSE, NOTICE)"
+          Write-Host "MSI content: OK (no custom actions or binaries; payload is the signed exe, LICENSE, NOTICE, USER-INFORMATION.md)"
 
       - name: Azure login (OIDC)
         if: env.SIGN == 'true'
@@ -905,7 +951,7 @@ jobs:
             mkdir -p "$work"
             tar -xzf "archives/hodeishield-${VERSION}-${target}.tar.gz" -C "$work" --strip-components=1
             mkdir -p "$work/stage/man" "$work/stage/completions"
-            cp "$work/hodeishield" "$work/LICENSE" "$work/NOTICE" "$work/stage/"
+            cp "$work/hodeishield" "$work/LICENSE" "$work/NOTICE" "$work/USER-INFORMATION.md" "$work/stage/"
             for page in "$work"/man/*.1; do
               gzip -9n -c "$page" > "$work/stage/man/$(basename "$page").gz"
             done
@@ -992,7 +1038,7 @@ jobs:
   # release.
   publish:
     name: publish (draft release)
-    needs: [version, build-linux, sign-macos, sign-windows, sign-msi, sbom, packages]
+    needs: [version, advisories, build-linux, sign-macos, sign-windows, sign-msi, sbom, packages]
     # Only a pushed tag publishes; a manual run is always a dry run, whatever the ref is called.
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && needs.version.outputs.dry_run != 'true'
     runs-on: ubuntu-latest
@@ -1070,7 +1116,7 @@ jobs:
 
       - name: Write SHA256SUMS
         working-directory: dist
-        run: sha256sum * > SHA256SUMS
+        run: sha256sum -- * > SHA256SUMS
 
       - name: Base64-encode SHA256SUMS for the provenance generator
         id: subjects
@@ -1095,17 +1141,21 @@ jobs:
             cosign sign-blob --yes --bundle "${f}.sigstore.json" "$f"
           done
 
-      # The notes are the version's CHANGELOG section, then how to verify the download, then
-      # GitHub's list of merged pull requests (--generate-notes appends it after the notes file).
+      # The notes are the version's CHANGELOG section, how to verify the download and the result of
+      # the advisory check, then GitHub's list of merged pull requests (--generate-notes appends it
+      # after the notes file).
       - name: Write the release notes
         env:
           TAG: ${{ steps.tag.outputs.tag }}
+          ADVISORIES: ${{ needs.advisories.outputs.result }}
         run: |
           set -euo pipefail
           {
             sh .github/scripts/changelog-section.sh "${TAG#v}"
             echo
             echo "Verify the download as described in [Verifying releases](https://github.com/${GITHUB_REPOSITORY}/blob/${TAG}/docs/verifying-releases.md)."
+            echo
+            echo "$ADVISORIES"
           } > "$RUNNER_TEMP/notes.md"
           cat "$RUNNER_TEMP/notes.md"
 
@@ -1132,7 +1182,7 @@ jobs:
     permissions:
       id-token: write # for the generator's own keyless signing
       contents: write # to attach the provenance file to the draft release
-      actions: read
+      actions: read # the generator reads this run to identify the calling workflow
     # Pinned by tag, not SHA: the slsa-framework/slsa-github-generator docs
     # require reusable workflow callers to reference it by tag so its
     # internal integrity checks (which compare the calling ref) still work.

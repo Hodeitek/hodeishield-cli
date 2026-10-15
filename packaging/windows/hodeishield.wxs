@@ -4,12 +4,12 @@
 
   Built by the release workflow (job `windows-msi`) with:
 
-      wix build -arch x64 -d Version=<X.Y.Z> -d SourceDir=<dir with hodeishield.exe, LICENSE, NOTICE>
+      wix build -arch x64 -d Version=<X.Y.Z> -d SourceDir=<dir with the files below>
                 -o hodeishield-<version>-x86_64-pc-windows-msvc.msi packaging/windows/hodeishield.wxs
 
   It installs, for all users (per machine):
     %ProgramFiles%\HodeiShield CLI\hodeishield.exe   (the same signed exe as the release .zip)
-    %ProgramFiles%\HodeiShield CLI\LICENSE, NOTICE
+    %ProgramFiles%\HodeiShield CLI\LICENSE, NOTICE, USER-INFORMATION.md
   and appends that folder to the system PATH. Uninstalling removes the files and the PATH entry.
 
   The UpgradeCode below is PERMANENT: every version shares it, so a newer MSI replaces an older one
@@ -52,6 +52,9 @@
       </Component>
       <Component Id="Notice" Guid="*">
         <File Id="NoticeFile" Source="$(var.SourceDir)\NOTICE" KeyPath="yes" />
+      </Component>
+      <Component Id="UserInformation" Guid="*">
+        <File Id="UserInformationFile" Source="$(var.SourceDir)\USER-INFORMATION.md" KeyPath="yes" />
       </Component>
       <!-- The PATH entry is its own component, so it is added on install and removed on uninstall. -->
       <Component Id="SystemPath" Guid="0239B9B1-FD70-43AD-BEB6-825747B6D6C9">
