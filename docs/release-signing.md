@@ -121,20 +121,23 @@ checks the binary's notarization online on first run. See
   `true` and a secret is missing, the job fails and names it. When the variable is not `true`, the
   release still builds and publishes, the macOS binary is not signed or notarized, and the run
   summary says so.
-- **Checking the secrets without a release.** The **macOS signing check** workflow
-  (`macos-signing-check.yml`, started by hand) is bound to the same environment, so it needs the
-  same approval. It signs and notarizes a throwaway test executable and package with the stored
-  secrets, verifies them like a release does, and uploads nothing. It fails, listing the names, if a
-  secret is missing.
+- **Checking the secrets without a release (optional).** The **macOS signing check** workflow
+  (`macos-signing-check.yml`, started by hand) signs and notarizes a throwaway test executable and
+  package with the stored secrets, verifies them like a release does, and uploads nothing. It fails,
+  listing the names, if a secret is missing. It is bound to the same environment, so it needs the
+  same approval, and it has two preconditions: the workflow must be on the default branch to be
+  dispatched, and the environment accepts deployments from `v*` tags only, so a repository
+  administrator adds `main` to its allowed branches for the check and removes it afterwards.
 
 To enable it, a maintainer with the right to change the environment:
 
 1. stores the nine secrets in the `release-signing` environment;
-2. lets the **macOS signing check** run: the environment accepts deployments from `v*` tags only, so
-   a repository administrator adds `main`, where the workflow runs, to its allowed branches for the
-   check and removes it afterwards;
-3. runs **macOS signing check** and reads its summary: it must pass;
-4. sets the repository variable `MACOS_SIGNING_ENABLED` to `true`.
+2. sets the repository variable `MACOS_SIGNING_ENABLED` to `true`.
+
+The next release signs and notarizes the macOS binaries, and its draft is published only after the
+macOS job and its checks pass. If signing or notarization fails, the release run fails and nothing
+is published, so the first signed release is itself the test. To check the secrets before that
+release, run the optional **macOS signing check** workflow as described above.
 
 The first release signed this way is the first one whose run summary says
 "macOS signing: signed and notarized". Releases before it are not signed with a Developer ID. To
@@ -301,10 +304,10 @@ that the release workflow did not sign.
    revokes their notarization tickets, which the maintainers can ask Apple to do for files known to
    be malicious.
 3. **Replace.** Create new certificates and a new API key, store them as the secrets listed under
-   [Developer ID (macOS)](#developer-id-macos), run the **macOS signing check** workflow, and set
-   `MACOS_SIGNING_ENABLED` back to `true`. Then publish a new patch release of each
-   [supported version](../SECURITY.md#supported-versions) through the normal release process: a
-   published file cannot be signed again in place.
+   [Developer ID (macOS)](#developer-id-macos), optionally run the **macOS signing check**
+   workflow, and set `MACOS_SIGNING_ENABLED` back to `true`. Then publish a new patch release of
+   each [supported version](../SECURITY.md#supported-versions) through the normal release process:
+   a published file cannot be signed again in place.
 4. **Tell users** as in the Windows section above (security advisory, notice in the README, release
    notes), naming the affected versions and the Team ID, and update this document and
    [verifying-releases.md](verifying-releases.md#6-releases-after-a-signing-change).
