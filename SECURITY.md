@@ -152,7 +152,8 @@ here, in the security notice block at the top of [README.md](README.md) (see
 ## What is in scope
 
 - Anything that could expose a credential: the tenant API key in `HODEISHIELD_API_KEY`, or the
-  sign-in tokens the CLI keeps in the system keychain.
+  sign-in tokens the CLI keeps in the system keychain or, if the user opted in, in its token file
+  (including the checks that refuse an unsafe file or directory).
 - Sending a credential anywhere other than the configured HodeiShield hosts (redirects, plain HTTP,
   crafted URLs or identifiers).
 - Output from the API reaching your terminal in a way that can run or hide commands.
