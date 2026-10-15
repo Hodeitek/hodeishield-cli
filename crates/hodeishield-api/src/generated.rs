@@ -13,7 +13,7 @@
 use serde::{Deserialize, Serialize};
 
 /// `info.version` of the OpenAPI document this client was generated from.
-pub const OPENAPI_VERSION: &str = "2026-10-16";
+pub const OPENAPI_VERSION: &str = "2026-10-19";
 
 /// The server the OpenAPI document declares.
 pub const DEFAULT_SERVER: &str = "https://api.hodeishield.com";
@@ -22,7 +22,7 @@ pub const DEFAULT_SERVER: &str = "https://api.hodeishield.com";
 pub struct ErrorBody {
     /// Closed vocabulary; new members may be added (see Versioning).
     ///
-    /// Documented values: `invalid_request`, `unauthorized`, `forbidden`, `not_found`, `method_not_allowed`, `rate_limited`, `internal_error`, `service_unavailable`. Treat any other value as valid: the vocabulary may grow.
+    /// Documented values: `invalid_request`, `unauthorized`, `forbidden`, `not_found`, `method_not_allowed`, `conflict`, `rate_limited`, `internal_error`, `service_unavailable`. Treat any other value as valid: the vocabulary may grow.
     pub code: String,
     /// For a human reading a log. Not stable; do not parse it.
     pub message: String,
@@ -51,10 +51,10 @@ pub struct Vendor {
     /// Primary domain, lowercase, no scheme.
     #[serde(default)]
     pub domain: Option<String>,
-    /// Free-text category assigned by the tenant.
+    /// Free-text category assigned by the tenant. NOT a closed vocabulary: the console form stores the label of the tenant’s language, and the API accepts any text. List the vendors to see the values a tenant uses.
     #[serde(default)]
     pub category: Option<String>,
-    /// Kind of third party (provider, product, …).
+    /// Kind of third party: software | cloud | hardware | service_provider. Open vocabulary: a new kind is a compatible change.
     #[serde(default)]
     pub vendor_type: Option<String>,
     /// Level of access the vendor has to the tenant systems.
@@ -228,7 +228,7 @@ pub struct ComplianceControl {
     pub framework: String,
     /// Control identifier inside the framework.
     pub control_code: String,
-    /// missing | partial | covered, as evaluated by the platform.
+    /// covered | partial | missing, as evaluated by the platform.
     pub status: String,
     /// Evidence items currently linked to the control.
     pub evidence_count: i64,
@@ -367,6 +367,116 @@ pub struct PortfolioTenant {
 pub struct ListPortfolioTenantsResponse {
     pub data: Vec<PortfolioTenant>,
     pub pagination: Pagination,
+}
+
+/// The credential that made this call.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Credential {
+    /// Open vocabulary: `tenant` (a tenant API key, `hsk_…`), `oauth` (a user access token, `hs_at_…`) or `portfolio` (an MSSP portfolio key, `hsp_…`).
+    pub r#type: String,
+    /// The clear key prefix (`hsp_…`) of a portfolio key. Null for a tenant key or an OAuth token. Never the full key and never a hash.
+    #[serde(default)]
+    pub prefix: Option<String>,
+    /// The scopes the credential carries.
+    pub scopes: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Tenant {
+    /// The tenant this credential reads (lowercase).
+    pub id: String,
+    /// Display name. Untrusted text.
+    pub name: String,
+    /// The type of the organisation that owns the tenant. Open vocabulary: `direct` (a customer organisation), `mssp` (a managed security service provider) or `root` (the platform operator). Treat an unknown value as opaque.
+    pub r#type: String,
+}
+
+/// The organisation of the tenant (tenant key, OAuth token) or the MSSP the key belongs to (portfolio key).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WhoAmIOrganization {
+    pub id: String,
+    /// Display name. Null for a portfolio key whose client subset holds none of the provider’s own tenants, the only place a portfolio key sees the name. Untrusted text.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// `direct`, `mssp` or `root`; `mssp` for a portfolio key.
+    pub r#type: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Portfolio {
+    /// How many tenants this key can select, right now.
+    pub tenant_count: i64,
+    /// Where the tenants are listed: `GET /v1/portfolio/tenants`.
+    pub tenants_path: String,
+}
+
+/// The credential that made the call, and what it may see about itself.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WhoAmI {
+    /// The credential that made this call.
+    pub credential: Credential,
+    /// The credential’s own tenant. Null for a portfolio key, which has no tenant.
+    #[serde(default)]
+    pub tenant: Option<Tenant>,
+    /// The organisation of the tenant (tenant key, OAuth token) or the MSSP the key belongs to (portfolio key).
+    pub organization: WhoAmIOrganization,
+    /// Portfolio keys only. Null for a tenant key or an OAuth token.
+    #[serde(default)]
+    pub portfolio: Option<Portfolio>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WhoAmIResponse {
+    /// The credential that made the call, and what it may see about itself.
+    pub data: WhoAmI,
+}
+
+/// A report the platform generated for the tenant (metadata only).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Report {
+    pub id: String,
+    /// What kind of report this is. Known values: monthly, vendor_risk, nis2_compliance, ens, cyberbrief, compliance, security_posture, board_report. Open vocabulary: a new kind may appear.
+    pub report_type: String,
+    pub title: String,
+    /// First day the report covers, `YYYY-MM-DD`.
+    pub period_start: String,
+    /// Last day the report covers, `YYYY-MM-DD`.
+    pub period_end: String,
+    /// Lifecycle: generating | completed | failed. Only a `completed` report can be downloaded.
+    pub status: String,
+    /// RFC 3339, UTC.
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ListReportsResponse {
+    pub data: Vec<Report>,
+    pub pagination: Pagination,
+}
+
+/// One report, with the formats it can be downloaded in.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReportDetail {
+    pub id: String,
+    /// What kind of report this is. Known values: monthly, vendor_risk, nis2_compliance, ens, cyberbrief, compliance, security_posture, board_report. Open vocabulary: a new kind may appear.
+    pub report_type: String,
+    pub title: String,
+    /// First day the report covers, `YYYY-MM-DD`.
+    pub period_start: String,
+    /// Last day the report covers, `YYYY-MM-DD`.
+    pub period_end: String,
+    /// Lifecycle: generating | completed | failed. Only a `completed` report can be downloaded.
+    pub status: String,
+    /// RFC 3339, UTC.
+    pub created_at: String,
+    /// The formats `downloadReport` can serve for this report now. Empty while it is not `completed`, or when its content has no renderer (download it from the console as Markdown or JSON).
+    pub download_formats: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GetReportResponse {
+    /// One report, with the formats it can be downloaded in.
+    pub data: ReportDetail,
 }
 
 /// Accepted values of a query parameter.
@@ -849,6 +959,145 @@ impl std::str::FromStr for PortfolioTenantSort {
     }
 }
 
+/// Accepted values of a query parameter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ReportSort {
+    /// `created_at`
+    CreatedAt,
+    /// `period_end`
+    PeriodEnd,
+}
+
+impl ReportSort {
+    /// Every accepted value, as sent on the wire.
+    pub const VALUES: &'static [&'static str] = &["created_at", "period_end"];
+
+    /// The value as sent on the wire.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::CreatedAt => "created_at",
+            Self::PeriodEnd => "period_end",
+        }
+    }
+}
+
+impl std::fmt::Display for ReportSort {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for ReportSort {
+    type Err = crate::ParseEnumError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "created_at" => Ok(Self::CreatedAt),
+            "period_end" => Ok(Self::PeriodEnd),
+            _ => Err(crate::ParseEnumError::new(value, Self::VALUES)),
+        }
+    }
+}
+
+/// Accepted values of a query parameter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Format {
+    /// `pdf`
+    Pdf,
+    /// `xlsx`
+    Xlsx,
+}
+
+impl Format {
+    /// Every accepted value, as sent on the wire.
+    pub const VALUES: &'static [&'static str] = &["pdf", "xlsx"];
+
+    /// The value as sent on the wire.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pdf => "pdf",
+            Self::Xlsx => "xlsx",
+        }
+    }
+}
+
+impl std::fmt::Display for Format {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for Format {
+    type Err = crate::ParseEnumError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "pdf" => Ok(Self::Pdf),
+            "xlsx" => Ok(Self::Xlsx),
+            _ => Err(crate::ParseEnumError::new(value, Self::VALUES)),
+        }
+    }
+}
+
+/// Accepted values of a query parameter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Locale {
+    /// `es`
+    Es,
+    /// `en`
+    En,
+    /// `de`
+    De,
+    /// `fr`
+    Fr,
+    /// `it`
+    It,
+    /// `eu`
+    Eu,
+}
+
+impl Locale {
+    /// Every accepted value, as sent on the wire.
+    pub const VALUES: &'static [&'static str] = &["es", "en", "de", "fr", "it", "eu"];
+
+    /// The value as sent on the wire.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Es => "es",
+            Self::En => "en",
+            Self::De => "de",
+            Self::Fr => "fr",
+            Self::It => "it",
+            Self::Eu => "eu",
+        }
+    }
+}
+
+impl std::fmt::Display for Locale {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for Locale {
+    type Err = crate::ParseEnumError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "es" => Ok(Self::Es),
+            "en" => Ok(Self::En),
+            "de" => Ok(Self::De),
+            "fr" => Ok(Self::Fr),
+            "it" => Ok(Self::It),
+            "eu" => Ok(Self::Eu),
+            _ => Err(crate::ParseEnumError::new(value, Self::VALUES)),
+        }
+    }
+}
+
 /// Query parameters of `listVendors`.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ListVendorsParams {
@@ -862,7 +1111,7 @@ pub struct ListVendorsParams {
     pub order: Option<Order>,
     /// Case-insensitive substring of the name or the domain.
     pub q: Option<String>,
-    /// Exact category match.
+    /// Exact category match, as the tenant wrote it (case-sensitive). Category is free text with NO closed vocabulary, so there is no list of values to publish: read `category` from `GET /v1/vendors`. To filter by the kind of third party, read `vendor_type` (`x-hs-known-values`).
     pub category: Option<String>,
     /// Filter by the operational flag.
     pub active: Option<String>,
@@ -968,9 +1217,9 @@ pub struct ListRisksParams {
     pub sort: Option<RiskSort>,
     /// Sort direction. Defaults to desc.
     pub order: Option<Order>,
-    /// Exact status match.
+    /// Exact status match. Known values: identified, assessed, treatment_planned, treatment_implemented, closed. Open vocabulary: any other value is matched exactly and matches nothing.
     pub status: Option<String>,
-    /// Exact domain match.
+    /// Exact domain match. Known values: vendor, cyber, data, operational, compliance, concentration, strategic, legal, financial, reputational. Open vocabulary: any other value is matched exactly and matches nothing.
     pub domain: Option<String>,
     /// Only risks linked to this vendor.
     pub vendor_id: Option<String>,
@@ -1024,7 +1273,7 @@ pub struct ListComplianceControlsParams {
     pub order: Option<Order>,
     /// Framework slug. One of: nis2, ens, iso27001, dora, gdpr, soc2, iso42001, nistcsf, pcidss, euaiact, hipaa, cmmc, cyberessentials, uaeia, sama, saudiecc, ndpa.
     pub framework: String,
-    /// Exact status match.
+    /// Exact status match. Known values: covered, partial, missing. Open vocabulary: any other value is matched exactly and matches nothing.
     pub status: Option<String>,
 }
 
@@ -1198,6 +1447,79 @@ impl ListPortfolioTenantsParams {
     }
 }
 
+/// Query parameters of `listReports`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ListReportsParams {
+    /// 1-based page number. Defaults to 1.
+    pub page: Option<i64>,
+    /// Items per page, 1..200. Defaults to 50.
+    pub per_page: Option<i64>,
+    /// Field to order by. One of: created_at, period_end.
+    pub sort: Option<ReportSort>,
+    /// Sort direction. Defaults to desc.
+    pub order: Option<Order>,
+    /// Exact type match. Known values: monthly, vendor_risk, nis2_compliance, ens, cyberbrief, compliance, security_posture, board_report. Open vocabulary: any other value is matched exactly and matches nothing.
+    pub report_type: Option<String>,
+    /// Exact status match. Known values: generating, completed, failed. Open vocabulary: any other value is matched exactly and matches nothing.
+    pub status: Option<String>,
+    /// Only reports created at or after this RFC 3339 instant.
+    pub since: Option<String>,
+}
+
+impl ListReportsParams {
+    /// The query string, in document order, without the parameters that are unset.
+    #[must_use]
+    pub fn query_pairs(&self) -> Vec<(&'static str, String)> {
+        let mut pairs = Vec::new();
+        if let Some(value) = &self.page {
+            pairs.push(("page", value.to_string()));
+        }
+        if let Some(value) = &self.per_page {
+            pairs.push(("per_page", value.to_string()));
+        }
+        if let Some(value) = &self.sort {
+            pairs.push(("sort", value.as_str().to_owned()));
+        }
+        if let Some(value) = &self.order {
+            pairs.push(("order", value.as_str().to_owned()));
+        }
+        if let Some(value) = &self.report_type {
+            pairs.push(("report_type", value.clone()));
+        }
+        if let Some(value) = &self.status {
+            pairs.push(("status", value.clone()));
+        }
+        if let Some(value) = &self.since {
+            pairs.push(("since", value.clone()));
+        }
+        pairs
+    }
+}
+
+/// Query parameters of `downloadReport`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DownloadReportParams {
+    /// File format, one of: pdf, xlsx. Defaults to pdf. `getReport` lists the formats a report can be served in (`download_formats`).
+    pub format: Option<Format>,
+    /// Language of the file, one of: es, en, de, fr, it, eu. Defaults to en.
+    pub locale: Option<Locale>,
+}
+
+impl DownloadReportParams {
+    /// The query string, in document order, without the parameters that are unset.
+    #[must_use]
+    pub fn query_pairs(&self) -> Vec<(&'static str, String)> {
+        let mut pairs = Vec::new();
+        if let Some(value) = &self.format {
+            pairs.push(("format", value.as_str().to_owned()));
+        }
+        if let Some(value) = &self.locale {
+            pairs.push(("locale", value.as_str().to_owned()));
+        }
+        pairs
+    }
+}
+
 /// Every `/v1` operation, as the OpenAPI document describes it.
 pub mod operations {
     use crate::Operation;
@@ -1261,7 +1583,33 @@ pub mod operations {
         path: "/v1/risks",
         summary: "List risk-register entries",
         scopes: &["supply_risk:read"],
-        known_values: &[],
+        known_values: &[
+            (
+                "status",
+                &[
+                    "identified",
+                    "assessed",
+                    "treatment_planned",
+                    "treatment_implemented",
+                    "closed",
+                ],
+            ),
+            (
+                "domain",
+                &[
+                    "vendor",
+                    "cyber",
+                    "data",
+                    "operational",
+                    "compliance",
+                    "concentration",
+                    "strategic",
+                    "legal",
+                    "financial",
+                    "reputational",
+                ],
+            ),
+        ],
         deprecated_values: &[],
         tenant_scoped: true,
     };
@@ -1285,7 +1633,7 @@ pub mod operations {
         path: "/v1/compliance/controls",
         summary: "List control status for a framework",
         scopes: &["compliance.<framework>:read"],
-        known_values: &[],
+        known_values: &[("status", &["covered", "partial", "missing"])],
         deprecated_values: &[],
         tenant_scoped: true,
     };
@@ -1350,6 +1698,69 @@ pub mod operations {
         tenant_scoped: false,
     };
 
+    /// `GET /v1/me`: Describe the calling credential.
+    pub const WHO_AM_I: Operation = Operation {
+        id: "whoAmI",
+        method: "GET",
+        path: "/v1/me",
+        summary: "Describe the calling credential",
+        scopes: &[],
+        known_values: &[],
+        deprecated_values: &[],
+        tenant_scoped: false,
+    };
+
+    /// `GET /v1/reports`: List generated reports.
+    pub const LIST_REPORTS: Operation = Operation {
+        id: "listReports",
+        method: "GET",
+        path: "/v1/reports",
+        summary: "List generated reports",
+        scopes: &["reports:read"],
+        known_values: &[
+            (
+                "report_type",
+                &[
+                    "monthly",
+                    "vendor_risk",
+                    "nis2_compliance",
+                    "ens",
+                    "cyberbrief",
+                    "compliance",
+                    "security_posture",
+                    "board_report",
+                ],
+            ),
+            ("status", &["generating", "completed", "failed"]),
+        ],
+        deprecated_values: &[],
+        tenant_scoped: true,
+    };
+
+    /// `GET /v1/reports/{id}`: Fetch one report.
+    pub const GET_REPORT: Operation = Operation {
+        id: "getReport",
+        method: "GET",
+        path: "/v1/reports/{id}",
+        summary: "Fetch one report",
+        scopes: &["reports:read"],
+        known_values: &[],
+        deprecated_values: &[],
+        tenant_scoped: true,
+    };
+
+    /// `GET /v1/reports/{id}/download`: Download a report file.
+    pub const DOWNLOAD_REPORT: Operation = Operation {
+        id: "downloadReport",
+        method: "GET",
+        path: "/v1/reports/{id}/download",
+        summary: "Download a report file",
+        scopes: &["reports:read"],
+        known_values: &[],
+        deprecated_values: &[],
+        tenant_scoped: true,
+    };
+
     /// All operations, in document order.
     pub const ALL: &[Operation] = &[
         LIST_VENDORS,
@@ -1364,6 +1775,10 @@ pub mod operations {
         GET_EVIDENCE,
         LIST_ENDPOINTS,
         LIST_PORTFOLIO_TENANTS,
+        WHO_AM_I,
+        LIST_REPORTS,
+        GET_REPORT,
+        DOWNLOAD_REPORT,
     ];
 }
 
@@ -1618,5 +2033,79 @@ impl crate::Client {
             "/v1/portfolio/tenants".to_owned(),
             params.query_pairs(),
         )
+    }
+
+    /// Describe the calling credential.
+    ///
+    /// Who the presented credential is: its type and scopes, and the tenant and organisation it reads (a tenant API key or an OAuth token), or the MSSP organisation it belongs to and how many tenants it can reach (a portfolio key; the tenants themselves are on `GET /v1/portfolio/tenants`). It describes the caller only: no other tenant, no secret, never the key or its hash. Any valid credential may call it: it requires NO scope, and it uses the same authentication and the same rate limits as every other operation. It never takes `X-HS-Tenant`.
+    ///
+    /// Required scope: `none (any valid credential)`. Published in `/v1` since 2026-10-17.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error`] when the request cannot be sent, the API answers with an error, or the
+    /// body does not match the document.
+    pub fn who_am_i(&self) -> Result<crate::ApiResponse<WhoAmIResponse>, crate::Error> {
+        self.get(&operations::WHO_AM_I, "/v1/me".to_owned(), Vec::new())
+    }
+
+    /// List generated reports.
+    ///
+    /// The reports generated for the tenant, newest first by default. Poll for new ones with `since` plus `order=asc`; download one with `downloadReport` once its `status` is `completed`.
+    ///
+    /// Required scope: `reports:read`. Published in `/v1` since 2026-10-19.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error`] when the request cannot be sent, the API answers with an error, or the
+    /// body does not match the document.
+    pub fn list_reports(
+        &self,
+        params: &ListReportsParams,
+    ) -> Result<crate::ApiResponse<ListReportsResponse>, crate::Error> {
+        self.get(
+            &operations::LIST_REPORTS,
+            "/v1/reports".to_owned(),
+            params.query_pairs(),
+        )
+    }
+
+    /// Fetch one report.
+    ///
+    /// The same object `listReports` returns, for a single report, plus the formats it can be downloaded in now (`download_formats`).
+    ///
+    /// Required scope: `reports:read`. Published in `/v1` since 2026-10-19.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error`] when the request cannot be sent, the API answers with an error, or the
+    /// body does not match the document.
+    pub fn get_report(
+        &self,
+        id: &str,
+    ) -> Result<crate::ApiResponse<GetReportResponse>, crate::Error> {
+        self.get(
+            &operations::GET_REPORT,
+            format!("/v1/reports/{}", crate::encode_path_segment(id)?),
+            Vec::new(),
+        )
+    }
+
+    /// Download a report file.
+    ///
+    /// The report rendered as a file (PDF or XLSX), returned as the response body with `Content-Disposition: attachment`; never a link. Each delivery is recorded in the tenant’s audit trail with the credential that received it. A report that is not `completed`, a format its content has no renderer for (see `download_formats` in `getReport`) and a file over the size cap are a 409.
+    ///
+    /// Required scope: `reports:read`. Published in `/v1` since 2026-10-19.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error`] when the request cannot be sent, the API answers with an error, or the
+    /// body does not match the document.
+    pub fn download_report(
+        &self,
+        id: &str,
+        params: &DownloadReportParams,
+    ) -> Result<crate::Download, crate::Error> {
+        self.get_binary(&operations::DOWNLOAD_REPORT, format!("/v1/reports/{}/download", crate::encode_path_segment(id)?), params.query_pairs(), "application/pdf, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/json")
     }
 }

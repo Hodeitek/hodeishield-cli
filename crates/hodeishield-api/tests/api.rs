@@ -1186,9 +1186,14 @@ fn the_listing_is_unscoped_by_its_operation_and_the_data_operations_are_scoped()
     assert_eq!(listing.path, "/v1/portfolio/tenants");
     assert_eq!(listing.scopes, ["portfolio:read"]);
     assert!(!listing.tenant_scoped);
+    // `GET /v1/me` describes the credential itself: it needs no scope and refuses `X-HS-Tenant`.
+    let me = operations::WHO_AM_I;
+    assert_eq!(me.path, "/v1/me");
+    assert!(me.scopes.is_empty());
+    assert!(!me.tenant_scoped);
     let data: Vec<_> = operations::ALL
         .iter()
-        .filter(|op| op.id != listing.id)
+        .filter(|op| op.id != listing.id && op.id != me.id)
         .collect();
     assert!(data.len() >= 11);
     assert!(data.iter().all(|op| op.tenant_scoped));
@@ -1233,4 +1238,60 @@ fn a_404_or_405_with_a_portfolio_code_is_the_apis_own_error() {
         matches!(err, Error::PortfolioNotOffered { status: 404 }),
         "{err:?}"
     );
+}
+
+#[test]
+fn a_report_download_returns_the_file_its_type_and_its_name() {
+    use hodeishield_api::v1::{DownloadReportParams, Format};
+    let mut server = mockito::Server::new();
+    let file = b"%PDF-1.7\n\x00\xff binary".to_vec();
+    let mock = server
+        .mock("GET", "/v1/reports/r-1/download")
+        .match_query(mockito::Matcher::UrlEncoded("format".into(), "pdf".into()))
+        .match_header(
+            "accept",
+            "application/pdf, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, \
+             application/json",
+        )
+        .with_header("content-type", "application/pdf")
+        .with_header(
+            "content-disposition",
+            r#"attachment; filename="board-2026-09.pdf""#,
+        )
+        .with_body(file.clone())
+        .expect(1)
+        .create();
+    let params = DownloadReportParams {
+        format: Some(Format::Pdf),
+        ..DownloadReportParams::default()
+    };
+    let download = client(&server)
+        .download_report("r-1", &params)
+        .expect("download");
+    assert_eq!(download.bytes, file);
+    assert_eq!(download.content_type.as_deref(), Some("application/pdf"));
+    assert_eq!(download.file_name.as_deref(), Some("board-2026-09.pdf"));
+    assert_eq!(download.meta.status, 200);
+    mock.assert();
+}
+
+#[test]
+fn a_report_that_is_not_ready_is_an_api_error_with_its_code() {
+    use hodeishield_api::v1::DownloadReportParams;
+    let mut server = mockito::Server::new();
+    server
+        .mock("GET", "/v1/reports/r-2/download")
+        .with_status(409)
+        .with_header("content-type", "application/json")
+        .with_body(
+            r#"{"error":{"code":"REPORT_NOT_READY","message":"The report is still being generated.","request_id":"req-1"}}"#,
+        )
+        .create();
+    let err = client(&server)
+        .download_report("r-2", &DownloadReportParams::default())
+        .expect_err("not ready");
+    let api = err.api().expect("api error");
+    assert_eq!(api.status, 409);
+    assert_eq!(api.code(), Some("REPORT_NOT_READY"));
+    assert_eq!(api.operation, "downloadReport");
 }

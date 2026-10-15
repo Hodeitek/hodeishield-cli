@@ -712,42 +712,95 @@ fn compliance_controls_csv() {
     assert_no_key(&output);
 }
 
-/// The vendored document lists no values for these filters, so they are sent exactly as typed,
-/// without a warning, and the command succeeds. (The warning itself is covered by the unit tests
-/// of `filters`, with operations that carry lists.)
+/// The vendors `category` filter is free text with no list in the document, so it is sent exactly
+/// as typed, without a warning, and the command succeeds.
 #[test]
-fn free_form_filters_are_sent_as_typed_without_a_warning() {
-    for (args, path, param, value) in [
+fn a_free_form_filter_is_sent_as_typed_without_a_warning() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    let mock = server
+        .mock("GET", "/v1/vendors")
+        .match_query(mockito::Matcher::UrlEncoded(
+            "category".into(),
+            "Cloud Host".into(),
+        ))
+        .with_body(page(&[], 1, 0, 1))
+        .expect(1)
+        .create();
+    let output = env
+        .api(&server)
+        .args(["vendors", "list", "--category", "Cloud Host"])
+        .output()
+        .expect("run");
+    assert!(output.status.success(), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("warning:"), "{stderr}");
+    mock.assert();
+}
+
+/// The document lists values for the risks `domain` and `status` filters and the compliance
+/// controls `status` filter: a listed value goes through silently, another one gets a warning and
+/// is still sent exactly as typed.
+#[test]
+fn listed_risk_and_control_filters_warn_and_are_sent_as_typed() {
+    let controls = |status: &'static str| -> Vec<&'static str> {
+        vec![
+            "compliance",
+            "controls",
+            "--framework",
+            "nis2",
+            "--status",
+            status,
+        ]
+    };
+    for (args, path, param, value, expected) in [
         (
-            &["vendors", "list", "--category", "Cloud Host"][..],
-            "/v1/vendors",
-            "category",
-            "Cloud Host",
+            vec!["risks", "list", "--domain", "cyber"],
+            "/v1/risks",
+            "domain",
+            "cyber",
+            None,
         ),
         (
-            &["risks", "list", "--domain", "Cyber"],
+            vec!["risks", "list", "--domain", "Cyber"],
             "/v1/risks",
             "domain",
             "Cyber",
+            Some(
+                "for --domain (vendor, cyber, data, operational, compliance, concentration, strategic, legal, financial, reputational); did you mean `cyber`? Sending it anyway.",
+            ),
         ),
         (
-            &["risks", "list", "--status", "OPEN"],
+            vec!["risks", "list", "--status", "closed"],
             "/v1/risks",
             "status",
-            "OPEN",
+            "closed",
+            None,
         ),
         (
-            &[
-                "compliance",
-                "controls",
-                "--framework",
-                "nis2",
-                "--status",
-                "Covered",
-            ],
+            vec!["risks", "list", "--status", "open"],
+            "/v1/risks",
+            "status",
+            "open",
+            Some(
+                "warning: `open` is not one of the values the API lists for --status (identified, assessed, treatment_planned, treatment_implemented, closed); sending it anyway.",
+            ),
+        ),
+        (
+            controls("covered"),
+            "/v1/compliance/controls",
+            "status",
+            "covered",
+            None,
+        ),
+        (
+            controls("Covered"),
             "/v1/compliance/controls",
             "status",
             "Covered",
+            Some(
+                "for --status (covered, partial, missing); did you mean `covered`? Sending it anyway.",
+            ),
         ),
     ] {
         let env = Env::new();
@@ -758,10 +811,13 @@ fn free_form_filters_are_sent_as_typed_without_a_warning() {
             .with_body(page(&[], 1, 0, 1))
             .expect(1)
             .create();
-        let output = env.api(&server).args(args).output().expect("run");
+        let output = env.api(&server).args(&args).output().expect("run");
         assert!(output.status.success(), "{args:?}: {output:?}");
         let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(!stderr.contains("warning:"), "{args:?}: {stderr}");
+        match expected {
+            Some(warning) => assert!(stderr.contains(warning), "{args:?}: {stderr}"),
+            None => assert!(!stderr.contains("warning:"), "{args:?}: {stderr}"),
+        }
         mock.assert();
     }
 }

@@ -6,6 +6,17 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ## [Unreleased]
 
+### Changed
+
+- `risks list --domain` and `--status` and `compliance controls --status` now list the values the
+  API publishes for them in `--help`. A value that is not listed gets a warning on standard error
+  (with a suggestion when only the case differs) and is still sent exactly as typed. The vendors
+  `--category` filter stays free text: the API keeps no list of categories.
+  ([#145](https://github.com/Hodeitek/hodeishield-cli/issues/145))
+- The generated `/v1` client follows version 2026-10-19 of the API document, which adds `GET /v1/me`
+  and the reports operations, including the download of a report file. `hodeishield login` now also
+  asks for `reports:read` when the app offers it.
+
 ## [0.4.4] - 2026-10-15
 
 ### Security
