@@ -56,14 +56,14 @@ section), and put `hodeishield` (`hodeishield.exe` on Windows) somewhere on your
 | Windows x86_64 | `hodeishield-<version>-x86_64-pc-windows-msvc.zip` |
 | Windows arm64 | `hodeishield-<version>-aarch64-pc-windows-msvc.zip` (from 0.4.0) |
 
-`<version>` has no leading `v`: release `v0.4.4` ships `hodeishield-0.4.4-…`. The Linux binaries are
+`<version>` has no leading `v`: release `v0.5.0` ships `hodeishield-0.5.0-…`. The Linux binaries are
 statically linked and run on any distribution. Homebrew and Scoop packages (next section) and a
 [container image](#container-image) are also available.
 
 From source, with the Rust toolchain installed (pin the release tag you want):
 
 ```sh
-cargo install --locked --git https://github.com/Hodeitek/hodeishield-cli --tag v0.4.4 hodeishield-cli
+cargo install --locked --git https://github.com/Hodeitek/hodeishield-cli --tag v0.5.0 hodeishield-cli
 ```
 
 ### Homebrew and Scoop
@@ -179,7 +179,7 @@ exact version, or better its digest. The image carries no documentation: the
 0.4.2, as `USER-INFORMATION.md` in its archives.
 
 ```sh
-v=0.4.4   # the version you want
+v=0.5.0   # the version you want
 docker pull ghcr.io/hodeitek/hodeishield-cli:$v
 docker run --rm -e HODEISHIELD_API_KEY ghcr.io/hodeitek/hodeishield-cli:$v vendors list
 ```
@@ -193,7 +193,7 @@ The image is signed by digest with cosign (keyless) and carries the release's Cy
 signed attestation. Verify both before you rely on the image:
 
 ```sh
-v=0.4.4
+v=0.5.0
 image=ghcr.io/hodeitek/hodeishield-cli:$v
 cosign verify $image \
   --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/container-image.yml@refs/tags/v$v \
@@ -231,9 +231,9 @@ Each release has a `SHA256SUMS` file, a Sigstore bundle (`*.sigstore.json`) for 
 ```sh
 sha256sum --ignore-missing -c SHA256SUMS
 
-cosign verify-blob hodeishield-0.4.4-x86_64-unknown-linux-musl.tar.gz \
-  --bundle hodeishield-0.4.4-x86_64-unknown-linux-musl.tar.gz.sigstore.json \
-  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.4.4 \
+cosign verify-blob hodeishield-0.5.0-x86_64-unknown-linux-musl.tar.gz \
+  --bundle hodeishield-0.5.0-x86_64-unknown-linux-musl.tar.gz.sigstore.json \
+  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.5.0 \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --certificate-github-workflow-trigger push
 ```
@@ -268,7 +268,7 @@ on the binary, so the block still applies. A download with `curl` does not set i
 place:
 
 ```sh
-curl -LO https://github.com/Hodeitek/hodeishield-cli/releases/download/v0.4.4/hodeishield-0.4.4-universal-apple-darwin.tar.gz
+curl -LO https://github.com/Hodeitek/hodeishield-cli/releases/download/v0.5.0/hodeishield-0.5.0-universal-apple-darwin.tar.gz
 ```
 
 **Windows, before 0.2.0.** Unblock the archive before unpacking it, so the executable does not
