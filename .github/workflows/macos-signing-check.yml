@@ -1,0 +1,206 @@
+name: macOS signing check
+
+# On-demand check of the macOS signing secrets, without a release. It signs and notarizes a tiny
+# throwaway executable and installer package with the stored Developer ID certificates and App
+# Store Connect key, then verifies the result the way release.yml does. Nothing is published or
+# uploaded.
+#
+# The job is bound to the `release-signing` environment, so it needs the same approval as a release
+# and is the only way to read the secrets. If a secret is absent the run fails and lists the missing
+# names: an explicit check never passes by skipping.
+#
+# The steps from the import to the verification mirror the `sign-macos` job of release.yml; keep
+# the two in step. Like that job, this one checks nothing out and runs no repository code.
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: macos-signing-check
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: check the macOS signing secrets
+    runs-on: macos-latest
+    timeout-minutes: 60
+    environment: release-signing
+    permissions:
+      contents: read # the job's default; nothing is checked out
+    steps:
+      - name: Check the signing inputs are present
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          MACOS_INSTALLER_CERTIFICATE: ${{ secrets.MACOS_INSTALLER_CERTIFICATE }}
+          MACOS_INSTALLER_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_INSTALLER_CERTIFICATE_PASSWORD }}
+          MACOS_INSTALLER_IDENTITY: ${{ secrets.MACOS_INSTALLER_IDENTITY }}
+          APPLE_NOTARIZATION_KEY: ${{ secrets.APPLE_NOTARIZATION_KEY }}
+          APPLE_NOTARIZATION_KEY_ID: ${{ secrets.APPLE_NOTARIZATION_KEY_ID }}
+          APPLE_NOTARIZATION_ISSUER_ID: ${{ secrets.APPLE_NOTARIZATION_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          missing=""
+          for name in MACOS_CERTIFICATE MACOS_CERTIFICATE_PASSWORD MACOS_SIGNING_IDENTITY \
+                      MACOS_INSTALLER_CERTIFICATE MACOS_INSTALLER_CERTIFICATE_PASSWORD \
+                      MACOS_INSTALLER_IDENTITY APPLE_NOTARIZATION_KEY APPLE_NOTARIZATION_KEY_ID \
+                      APPLE_NOTARIZATION_ISSUER_ID; do
+            if [ -z "${!name}" ]; then
+              echo "::error::The secret $name is missing from the release-signing environment."
+              missing="$missing $name"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            {
+              printf '### macOS signing check\n\n'
+              printf "Failed: these secrets are missing from the \`release-signing\` environment:\n\n"
+              for name in $missing; do printf -- "- \`%s\`\n" "$name"; done
+              printf '\nStore them as described in docs/release-signing.md, then run this check again.\n'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+      - name: Build a universal test executable
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/check"
+          printf 'int main(void) { return 0; }\n' > "$RUNNER_TEMP/check/main.c"
+          cc -arch x86_64 -arch arm64 -o "$RUNNER_TEMP/check/signing-check" "$RUNNER_TEMP/check/main.c"
+          lipo -info "$RUNNER_TEMP/check/signing-check"
+
+      - name: Import the Developer ID certificates into a temporary keychain
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_INSTALLER_CERTIFICATE: ${{ secrets.MACOS_INSTALLER_CERTIFICATE }}
+          MACOS_INSTALLER_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_INSTALLER_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password="$(openssl rand -hex 24)"
+          echo "::add-mask::$password"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 1800 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          printf '%s' "$MACOS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/application.p12"
+          printf '%s' "$MACOS_INSTALLER_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/installer.p12"
+          security import "$RUNNER_TEMP/application.p12" -k "$keychain" \
+            -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security import "$RUNNER_TEMP/installer.p12" -k "$keychain" \
+            -P "$MACOS_INSTALLER_CERTIFICATE_PASSWORD" -T /usr/bin/productsign
+          rm -f "$RUNNER_TEMP/application.p12" "$RUNNER_TEMP/installer.p12"
+          security list-keychains -d user -s "$keychain" login.keychain
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain" > /dev/null
+
+      - name: Sign the executable (hardened runtime, secure timestamp)
+        env:
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+          bin="$RUNNER_TEMP/check/signing-check"
+          codesign --force --timestamp --options runtime \
+            --identifier com.hodeitek.hodeishield.signing-check \
+            --keychain "$RUNNER_TEMP/signing.keychain-db" \
+            --sign "$MACOS_SIGNING_IDENTITY" "$bin"
+          codesign --verify --strict --verbose=2 "$bin"
+          # The signature must come from a Developer ID Application certificate of a team, with the
+          # hardened runtime and a secure timestamp. codesign prints no secrets.
+          details="$(codesign --display -vv "$bin" 2>&1)"
+          echo "$details"
+          team="$(sed -n 's/^TeamIdentifier=//p' <<< "$details")"
+          for expected in '^Authority=Developer ID Application: ' '^CodeDirectory .*flags=.*runtime' '^Timestamp='; do
+            if ! grep -q -- "$expected" <<< "$details"; then
+              echo "::error::The signature lacks the expected '${expected#^}'."
+              exit 1
+            fi
+          done
+          if [ -z "$team" ] || [ "$team" = "not set" ]; then
+            echo "::error::The signature carries no TeamIdentifier."
+            exit 1
+          fi
+
+      - name: Build and sign a test installer package
+        env:
+          MACOS_INSTALLER_IDENTITY: ${{ secrets.MACOS_INSTALLER_IDENTITY }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/pkgroot"
+          mkdir -p "$root/usr/local/bin"
+          cp -p "$RUNNER_TEMP/check/signing-check" "$root/usr/local/bin/"
+          pkgbuild --root "$root" --install-location / \
+            --identifier com.hodeitek.hodeishield.signing-check --version 0.0.0 \
+            "$RUNNER_TEMP/unsigned.pkg"
+          productsign --timestamp --keychain "$RUNNER_TEMP/signing.keychain-db" \
+            --sign "$MACOS_INSTALLER_IDENTITY" \
+            "$RUNNER_TEMP/unsigned.pkg" "$RUNNER_TEMP/signing-check.pkg"
+          pkgutil --check-signature "$RUNNER_TEMP/signing-check.pkg"
+
+      - name: Remove the temporary keychain
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/signing.keychain-db" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP/application.p12" "$RUNNER_TEMP/installer.p12"
+
+      - name: Notarize the executable and the package, staple the package
+        env:
+          APPLE_NOTARIZATION_KEY: ${{ secrets.APPLE_NOTARIZATION_KEY }}
+          APPLE_NOTARIZATION_KEY_ID: ${{ secrets.APPLE_NOTARIZATION_KEY_ID }}
+          APPLE_NOTARIZATION_ISSUER_ID: ${{ secrets.APPLE_NOTARIZATION_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          key="$RUNNER_TEMP/notary.p8"
+          trap 'rm -f "$key"' EXIT
+          printf '%s' "$APPLE_NOTARIZATION_KEY" | base64 --decode > "$key"
+          notarize() {
+            xcrun notarytool submit "$1" --key "$key" --key-id "$APPLE_NOTARIZATION_KEY_ID" \
+              --issuer "$APPLE_NOTARIZATION_ISSUER_ID" --wait --timeout 30m
+          }
+          ditto -c -k "$RUNNER_TEMP/check/signing-check" "$RUNNER_TEMP/notarize.zip"
+          notarize "$RUNNER_TEMP/notarize.zip"
+          pkg="$RUNNER_TEMP/signing-check.pkg"
+          notarize "$pkg"
+          xcrun stapler staple "$pkg"
+          xcrun stapler validate "$pkg"
+          spctl --assess --type install --verbose=2 "$pkg"
+
+      - name: Verify the signed and notarized files
+        run: |
+          set -euo pipefail
+          bin="$RUNNER_TEMP/check/signing-check"
+          pkg="$RUNNER_TEMP/signing-check.pkg"
+          team="$(codesign --display -vv "$bin" 2>&1 | sed -n 's/^TeamIdentifier=//p')"
+          if [ -z "$team" ] || [ "$team" = "not set" ]; then
+            echo "::error::The signature carries no TeamIdentifier."
+            exit 1
+          fi
+          accepted=false
+          for _ in 1 2 3 4 5 6; do
+            out="$(spctl --assess --type execute --verbose=2 "$bin" 2>&1 || true)"
+            if grep -qx 'source=Notarized Developer ID' <<< "$out"; then accepted=true; break; fi
+            sleep 20
+          done
+          echo "$out"
+          if [ "$accepted" != true ]; then
+            echo "::error::Gatekeeper does not report the executable as 'Notarized Developer ID'."
+            exit 1
+          fi
+          sig="$(pkgutil --check-signature "$pkg")"
+          echo "$sig"
+          if ! grep -q 'Developer ID Installer: ' <<< "$sig"; then
+            echo "::error::The package is not signed with a Developer ID Installer certificate."
+            exit 1
+          fi
+          xcrun stapler validate "$pkg"
+          spctl --assess --type install --verbose=2 "$pkg"
+          {
+            printf '### macOS signing check\n\n'
+            printf 'Passed: the stored secrets sign and notarize with the Developer ID of team %s.\n\n' "$team"
+            printf -- '- All nine secrets are present.\n'
+            printf -- "- \`codesign --verify --strict\`: passed; Developer ID Application authority, hardened runtime and secure timestamp present.\n"
+            printf -- "- \`spctl --assess --type execute\`: \`source=Notarized Developer ID\`.\n"
+            printf -- "- \`pkgutil --check-signature\`: signed with a Developer ID Installer certificate.\n"
+            printf -- "- \`xcrun stapler validate\` and \`spctl --assess --type install\` on the package: passed.\n"
+            printf '\nOnly a throwaway test executable was signed; no release file was touched or uploaded.\n'
+          } >> "$GITHUB_STEP_SUMMARY"

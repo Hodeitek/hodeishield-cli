@@ -20,6 +20,10 @@ advisory if you want to be credited.
 - Machine-readable contact: [security.txt](https://hodeishield.com/.well-known/security.txt)
   (RFC 9116), for the whole HodeiShield product. The same file is served on `app.hodeishield.com`
   and `docs.hodeishield.com`.
+- Machine-readable contact for this CLI: [security.txt](.well-known/security.txt) (RFC 9116), published in
+  this repository at `.well-known/security.txt` on `main`, where it is served as
+  <https://raw.githubusercontent.com/Hodeitek/hodeishield-cli/main/.well-known/security.txt>. It is
+  not signed. A weekly check validates it and opens an issue when it has less than 60 days left.
 - Encrypted email: not offered at the moment.
 - Bug bounty: there is no bounty programme; we credit reporters publicly in the advisory.
 
@@ -152,7 +156,8 @@ here, in the security notice block at the top of [README.md](README.md) (see
 ## What is in scope
 
 - Anything that could expose a credential: the tenant API key in `HODEISHIELD_API_KEY`, or the
-  sign-in tokens the CLI keeps in the system keychain.
+  sign-in tokens the CLI keeps in the system keychain or, if the user opted in, in its token file
+  (including the checks that refuse an unsafe file or directory).
 - Sending a credential anywhere other than the configured HodeiShield hosts (redirects, plain HTTP,
   crafted URLs or identifiers).
 - Output from the API reaching your terminal in a way that can run or hide commands.

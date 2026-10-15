@@ -5,6 +5,7 @@
 
 mod config;
 mod resources;
+mod save;
 mod session;
 mod tenants;
 
@@ -124,7 +125,7 @@ pub fn run(cli: Cli, out: &mut dyn Write) -> Result<()> {
             (None, true) => Selection::All,
             (None, false) => Selection::Own,
         },
-        store: Arc::new(auth::store::Keychain),
+        store: Arc::new(auth::store::Configured::default()),
         is_portfolio_key: Cell::new(None),
     };
     match cli.command {
@@ -134,6 +135,7 @@ pub fn run(cli: Cli, out: &mut dyn Write) -> Result<()> {
         Command::Compliance(command) => resources::compliance(&ctx, command, out),
         Command::Evidence(command) => resources::evidence(&ctx, command, out),
         Command::Endpoints(command) => resources::endpoints(&ctx, command, out),
+        Command::Reports(command) => resources::reports(&ctx, command, out),
         Command::Tenants(command) => tenants::run(&ctx, command, out),
         Command::Login(args) => session::login(&ctx, &args),
         Command::Logout => session::logout(&ctx),

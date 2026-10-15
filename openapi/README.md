@@ -6,9 +6,9 @@ from it; nothing in that client is written by hand from memory.
 
 | Field | Value |
 |---|---|
-| `info.version` | `2026-10-16` |
-| SHA-256 | `1321a417aba28e7b60dbc28a35ce2dc3711d8973b985107f7701d70ff3be6b0d` |
-| Operations | 12, all `GET` |
+| `info.version` | `2026-10-19` |
+| SHA-256 | `8c9a44bc696584105f10b67d490a8816dabc26b07b80ed18369e6d3e498359c4` |
+| Operations | 16, all `GET` |
 
 ## Updating it
 
