@@ -27,6 +27,7 @@ use hodeishield_api::{ApiResponse, Error};
 use serde::Serialize;
 use serde_json::Value;
 use std::io::Write;
+use std::path::Path;
 
 type Fetch<'a, R> =
     dyn FnMut(Option<i64>, Option<i64>) -> std::result::Result<ApiResponse<R>, Error> + 'a;
@@ -822,6 +823,10 @@ fn download(
     {
         return Err(save::already_exists(path));
     }
+    // The same for the directory a name chosen from the answer will go to.
+    if !args.to_stdout() && (directory.is_some() || args.output.is_none()) {
+        save::check_writable(directory.unwrap_or_else(|| Path::new(".")))?;
+    }
     let (client, source) = ctx.single(settings)?;
     let params = DownloadReportParams {
         format: args.format,
@@ -843,12 +848,20 @@ fn download(
     let path = match (&args.output, directory) {
         (Some(path), None) => path.clone(),
         (_, directory) => {
-            let extension = args.format.unwrap_or(Format::Pdf).as_str();
+            let extension = save::extension(
+                args.format.map(Format::as_str),
+                file.content_type.as_deref(),
+            );
             let name = save::file_name(file.file_name.as_deref(), &args.id, extension);
-            match directory {
+            let path = match directory {
                 Some(directory) => directory.join(name),
                 None => name.into(),
+            };
+            // The name is only known now that the report is downloaded.
+            if !args.force && save::exists(&path) {
+                return Err(save::not_saved(&path));
             }
+            path
         }
     };
     save::write_new(&path, &file.bytes, args.force)?;

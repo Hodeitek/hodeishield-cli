@@ -2988,6 +2988,14 @@ fn an_existing_file_is_not_replaced_without_force() {
         .output()
         .expect("run");
     assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("downloaded but not saved")
+            && stderr.contains("r.pdf already exists")
+            && stderr.contains("--force")
+            && stderr.contains("--output"),
+        "{stderr}"
+    );
     assert_eq!(
         std::fs::read(cwd.path().join("r.pdf")).expect("read"),
         b"also mine"
@@ -3013,13 +3021,17 @@ fn an_existing_file_is_not_replaced_without_force() {
 }
 
 #[test]
-fn a_hostile_suggested_name_is_saved_as_a_plain_name_in_the_current_directory() {
+fn a_hostile_suggested_name_is_saved_as_a_plain_stem_with_the_extension_of_the_format() {
     let fallback = format!("report-{REPORT_ID}.pdf");
     for (disposition, expected) in [
-        (r#"attachment; filename="../../etc/passwd""#, "passwd"),
+        (r#"attachment; filename="../../etc/passwd""#, "passwd.pdf"),
+        (r#"attachment; filename="conftest.py""#, "conftest.pdf"),
+        (r#"attachment; filename="x.library-ms""#, "x.pdf"),
+        (r#"attachment; filename="a.pdf.exe""#, "a.pdf"),
+        (r#"attachment; filename="a.b.pdf""#, "a.pdf"),
         (r#"attachment; filename="a/b\\c.pdf""#, "c.pdf"),
         (r#"attachment; filename="..""#, fallback.as_str()),
-        (r#"attachment; filename=".hidden rc""#, "hidden_rc"),
+        (r#"attachment; filename=".hidden rc""#, "hidden_rc.pdf"),
         (r#"attachment; filename="-rf *.pdf""#, "rf__.pdf"),
         (
             "attachment; filename=\"\u{202e}fdp.exe\"",
@@ -3044,6 +3056,29 @@ fn a_hostile_suggested_name_is_saved_as_a_plain_name_in_the_current_directory() 
         assert_eq!(entries(root.path()), ["work"], "{disposition}");
         assert!(!output.stderr.contains(&0x1b), "{disposition}");
     }
+}
+
+#[test]
+fn the_extension_follows_the_content_type_when_no_format_is_given() {
+    let env = Env::new();
+    let cwd = tempfile::tempdir().expect("tempdir");
+    let mut server = mockito::Server::new();
+    server
+        .mock("GET", format!("/v1/reports/{REPORT_ID}/download").as_str())
+        .match_query(mockito::Matcher::Any)
+        .with_header(
+            "content-type",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        .with_header("content-disposition", r#"attachment; filename="board.dll""#)
+        .with_body(b"PK")
+        .create();
+    env.api(&server)
+        .current_dir(cwd.path())
+        .args(["reports", "download", REPORT_ID])
+        .assert()
+        .success();
+    assert_eq!(entries(cwd.path()), ["board.xlsx"]);
 }
 
 #[test]

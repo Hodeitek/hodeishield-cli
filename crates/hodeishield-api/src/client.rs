@@ -509,7 +509,8 @@ impl Client {
     }
 
     /// Sends a GET, with the retries, the credential renewal and the tenant check, and returns a
-    /// successful answer's metadata, headers and body (at most `limit` bytes). The operation decides
+    /// successful answer's metadata, headers and body (at most `limit` bytes; the body of an error is
+    /// read up to [`MAX_RESPONSE_BYTES`] whatever `limit` is). The operation decides
     /// whether the client's tenant selection applies: scope headers are sent and checked only when
     /// `operation.tenant_scoped`.
     fn fetch(
@@ -572,6 +573,11 @@ impl Client {
                 _ => Ok(()),
             };
             let headers = response.headers().clone();
+            let limit = if status.is_success() {
+                limit
+            } else {
+                MAX_RESPONSE_BYTES
+            };
             let body = read_body(response, limit).map_err(Error::Body)?;
             if status.is_success() {
                 verdict?;
