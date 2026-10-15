@@ -1141,8 +1141,9 @@ jobs:
             cosign sign-blob --yes --bundle "${f}.sigstore.json" "$f"
           done
 
-      # The notes are the version's CHANGELOG section, then how to verify the download, then
-      # GitHub's list of merged pull requests (--generate-notes appends it after the notes file).
+      # The notes are the version's CHANGELOG section, how to verify the download and the result of
+      # the advisory check, then GitHub's list of merged pull requests (--generate-notes appends it
+      # after the notes file).
       - name: Write the release notes
         env:
           TAG: ${{ steps.tag.outputs.tag }}

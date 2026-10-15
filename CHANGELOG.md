@@ -6,6 +6,17 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-10-15
+
+### Security
+
+- rustls, the TLS library behind every connection the CLI makes, is updated from 0.23.45 to
+  0.23.46. It fixes RUSTSEC-2026-0346 (`Debug` output of client session values exposed TLS
+  secrets), RUSTSEC-2026-0347 (buffered data sent to the outer server after an ECH rejection),
+  RUSTSEC-2026-0348 (Brotli certificate decompression could allocate up to 1 GiB before
+  authentication) and RUSTSEC-2026-0349 (an unauthenticated ServerHello could downgrade later
+  connections to classical key exchange). Releases up to 0.4.3 include the affected version.
+
 ## [0.4.3] - 2026-10-14
 
 ### Added
@@ -297,7 +308,8 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 - Profiles (`config`), shell completions, and release archives for Linux, macOS and Windows signed
   with Sigstore and with SLSA provenance.
 
-[Unreleased]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.4.3...HEAD
+[Unreleased]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.4.4...HEAD
+[0.4.4]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.4.0...v0.4.1

@@ -96,7 +96,8 @@ A release is not published with a known exploitable vulnerability, in the CLI or
   advisories` and `cargo audit` on the tagged commit, against the current RustSec advisory database.
   The signing jobs and the publication of the draft wait for it: if it fails, nothing is signed or
   published. Its result, with the tool versions and the revision of the advisory database, is the
-  last line of the release notes, so it stays with the release.
+  last line of the release's own notes (before GitHub's list of merged pull requests), so it stays
+  with the release.
 - **What counts as exploitable.** Every advisory that the tools report for the tagged commit is
   treated as exploitable unless the maintainers show otherwise. Fix it by updating or replacing the
   dependency. An advisory may be accepted only when the affected code is not reachable from the CLI,
