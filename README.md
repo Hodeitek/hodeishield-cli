@@ -252,13 +252,20 @@ before 0.2.0, a copy downloaded with a browser can be blocked or flagged. The co
 the proof that the file is genuine; once it passes, unblock the binary as follows.
 
 **macOS.** Gatekeeper may refuse to open `hodeishield` ("Apple could not verify… is free of
-malware"). Remove the quarantine attribute from the unpacked binary:
+malware"). Verify the download first, then allow the binary in System Settings: after the first
+blocked attempt, open **System Settings → Privacy & Security**, scroll down to the message about
+`hodeishield`, click **Open Anyway**, confirm, and run the command again. The dialog's wording and
+button labels follow the system language, so they may differ from the English text quoted here.
+
+Or remove the quarantine attribute from the unpacked binary:
 
 ```sh
 xattr -d com.apple.quarantine ./hodeishield   # "No such xattr" means there was nothing to remove
 ```
 
-Or download with `curl`, which does not set that attribute in the first place:
+A browser download sets that attribute, and unpacking the archive with `tar` in Terminal keeps it
+on the binary, so the block still applies. A download with `curl` does not set it in the first
+place:
 
 ```sh
 curl -LO https://github.com/Hodeitek/hodeishield-cli/releases/download/v0.4.4/hodeishield-0.4.4-universal-apple-darwin.tar.gz

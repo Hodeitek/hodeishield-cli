@@ -57,6 +57,9 @@ commands, `--json` output and exit codes. Each release's notes start with its se
   not trusted, so the earlier `brew tap` then `brew install hodeishield` failed. The README also says
   how to trust the formula when the tap was added before.
   ([#179](https://github.com/Hodeitek/hodeishield-cli/issues/179))
+- The README explains the System Settings route to open a blocked macOS binary, that unpacking with
+  `tar` in Terminal keeps the block, and that the dialog follows the system language.
+  ([#16](https://github.com/Hodeitek/hodeishield-cli/issues/16))
 
 ## [0.4.4] - 2026-10-15
 
