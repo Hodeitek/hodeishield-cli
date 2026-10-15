@@ -294,6 +294,12 @@ hodeishield whoami
 When `HODEISHIELD_API_KEY` is set it is used for every call, whatever else is configured. Keep it in
 your CI's secret store; the CLI never prints it.
 
+`whoami` asks the API who the credential is and shows the tenant it reads (name and id), its
+organisation and, for a key, its scopes; for a portfolio key, the MSSP and how many client tenants it
+can select. With `--json` these are the `tenant`, `organization`, `portfolio` and
+`credential_scopes` fields. If the API cannot be reached, `whoami` still shows the local settings,
+leaves those fields null and says why on standard error.
+
 ### By signing in (people)
 
 ```sh

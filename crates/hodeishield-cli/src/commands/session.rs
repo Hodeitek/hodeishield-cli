@@ -9,6 +9,7 @@ use crate::auth::{self, StoredToken, loopback::Loopback};
 use crate::cli::LoginArgs;
 use crate::failure::{CredentialSource, Failure, Result};
 use crate::output::{clean, print_json, unix_to_rfc3339};
+use hodeishield_api::v1::WhoAmI;
 use serde_json::{Map, Value, json};
 use std::io::Write;
 use std::time::{Duration, Instant};
@@ -219,22 +220,38 @@ fn note_api_key() {
 
 pub fn whoami(ctx: &Context, out: &mut dyn Write) -> Result<()> {
     let settings = ctx.settings()?;
+    // `GET /v1/me` describes the credential itself: it takes no tenant selection.
+    let me = || -> std::result::Result<WhoAmI, String> {
+        let (client, source) = ctx.api(&settings, None).map_err(|f| f.message)?;
+        client
+            .who_am_i()
+            .map(|answer| answer.data.data)
+            .map_err(|e| {
+                let mut call = ctx.call(source, None);
+                call.tenant_selected = false;
+                crate::failure::from_api(e, &call).message
+            })
+    };
     whoami_with(
         &settings,
         auth::api_key_from_env().is_some(),
         ctx.store.as_ref(),
         ctx.json,
+        &me,
         out,
     )
 }
 
-/// `whoami` with the settings and whether an API key is set given, so it can be tested without the
-/// process environment. With a key, the store is not read.
+/// `whoami` with the settings, whether an API key is set and the call to `GET /v1/me` given, so it
+/// can be tested without the process environment. With a key, the store is not read. The call is
+/// made only when there is a credential; when it fails, the local lines are still printed, the
+/// API's lines are left out (null in `--json`) and a warning says why.
 fn whoami_with(
     settings: &crate::config::Settings,
     has_api_key: bool,
     store: &dyn auth::TokenStore,
     json: bool,
+    me: &dyn Fn() -> std::result::Result<WhoAmI, String>,
     out: &mut dyn Write,
 ) -> Result<()> {
     let mut info = Map::new();
@@ -278,6 +295,34 @@ fn whoami_with(
             CredentialSource::OAuth => "oauth",
         })),
     );
+    let me = match source.map(|_| me()) {
+        Some(Ok(me)) => Some(me),
+        Some(Err(reason)) => {
+            // The reason can carry the API's own message: untrusted text.
+            eprintln!(
+                "warning: could not read from the API who this credential is: {}",
+                clean(&reason)
+            );
+            None
+        }
+        None => None,
+    };
+    info.insert(
+        "tenant".into(),
+        json!(me.as_ref().and_then(|me| me.tenant.as_ref())),
+    );
+    info.insert(
+        "organization".into(),
+        json!(me.as_ref().map(|me| &me.organization)),
+    );
+    info.insert(
+        "portfolio".into(),
+        json!(me.as_ref().and_then(|me| me.portfolio.as_ref())),
+    );
+    info.insert(
+        "credential_scopes".into(),
+        json!(me.as_ref().map(|me| &me.credential.scopes)),
+    );
 
     if json {
         print_json(out, &Value::Object(info))?;
@@ -304,6 +349,9 @@ fn whoami_with(
                 rows.push((label, clean(value)));
             }
         }
+        if let Some(me) = &me {
+            rows.extend(me_rows(me, source == Some(CredentialSource::ApiKey)));
+        }
         for (label, value) in rows {
             writeln!(out, "{label:<11} {value}")?;
         }
@@ -312,6 +360,44 @@ fn whoami_with(
         Some(_) => Ok(()),
         None => Err(auth::not_signed_in(settings)),
     }
+}
+
+/// The table lines `GET /v1/me` adds: the tenant (tenant key or sign-in), the organisation, the
+/// number of client tenants (portfolio key) and, for a key, its scopes (a sign-in already shows
+/// the token's). Names come from the API and are cleaned before they are printed.
+fn me_rows(me: &WhoAmI, is_key: bool) -> Vec<(&'static str, String)> {
+    let mut rows = Vec::new();
+    if let Some(tenant) = &me.tenant {
+        rows.push((
+            "Tenant",
+            format!("{} ({})", clean(&tenant.name), clean(&tenant.id)),
+        ));
+    }
+    let organization = &me.organization;
+    rows.push((
+        "Org",
+        format!(
+            "{} ({})",
+            organization
+                .name
+                .as_deref()
+                .map_or_else(|| "-".to_owned(), clean),
+            clean(&organization.r#type)
+        ),
+    ));
+    if let Some(portfolio) = &me.portfolio {
+        rows.push((
+            "Tenants",
+            format!(
+                "{} client tenants (hodeishield tenants list)",
+                portfolio.tenant_count
+            ),
+        ));
+    }
+    if is_key {
+        rows.push(("Scopes", clean(&me.credential.scopes.join(" "))));
+    }
+    rows
 }
 
 /// Revokes a stored sign-in at the app that issued it, never at whatever the profile points to
@@ -699,8 +785,15 @@ mod tests {
         let (api, app) = (mockito::Server::new(), mockito::Server::new());
         let settings = settings_for(&api, &app);
         let mut out = Vec::new();
-        let err = whoami_with(&settings, false, &UnreachableStore, false, &mut out)
-            .expect_err("no credential");
+        let err = whoami_with(
+            &settings,
+            false,
+            &UnreachableStore,
+            false,
+            &no_call,
+            &mut out,
+        )
+        .expect_err("no credential");
         assert_eq!(err.kind, crate::failure::Kind::NotAuthenticated);
         assert!(
             err.message
@@ -723,8 +816,87 @@ mod tests {
         let (api, app) = (mockito::Server::new(), mockito::Server::new());
         let settings = settings_for(&api, &app);
         let mut out = Vec::new();
-        whoami_with(&settings, true, &UnreachableStore, true, &mut out).expect("key set");
-        assert!(String::from_utf8(out).expect("utf8").contains("api_key"));
+        let me = || Err("offline".to_owned());
+        whoami_with(&settings, true, &UnreachableStore, true, &me, &mut out).expect("key set");
+        let printed: Value = serde_json::from_slice(&out).expect("json");
+        assert_eq!(printed["credential"], "api_key");
+        // The API could not be read: its fields are there, null.
+        for key in ["tenant", "organization", "portfolio", "credential_scopes"] {
+            assert_eq!(printed[key], Value::Null, "{key}");
+        }
+    }
+
+    fn no_call() -> std::result::Result<WhoAmI, String> {
+        panic!("GET /v1/me is not called without a credential")
+    }
+
+    fn who(json: &str) -> WhoAmI {
+        serde_json::from_str(json).expect("WhoAmI")
+    }
+
+    #[test]
+    fn whoami_shows_the_tenant_and_organisation_of_a_tenant_key() {
+        let (api, app) = (mockito::Server::new(), mockito::Server::new());
+        let settings = settings_for(&api, &app);
+        let me = || {
+            Ok(who(
+                r#"{"credential":{"type":"tenant","prefix":null,"scopes":["supply_risk:read","evidence:read"]},
+                    "tenant":{"id":"6f1c2d3e-4b5a-4c6d-8e7f-0a1b2c3d4e5f","name":"Acme\u001b[31m S.L.","type":"direct"},
+                    "organization":{"id":"7a1c2d3e-4b5a-4c6d-8e7f-0a1b2c3d4e5f","name":"Acme Group","type":"direct"},
+                    "portfolio":null}"#,
+            ))
+        };
+        let mut out = Vec::new();
+        whoami_with(&settings, true, &UnreachableStore, false, &me, &mut out).expect("key set");
+        let text = String::from_utf8(out).expect("utf8");
+        assert!(
+            text.contains(
+                "Tenant      Acme\u{fffd}[31m S.L. (6f1c2d3e-4b5a-4c6d-8e7f-0a1b2c3d4e5f)\n"
+            ),
+            "{text}"
+        );
+        assert!(!text.contains('\u{1b}'), "the name is cleaned: {text:?}");
+        assert!(text.contains("Org         Acme Group (direct)\n"), "{text}");
+        assert!(
+            text.contains("Scopes      supply_risk:read evidence:read\n"),
+            "{text}"
+        );
+        assert!(!text.contains("Tenants"), "{text}");
+
+        let mut out = Vec::new();
+        whoami_with(&settings, true, &UnreachableStore, true, &me, &mut out).expect("key set");
+        let printed: Value = serde_json::from_slice(&out).expect("json");
+        assert_eq!(
+            printed["tenant"]["id"],
+            "6f1c2d3e-4b5a-4c6d-8e7f-0a1b2c3d4e5f"
+        );
+        assert_eq!(printed["tenant"]["type"], "direct");
+        assert_eq!(printed["organization"]["name"], "Acme Group");
+        assert_eq!(printed["portfolio"], Value::Null);
+        assert_eq!(printed["credential_scopes"][1], "evidence:read");
+    }
+
+    #[test]
+    fn whoami_shows_the_mssp_and_the_tenant_count_of_a_portfolio_key() {
+        let (api, app) = (mockito::Server::new(), mockito::Server::new());
+        let settings = settings_for(&api, &app);
+        let me = || {
+            Ok(who(
+                r#"{"credential":{"type":"portfolio","prefix":"hsp_3f2a9c0d1b4e","scopes":["portfolio:read","supply_risk:read"]},
+                    "tenant":null,
+                    "organization":{"id":"7a1c2d3e-4b5a-4c6d-8e7f-0a1b2c3d4e5f","name":null,"type":"mssp"},
+                    "portfolio":{"tenant_count":12,"tenants_path":"/v1/portfolio/tenants"}}"#,
+            ))
+        };
+        let mut out = Vec::new();
+        whoami_with(&settings, true, &UnreachableStore, false, &me, &mut out).expect("key set");
+        let text = String::from_utf8(out).expect("utf8");
+        assert!(!text.contains("Tenant  "), "{text}");
+        assert!(text.contains("Org         - (mssp)\n"), "{text}");
+        assert!(
+            text.contains("Tenants     12 client tenants (hodeishield tenants list)\n"),
+            "{text}"
+        );
     }
 
     const DEVICE: LoginArgs = LoginArgs {

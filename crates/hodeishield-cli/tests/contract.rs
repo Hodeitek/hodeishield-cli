@@ -433,18 +433,81 @@ fn json_posture_is_the_api_body_with_unknown_fields_passed_through() {
     );
 }
 
-/// `whoami --json` is an object with these fields, in this order (an API key has no more).
+/// `whoami --json` is an object with these fields, in this order (an API key has no more). The last
+/// four come from `GET /v1/me` as the API sends them.
 #[test]
 fn json_whoami_fields() {
     let env = Env::new();
-    let server = mockito::Server::new();
+    let mut server = mockito::Server::new();
+    let me = server
+        .mock("GET", "/v1/me")
+        .match_header("x-hs-tenant", mockito::Matcher::Missing)
+        .with_body(
+            r#"{"data":{"credential":{"type":"tenant","prefix":null,"scopes":["supply_risk:read"]},
+                "tenant":{"id":"6f1c2d3e-4b5a-4c6d-8e7f-0a1b2c3d4e5f","name":"Acme S.L.","type":"direct"},
+                "organization":{"id":"7a1c2d3e-4b5a-4c6d-8e7f-0a1b2c3d4e5f","name":"Acme Group","type":"direct"},
+                "portfolio":null}}"#,
+        )
+        .expect(1)
+        .create();
     let output = env.api(&server.url(), &["--json", "whoami"]);
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     let printed: Value = serde_json::from_str(&out(&output)).expect("json");
     let keys: Vec<&String> = printed.as_object().expect("object").keys().collect();
-    assert_eq!(keys, ["profile", "api_url", "app_url", "credential"]);
+    assert_eq!(
+        keys,
+        [
+            "profile",
+            "api_url",
+            "app_url",
+            "credential",
+            "tenant",
+            "organization",
+            "portfolio",
+            "credential_scopes"
+        ]
+    );
     assert_eq!(printed["credential"], json!("api_key"));
     assert_eq!(printed["api_url"], json!(format!("{}/", server.url())));
+    assert_eq!(
+        printed["tenant"],
+        json!({"id": "6f1c2d3e-4b5a-4c6d-8e7f-0a1b2c3d4e5f", "name": "Acme S.L.", "type": "direct"})
+    );
+    assert_eq!(printed["organization"]["name"], json!("Acme Group"));
+    assert_eq!(printed["portfolio"], Value::Null);
+    assert_eq!(printed["credential_scopes"], json!(["supply_risk:read"]));
+    me.assert();
+}
+
+/// When `GET /v1/me` fails, `whoami` still succeeds with the local fields; the API's are null and
+/// standard error says why.
+#[test]
+fn json_whoami_without_the_api() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    server
+        .mock("GET", "/v1/me")
+        .with_status(404)
+        .with_body(
+            r#"{"error":{"code":"NOT_FOUND","message":"Gone\u001b]0;pwned\u0007 away.","request_id":"req-1"}}"#,
+        )
+        .create();
+    let output = env.api(&server.url(), &["--json", "whoami"]);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let printed: Value = serde_json::from_str(&out(&output)).expect("json");
+    for key in ["tenant", "organization", "portfolio", "credential_scopes"] {
+        assert_eq!(printed[key], Value::Null, "{key}");
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("warning: could not read from the API who this credential is:"),
+        "{stderr}"
+    );
+    // The API's message is untrusted: no escape sequence reaches the terminal.
+    assert!(
+        !stderr.contains('\u{1b}') && !stderr.contains('\u{7}'),
+        "{stderr:?}"
+    );
 }
 
 // ---------------------------------------------------------------------------------------------
