@@ -714,7 +714,10 @@ mod tests {
         assert!(reason.contains("belongs to another user"), "{reason}");
         let dir_stat = rustix::fs::lstat(&store.dir).expect("stat");
         assert!(unix::problem(&dir_stat, true, me.wrapping_add(1)).is_some());
-        assert_eq!(rustix::process::geteuid().as_raw(), me);
+        assert!(
+            rustix::process::geteuid().as_raw() == me,
+            "the file belongs to the effective user"
+        );
     }
 
     fn tmp_files(store: &FileStore) -> Vec<String> {
