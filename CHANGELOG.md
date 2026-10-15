@@ -54,6 +54,11 @@ commands, `--json` output and exit codes. Each release's notes start with its se
   `portfolio` and `credential_scopes` fields, null when the API cannot be read; the exit code does
   not depend on that call.
   ([#48](https://github.com/Hodeitek/hodeishield-cli/issues/48))
+- `whoami` shows the signed-in user (`Name <email>`, in the `User` line and the `--json` `user`
+  string) from `GET /v1/me` when the API provides it for a sign-in, with no extra call. The
+  authorization server's userinfo endpoint stays as the fallback; a key still shows no user, and
+  nothing changes while the API does not send one.
+  ([#182](https://github.com/Hodeitek/hodeishield-cli/issues/182))
 
 ### Fixed
 
