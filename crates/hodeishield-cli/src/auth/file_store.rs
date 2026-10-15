@@ -711,13 +711,11 @@ mod tests {
         let me = stat.st_uid;
         assert!(unix::problem(&stat, false, me).is_none());
         let (reason, _) = unix::problem(&stat, false, me.wrapping_add(1)).expect("another owner");
-        assert!(reason.contains("belongs to another user"), "{reason}");
+        // The reason names the owner's uid: the assertion does not print it.
+        assert!(reason.contains("belongs to another user"));
         let dir_stat = rustix::fs::lstat(&store.dir).expect("stat");
         assert!(unix::problem(&dir_stat, true, me.wrapping_add(1)).is_some());
-        assert!(
-            rustix::process::geteuid().as_raw() == me,
-            "the file belongs to the effective user"
-        );
+        assert_eq!(rustix::process::geteuid().as_raw(), me);
     }
 
     fn tmp_files(store: &FileStore) -> Vec<String> {
