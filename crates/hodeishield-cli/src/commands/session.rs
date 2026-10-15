@@ -291,7 +291,11 @@ fn whoami_with(
     let me = match source.map(|_| me()) {
         Some(Ok(me)) => Some(me),
         Some(Err(reason)) => {
-            eprintln!("warning: could not read from the API who this credential is: {reason}");
+            // The reason can carry the API's own message: untrusted text.
+            eprintln!(
+                "warning: could not read from the API who this credential is: {}",
+                clean(&reason)
+            );
             None
         }
         None => None,

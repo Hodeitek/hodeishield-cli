@@ -487,8 +487,10 @@ fn json_whoami_without_the_api() {
     let mut server = mockito::Server::new();
     server
         .mock("GET", "/v1/me")
-        .with_status(401)
-        .with_body(r#"{"error":{"code":"UNAUTHORIZED","message":"Invalid API key.","request_id":"req-1"}}"#)
+        .with_status(404)
+        .with_body(
+            r#"{"error":{"code":"NOT_FOUND","message":"Gone\u001b]0;pwned\u0007 away.","request_id":"req-1"}}"#,
+        )
         .create();
     let output = env.api(&server.url(), &["--json", "whoami"]);
     assert_eq!(output.status.code(), Some(0), "{output:?}");
@@ -500,6 +502,11 @@ fn json_whoami_without_the_api() {
     assert!(
         stderr.contains("warning: could not read from the API who this credential is:"),
         "{stderr}"
+    );
+    // The API's message is untrusted: no escape sequence reaches the terminal.
+    assert!(
+        !stderr.contains('\u{1b}') && !stderr.contains('\u{7}'),
+        "{stderr:?}"
     );
 }
 
