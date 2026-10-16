@@ -42,6 +42,7 @@ esac
 BIN=$(realpath "${1:?usage: proxy-tls-test.sh HODEISHIELD MITMPROXY_DIR}")
 MITM=$(realpath "${2:?usage: proxy-tls-test.sh HODEISHIELD MITMPROXY_DIR}")
 SCRIPTS=$(cd "$(dirname "$0")" && pwd)
+if [ "$OS" = windows ]; then SCRIPTS=$(cygpath -m "$SCRIPTS"); fi # handed to python.exe
 
 HOST=api.test
 API_PORT=8443
