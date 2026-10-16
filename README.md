@@ -751,8 +751,8 @@ message that starts with `Could not reach the API:` (or `Could not reach the app
 followed by the cause. A certificate error there usually means the proxy's CA is missing from the
 store described above.
 
-This behaviour comes from the CLI's HTTP library. It is verified on Linux in CI against a
-TLS-inspecting proxy; macOS and Windows have not been verified yet.
+This behaviour comes from the CLI's HTTP library. It is verified in CI on Linux, macOS and Windows
+against a TLS-inspecting proxy whose CA is installed in the system store.
 
 ## Repository layout
 
