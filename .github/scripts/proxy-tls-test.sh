@@ -70,9 +70,10 @@ make_ca proxy    # the "corporate" CA the proxy re-signs with; what the CLI must
 
 openssl req -newkey rsa:2048 -nodes -subj "/CN=$HOST" \
   -keyout "$WORK/api.key" -out "$WORK/api.csr" 2> /dev/null
+# A file, not <(...): a native openssl.exe on Windows cannot open /dev/fd paths.
+printf 'subjectAltName=DNS:%s\nbasicConstraints=CA:FALSE\n' "$HOST" > "$WORK/api.ext"
 openssl x509 -req -in "$WORK/api.csr" -CA "$WORK/upstream-ca.crt" -CAkey "$WORK/upstream-ca.key" \
-  -CAcreateserial -days 2 -out "$WORK/api.crt" \
-  -extfile <(printf 'subjectAltName=DNS:%s\nbasicConstraints=CA:FALSE\n' "$HOST") 2> /dev/null
+  -CAcreateserial -days 2 -out "$WORK/api.crt" -extfile "$WORK/api.ext" 2> /dev/null
 
 mkdir "$WORK/confdir"
 cat "$WORK/proxy-ca.key" "$WORK/proxy-ca.crt" > "$WORK/confdir/mitmproxy-ca.pem"
