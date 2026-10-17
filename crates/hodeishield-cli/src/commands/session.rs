@@ -162,7 +162,7 @@ fn unstored_notice(revoked: &Result<()>) -> String {
         Err(revocation) => format!(
             "The session could not be stored on this machine, and the app did not confirm \
              revoking the tokens issued for it ({}). Revoke the CLI's access in the app under \
-             \"Application access\".",
+             Account → Applications.",
             clean(&revocation.message)
         ),
     }
@@ -1321,7 +1321,7 @@ mod tests {
     fn the_notice_for_unrevoked_tokens_points_to_the_app() {
         let notice = unstored_notice(&Err(Failure::general("the app refused to revoke")));
         assert!(
-            notice.contains("did not confirm") && notice.contains("Application access"),
+            notice.contains("did not confirm") && notice.contains("Account → Applications"),
             "{notice}"
         );
     }

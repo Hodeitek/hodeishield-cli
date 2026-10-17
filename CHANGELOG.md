@@ -6,6 +6,13 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ## [Unreleased]
 
+### Fixed
+
+- Usage errors no longer list `--api-url` or `--profile` in the `Usage:` line when only
+  `HODEISHIELD_API_URL` or `HODEISHIELD_PROFILE` sets them. The variables still work the same and
+  `--help` still names them.
+  ([#201](https://github.com/Hodeitek/hodeishield-cli/issues/201))
+
 ## [0.5.0] - 2026-10-15
 
 ### Added

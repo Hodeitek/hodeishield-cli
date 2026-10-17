@@ -112,11 +112,16 @@ impl Context {
     }
 }
 
+/// A flag's environment fallback; an empty or blank value counts as unset.
+fn env_value(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|v| !v.trim().is_empty())
+}
+
 pub fn run(cli: Cli, out: &mut dyn Write) -> Result<()> {
     let ctx = Context {
         overrides: Overrides {
-            profile: cli.profile,
-            api_url: cli.api_url,
+            profile: cli.profile.or_else(|| env_value("HODEISHIELD_PROFILE")),
+            api_url: cli.api_url.or_else(|| env_value("HODEISHIELD_API_URL")),
         },
         json: cli.json,
         verbose: cli.verbose,
