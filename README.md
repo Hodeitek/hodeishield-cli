@@ -60,6 +60,14 @@ section), and put `hodeishield` (`hodeishield.exe` on Windows) somewhere on your
 statically linked and run on any distribution. Homebrew and Scoop packages (next section) and a
 [container image](#container-image) are also available.
 
+On Linux you need `curl` (or another way to download), `tar`, `gzip` and a CA certificate bundle
+(the `ca-certificates` package). Minimal Debian, Ubuntu and Alpine images do not include `curl` or
+the bundle: install them first, for example `apt-get install curl ca-certificates` or
+`apk add curl ca-certificates`. Verifying a download also needs
+[`cosign`](https://docs.sigstore.dev/cosign/system_config/installation/) v3 (or v2.4 or newer) and,
+for the provenance check, [`slsa-verifier`](https://github.com/slsa-framework/slsa-verifier#installation);
+neither is part of a distribution's default install.
+
 From source, with the Rust toolchain installed (pin the release tag you want):
 
 ```sh
@@ -229,7 +237,7 @@ Each release has a `SHA256SUMS` file, a Sigstore bundle (`*.sigstore.json`) for 
 `SHA256SUMS`, and SLSA provenance (`hodeishield.intoto.jsonl`). In short:
 
 ```sh
-sha256sum --ignore-missing -c SHA256SUMS
+grep hodeishield-0.5.0-x86_64-unknown-linux-musl.tar.gz SHA256SUMS | sha256sum -c -
 
 cosign verify-blob hodeishield-0.5.0-x86_64-unknown-linux-musl.tar.gz \
   --bundle hodeishield-0.5.0-x86_64-unknown-linux-musl.tar.gz.sigstore.json \
