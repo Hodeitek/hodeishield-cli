@@ -25,6 +25,9 @@ hodeishield login            # sign in through the browser and pick a tenant
 hodeishield vendors list     # your third-party inventory
 ```
 
+On a server, in a container or in CI there is usually no keychain and `login` stops with an error: use a
+[tenant API key](#with-a-tenant-api-key-scripts-ci-servers) instead.
+
 Verify the download before you run it: see [Install](#install) and [Verify a download](#verify-a-download).
 
 Read your third-party inventory, supply-chain alerts, risk register, compliance posture, evidence and
