@@ -108,6 +108,27 @@ fn assert_no_key(output: &std::process::Output) {
     );
 }
 
+/// `--help` names the variables but never prints their values, which end up in terminals and CI logs.
+#[test]
+fn help_does_not_print_the_values_of_the_environment() {
+    let env = Env::new();
+    let output = env
+        .cmd()
+        .env("HODEISHIELD_API_URL", "https://api-from-env.example.test")
+        .env("HODEISHIELD_PROFILE", "profile-from-env")
+        .env("HODEISHIELD_API_KEY", KEY)
+        .arg("--help")
+        .output()
+        .expect("run");
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("[env: HODEISHIELD_API_URL]"), "{text}");
+    assert!(
+        !text.contains("api-from-env") && !text.contains("profile-from-env"),
+        "{text}"
+    );
+    assert_no_key(&output);
+}
+
 #[test]
 fn vendors_list_prints_a_table_and_the_next_page() {
     let env = Env::new();
