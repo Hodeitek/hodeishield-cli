@@ -138,6 +138,17 @@ rm -f "$(hodeishield config path)"      # optional: the settings
 Run `hodeishield logout` first; with the binary gone it can no longer do it. Remove the completion
 files too if you copied them.
 
+On Windows, `hodeishield logout` first removes the sign-in from Credential Manager, then:
+
+- **Zip:** delete the folder you unpacked it into, and remove it from your `PATH` if you added it
+  (the zip never changes `PATH`).
+- **MSI:** uninstall from **Settings → Apps** or with `msiexec /x`. This removes the program folder,
+  the `PATH` entry and the Apps entry.
+- **Scoop:** `scoop uninstall hodeishield`, which removes the program and its shim.
+
+None of these remove the per-user settings in `%APPDATA%\Hodeitek\HodeiShield\config`, one folder
+in each user profile that ran `config set`; delete it if you want them gone.
+
 ### Windows installer (MSI)
 
 From 0.3.0, each release also publishes
