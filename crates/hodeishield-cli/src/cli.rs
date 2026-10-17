@@ -149,7 +149,7 @@ With --device, you get a short code to type in on any other device instead.
 On the consent screen you choose the one tenant the CLI may read; the token covers only that \
 tenant, and only reads. The scopes asked for are the ones the CLI's commands need (see \
 `config set oauth_scopes` to ask for fewer). Revoke the access with `hodeishield logout`, or in the \
-app under Account → Application access.";
+app under Account → Applications.";
 
 #[derive(Debug, Args)]
 pub struct LoginArgs {
