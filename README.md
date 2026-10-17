@@ -25,6 +25,9 @@ hodeishield login            # sign in through the browser and pick a tenant
 hodeishield vendors list     # your third-party inventory
 ```
 
+On a server, in a container or in CI there is usually no keychain and `login` stops with an error: use a
+[tenant API key](#with-a-tenant-api-key-scripts-ci-servers) instead.
+
 Verify the download before you run it: see [Install](#install) and [Verify a download](#verify-a-download).
 
 Read your third-party inventory, supply-chain alerts, risk register, compliance posture, evidence and
@@ -60,6 +63,14 @@ section), and put `hodeishield` (`hodeishield.exe` on Windows) somewhere on your
 statically linked and run on any distribution. Homebrew and Scoop packages (next section) and a
 [container image](#container-image) are also available.
 
+On Linux you need `curl` (or another way to download), `tar`, `gzip` and a CA certificate bundle
+(the `ca-certificates` package). Minimal Debian, Ubuntu and Alpine images do not include `curl` or
+the bundle: install them first, for example `apt-get install curl ca-certificates` or
+`apk add curl ca-certificates`. Verifying a download also needs
+[`cosign`](https://docs.sigstore.dev/cosign/system_config/installation/) v3 (or v2.4 or newer) and,
+for the provenance check, [`slsa-verifier`](https://github.com/slsa-framework/slsa-verifier#installation);
+neither is part of a distribution's default install.
+
 From source, with the Rust toolchain installed (pin the release tag you want):
 
 ```sh
@@ -77,7 +88,8 @@ scoop bucket add hodeishield https://github.com/Hodeitek/scoop-hodeishield
 scoop install hodeishield                                       # Windows, per user
 ```
 
-`scoop bucket add` needs Git: on a fresh Scoop, run `scoop install git` first. Scoop's own installer
+Scoop itself must be installed first (see [scoop.sh](https://scoop.sh)); on a clean Windows machine
+`scoop` is not a known command. `scoop bucket add` needs Git: on a fresh Scoop, run `scoop install git` first. Scoop's own installer
 refuses an elevated (administrator) shell unless it is run with `-RunAsAdmin`; installing per user,
 from a normal shell, is the recommended way and needs no administrator rights.
 
@@ -109,6 +121,33 @@ sudo dnf install ./hodeishield-<version>-1.x86_64.rpm     # Fedora, RHEL (arm64:
 
 Upgrading is the same command with the newer package; `sudo apt remove hodeishield` or
 `sudo dnf remove hodeishield` uninstalls it.
+
+### Uninstall an archive or install.sh install
+
+Nothing else is installed on the machine, so remove the files you copied. `install.sh` puts the
+binary in `/usr/local/bin` or `~/.local/bin` (or the `--dir` you gave) and the man pages in
+`share/man/man1` next to it:
+
+```sh
+hodeishield logout                      # revokes the sign-in and removes the stored token
+rm "$(command -v hodeishield)"          # the binary
+rm -f /usr/local/share/man/man1/hodeishield*.1     # man pages (~/.local/share/man/man1 for ~/.local/bin)
+rm -f "$(hodeishield config path)"      # optional: the settings
+```
+
+Run `hodeishield logout` first; with the binary gone it can no longer do it. Remove the completion
+files too if you copied them.
+
+On Windows, `hodeishield logout` first removes the sign-in from Credential Manager, then:
+
+- **Zip:** delete the folder you unpacked it into, and remove it from your `PATH` if you added it
+  (the zip never changes `PATH`).
+- **MSI:** uninstall from **Settings → Apps** or with `msiexec /x`. This removes the program folder,
+  the `PATH` entry and the Apps entry.
+- **Scoop:** `scoop uninstall hodeishield`, which removes the program and its shim.
+
+None of these remove the per-user settings in `%APPDATA%\Hodeitek\HodeiShield\config`, one folder
+in each user profile that ran `config set`; delete it if you want them gone.
 
 ### Windows installer (MSI)
 
@@ -229,12 +268,27 @@ Each release has a `SHA256SUMS` file, a Sigstore bundle (`*.sigstore.json`) for 
 `SHA256SUMS`, and SLSA provenance (`hodeishield.intoto.jsonl`). In short:
 
 ```sh
-sha256sum --ignore-missing -c SHA256SUMS
+grep hodeishield-0.5.0-x86_64-unknown-linux-musl.tar.gz SHA256SUMS | sha256sum -c -
 
 cosign verify-blob hodeishield-0.5.0-x86_64-unknown-linux-musl.tar.gz \
   --bundle hodeishield-0.5.0-x86_64-unknown-linux-musl.tar.gz.sigstore.json \
   --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.5.0 \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-github-workflow-trigger push
+```
+
+On Windows, PowerShell has no `sha256sum`: compare the hash of the zip or MSI with its line in
+`SHA256SUMS`. `cosign` for Windows is a `cosign-windows-amd64.exe` download on its
+[release page](https://github.com/sigstore/cosign/releases) (`winget install sigstore.cosign` may
+fail with a missing-source error), and the same `verify-blob` command works with Windows paths:
+
+```powershell
+(Get-FileHash .\hodeishield-0.5.0-x86_64-pc-windows-msvc.zip -Algorithm SHA256).Hash.ToLower()
+Select-String hodeishield-0.5.0-x86_64-pc-windows-msvc.zip SHA256SUMS      # the two hashes must match
+cosign verify-blob .\hodeishield-0.5.0-x86_64-pc-windows-msvc.zip `
+  --bundle .\hodeishield-0.5.0-x86_64-pc-windows-msvc.zip.sigstore.json `
+  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.5.0 `
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com `
   --certificate-github-workflow-trigger push
 ```
 
@@ -313,6 +367,7 @@ leaves those fields null and says why on standard error.
 ```sh
 hodeishield login            # opens the browser; the app redirects back to 127.0.0.1
 hodeishield login --device   # no browser here: approve a short code from another device
+hodeishield login --no-browser   # print the sign-in URL instead of opening a browser
 hodeishield whoami
 hodeishield logout           # revokes the token at the app and removes it from the keychain
 ```
@@ -351,10 +406,11 @@ the file store below is an explicit choice, never a fallback.
 The keychain can also be out of reach in a session that has one on the machine, such as an SSH or
 other remote logon on Windows. With no API key set, commands then stop with exit code 3 and say that
 the system keychain is not available in this session; set `HODEISHIELD_API_KEY` in remote or
-automated sessions. With the key set, the keychain is not read at all.
+automated sessions. `login` and `logout` exit 1 in that case, not 3. With the key set, the keychain
+is not read at all.
 
 To cut the CLI's access from elsewhere, revoke it in [the app](https://app.hodeishield.com) under
-**Account → Application access**. Signing out of the web app does not cut it.
+**Account → Applications**. Signing out of the web app does not cut it.
 
 ### Servers, containers and remote sessions
 
@@ -373,7 +429,7 @@ a code. You have two options, in this order of preference:
    - **How long.** At most 90 days from the sign-in, however often the session is refreshed, and
      at most 30 days after the CLI last refreshed it. It ends earlier with `hodeishield logout`, when
      you change or reset your password, when an administrator revokes it, when you are removed from
-     the tenant, or when you revoke the access in the app under **Account › Applications**.
+     the tenant, or when you revoke the access in the app under **Account → Applications**.
    - **Reuse is detected.** Each refresh replaces the refresh token. If someone refreshes with a
      copy of your file, the next refresh by your own CLI is seen as a reuse of an old token and
      ends the session for both. An unexpected "sign in again" is a reason to revoke the access in
@@ -674,6 +730,10 @@ hodeishield --profile default vendors list   # or pick one per command
 | `HODEISHIELD_CONFIG` | Path of the configuration file |
 | `HODEISHIELD_TOKEN_STORE` | Where sign-in tokens are kept: `keychain` (the default) or `plaintext-file`, an [opt-in](#servers-containers-and-remote-sessions); takes precedence over `token_store` in the configuration file |
 | `HODEISHIELD_NO_UPDATE_CHECK` | Any non-empty value turns off the [new-version notice](#new-version-notice) |
+
+`config set` and `config unset` take `api_url`, `app_url`, `oauth_client_id` and `oauth_scopes`
+(per profile), and `update_check` (`true` or `false`) and `token_store` (`keychain` or
+`plaintext-file`), which are global.
 
 The configuration file holds URLs and sign-in settings only, never a credential. `update_check` and
 `token_store` are global settings, not per profile. An older CLI refuses a configuration file that

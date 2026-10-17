@@ -46,8 +46,11 @@ From the release page, download:
 ## 2. Check the checksum
 
 ```sh
-sha256sum -c SHA256SUMS --ignore-missing
+grep hodeishield-0.5.0-x86_64-unknown-linux-musl.tar.gz SHA256SUMS | sha256sum -c -
 ```
+
+Checking only the line of your archive works with GNU `sha256sum` and with the BusyBox one on
+Alpine, which has no `--ignore-missing`. On macOS, use `shasum -a 256 -c` in place of `sha256sum -c`.
 
 This confirms the archive you downloaded matches the checksum the release
 workflow recorded. It does **not** by itself prove who built it — that's

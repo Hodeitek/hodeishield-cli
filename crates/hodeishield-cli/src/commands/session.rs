@@ -1009,6 +1009,16 @@ mod tests {
     }
 
     #[test]
+    fn whoami_shows_the_email_when_the_api_gives_no_name() {
+        let (text, printed) = whoami_of_a_sign_in(
+            Some(r#"{"id":"u-1","name":null,"email":"ana@acme.example"}"#),
+            None,
+        );
+        assert!(text.contains("User        ana@acme.example\n"), "{text}");
+        assert_eq!(printed["user"], "ana@acme.example");
+    }
+
+    #[test]
     fn whoami_uses_the_id_when_the_api_gives_no_name_or_email() {
         let (text, _) = whoami_of_a_sign_in(Some(r#"{"id":"u-1","name":null}"#), None);
         assert!(text.contains("User        u-1\n"), "{text}");
