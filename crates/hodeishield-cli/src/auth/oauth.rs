@@ -7,7 +7,7 @@
 //!
 //! No endpoint is written here: every URL comes from the metadata the app publishes.
 
-use crate::failure::{Failure, Kind, Result, error_chain};
+use crate::failure::{Failure, Kind, Result, ca_hint, error_chain};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use hodeishield_api::v1::operations;
@@ -102,10 +102,11 @@ pub fn http_client(app_url: &Url) -> Result<reqwest::blocking::Client> {
         .https_only(!hodeishield_api::is_loopback_host(app_url))
         .build()
         .map_err(|e| {
-            Failure::general(format!(
-                "Cannot start the HTTP client: {}.",
-                error_chain(&e)
-            ))
+            let chain = error_chain(&e);
+            ca_hint(
+                Failure::general(format!("Cannot start the HTTP client: {chain}.")),
+                &chain,
+            )
         })
 }
 
