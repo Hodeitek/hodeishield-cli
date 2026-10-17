@@ -340,6 +340,7 @@ leaves those fields null and says why on standard error.
 ```sh
 hodeishield login            # opens the browser; the app redirects back to 127.0.0.1
 hodeishield login --device   # no browser here: approve a short code from another device
+hodeishield login --no-browser   # print the sign-in URL instead of opening a browser
 hodeishield whoami
 hodeishield logout           # revokes the token at the app and removes it from the keychain
 ```
@@ -381,7 +382,7 @@ the system keychain is not available in this session; set `HODEISHIELD_API_KEY` 
 automated sessions. With the key set, the keychain is not read at all.
 
 To cut the CLI's access from elsewhere, revoke it in [the app](https://app.hodeishield.com) under
-**Account → Application access**. Signing out of the web app does not cut it.
+**Account → Applications**. Signing out of the web app does not cut it.
 
 ### Servers, containers and remote sessions
 
@@ -400,7 +401,7 @@ a code. You have two options, in this order of preference:
    - **How long.** At most 90 days from the sign-in, however often the session is refreshed, and
      at most 30 days after the CLI last refreshed it. It ends earlier with `hodeishield logout`, when
      you change or reset your password, when an administrator revokes it, when you are removed from
-     the tenant, or when you revoke the access in the app under **Account › Applications**.
+     the tenant, or when you revoke the access in the app under **Account → Applications**.
    - **Reuse is detected.** Each refresh replaces the refresh token. If someone refreshes with a
      copy of your file, the next refresh by your own CLI is seen as a reuse of an old token and
      ends the session for both. An unexpected "sign in again" is a reason to revoke the access in
@@ -701,6 +702,10 @@ hodeishield --profile default vendors list   # or pick one per command
 | `HODEISHIELD_CONFIG` | Path of the configuration file |
 | `HODEISHIELD_TOKEN_STORE` | Where sign-in tokens are kept: `keychain` (the default) or `plaintext-file`, an [opt-in](#servers-containers-and-remote-sessions); takes precedence over `token_store` in the configuration file |
 | `HODEISHIELD_NO_UPDATE_CHECK` | Any non-empty value turns off the [new-version notice](#new-version-notice) |
+
+`config set` and `config unset` take `api_url`, `app_url`, `oauth_client_id` and `oauth_scopes`
+(per profile), and `update_check` (`true` or `false`) and `token_store` (`keychain` or
+`plaintext-file`), which are global.
 
 The configuration file holds URLs and sign-in settings only, never a credential. `update_check` and
 `token_store` are global settings, not per profile. An older CLI refuses a configuration file that

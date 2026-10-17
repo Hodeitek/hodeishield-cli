@@ -567,12 +567,12 @@ pub enum ConfigCommand {
     Path,
     /// Show the settings in effect for the profile.
     Show,
-    /// Set a key of the profile: api_url, app_url, oauth_client_id, oauth_scopes.
+    /// Set a key: api_url, app_url, oauth_client_id, oauth_scopes (per profile), update_check, token_store (global).
     Set {
         /// The key to set.
         #[arg(value_parser = PossibleValuesParser::new(crate::config::KEYS))]
         key: String,
-        /// The value. For oauth_scopes, a space-separated list.
+        /// The value. For oauth_scopes, a space-separated list; update_check takes true or false; token_store takes keychain or plaintext-file.
         value: String,
     },
     /// Remove a key from the profile, going back to the default.
