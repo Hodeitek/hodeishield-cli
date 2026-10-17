@@ -130,13 +130,15 @@ binary in `/usr/local/bin` or `~/.local/bin` (or the `--dir` you gave) and the m
 
 ```sh
 hodeishield logout                      # revokes the sign-in and removes the stored token
+rm -f "$(hodeishield config path)"      # optional: the settings
 rm "$(command -v hodeishield)"          # the binary
 rm -f /usr/local/share/man/man1/hodeishield*.1     # man pages (~/.local/share/man/man1 for ~/.local/bin)
-rm -f "$(hodeishield config path)"      # optional: the settings
 ```
 
-Run `hodeishield logout` first; with the binary gone it can no longer do it. Remove the completion
-files too if you copied them.
+Run `hodeishield logout` and `config path` first; with the binary gone neither can run. If you
+installed completions from `hodeishield completions`, remove the file where you saved it, usually
+`~/.local/share/bash-completion/completions/hodeishield` (bash), `_hodeishield` in a directory of
+your `fpath` (zsh) or `~/.config/fish/completions/hodeishield.fish` (fish).
 
 On Windows, `hodeishield logout` first removes the sign-in from Credential Manager, then:
 
@@ -285,6 +287,7 @@ fail with a missing-source error), and the same `verify-blob` command works with
 ```powershell
 (Get-FileHash .\hodeishield-0.5.0-x86_64-pc-windows-msvc.zip -Algorithm SHA256).Hash.ToLower()
 Select-String hodeishield-0.5.0-x86_64-pc-windows-msvc.zip SHA256SUMS      # the two hashes must match
+# the same two lines with .msi for the MSI
 cosign verify-blob .\hodeishield-0.5.0-x86_64-pc-windows-msvc.zip `
   --bundle .\hodeishield-0.5.0-x86_64-pc-windows-msvc.zip.sigstore.json `
   --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.5.0 `

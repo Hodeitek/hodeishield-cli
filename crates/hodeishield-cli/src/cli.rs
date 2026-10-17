@@ -43,6 +43,7 @@ pub struct Cli {
         global = true,
         help_heading = "Global options",
         env = "HODEISHIELD_PROFILE",
+        hide_env_values = true,
         value_name = "NAME"
     )]
     pub profile: Option<String>,
@@ -53,6 +54,7 @@ pub struct Cli {
         global = true,
         help_heading = "Global options",
         env = "HODEISHIELD_API_URL",
+        hide_env_values = true,
         value_name = "URL"
     )]
     pub api_url: Option<String>,

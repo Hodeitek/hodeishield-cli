@@ -89,7 +89,7 @@ logged, HTTPS only, no redirects followed, signed releases) is in
   has no option to skip certificate verification: install your organisation's CA in that store
   ([Networking](../README.md#networking-proxies-and-tls-inspection)).
 - **Cut access you no longer need**: `hodeishield logout`, or revoke the CLI's access in the app
-  under **Account → Application access**; revoke an API key in the app as soon as it is not needed
+  under **Account → Applications**; revoke an API key in the app as soon as it is not needed
   or may have been exposed.
 
 Known limitations:
@@ -141,7 +141,7 @@ To stop using `hodeishield` on a machine and leave nothing behind:
 1. **Sign out of every profile you signed in to**: `hodeishield logout`, and
    `hodeishield logout --profile <name>` for each other profile. This revokes the token at the app
    and removes it from the system keychain. If the CLI warns that the app did not confirm the
-   revocation, revoke the CLI's access in the app under **Account → Application access**.
+   revocation, revoke the CLI's access in the app under **Account → Applications**.
 2. **Revoke the tenant API keys** the machine used, in the app, and remove them from the
    environment and secret stores that held them.
 3. **Delete the configuration file and the update-check record.** `hodeishield config path` prints
@@ -169,7 +169,7 @@ To stop using `hodeishield` on a machine and leave nothing behind:
    | `cargo install` | `cargo uninstall hodeishield-cli` |
 
 If the CLI is already gone and a sign-in was left in the keychain, revoke the access in the app
-(**Account → Application access**), then delete the entry, one per profile, whose service is
+(**Account → Applications**), then delete the entry, one per profile, whose service is
 `hodeishield-cli` and whose account is the profile name: on macOS with Keychain Access or
 `security delete-generic-password -s hodeishield-cli -a <profile>`, on Windows in Credential Manager
 (*Windows Credentials*, named `<profile>.hodeishield-cli`), and on Linux with
