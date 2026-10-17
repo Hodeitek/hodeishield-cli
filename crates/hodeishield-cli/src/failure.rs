@@ -440,9 +440,15 @@ mod tests {
 
     #[test]
     fn a_missing_ca_bundle_gets_a_hint_and_other_errors_do_not() {
-        let chain = "builder error: unexpected error: No CA certificates were loaded from the system";
+        let chain =
+            "builder error: unexpected error: No CA certificates were loaded from the system";
         let hinted = ca_hint(Failure::general("x"), chain);
-        assert!(hinted.hint.as_deref().is_some_and(|h| h.contains("ca-certificates")));
+        assert!(
+            hinted
+                .hint
+                .as_deref()
+                .is_some_and(|h| h.contains("ca-certificates"))
+        );
         assert!(ca_hint(Failure::general("x"), "dns error").hint.is_none());
     }
 
