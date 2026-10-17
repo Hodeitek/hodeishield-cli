@@ -118,6 +118,22 @@ sudo dnf install ./hodeishield-<version>-1.x86_64.rpm     # Fedora, RHEL (arm64:
 Upgrading is the same command with the newer package; `sudo apt remove hodeishield` or
 `sudo dnf remove hodeishield` uninstalls it.
 
+### Uninstall an archive or install.sh install
+
+Nothing else is installed on the machine, so remove the files you copied. `install.sh` puts the
+binary in `/usr/local/bin` or `~/.local/bin` (or the `--dir` you gave) and the man pages in
+`share/man/man1` next to it:
+
+```sh
+hodeishield logout                      # revokes the sign-in and removes the stored token
+rm "$(command -v hodeishield)"          # the binary
+rm -f /usr/local/share/man/man1/hodeishield*.1     # man pages (~/.local/share/man/man1 for ~/.local/bin)
+rm -f "$(hodeishield config path)"      # optional: the settings
+```
+
+Run `hodeishield logout` first; with the binary gone it can no longer do it. Remove the completion
+files too if you copied them.
+
 ### Windows installer (MSI)
 
 From 0.3.0, each release also publishes
