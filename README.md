@@ -406,7 +406,8 @@ the file store below is an explicit choice, never a fallback.
 The keychain can also be out of reach in a session that has one on the machine, such as an SSH or
 other remote logon on Windows. With no API key set, commands then stop with exit code 3 and say that
 the system keychain is not available in this session; set `HODEISHIELD_API_KEY` in remote or
-automated sessions. With the key set, the keychain is not read at all.
+automated sessions. `login` and `logout` exit 1 in that case, not 3. With the key set, the keychain
+is not read at all.
 
 To cut the CLI's access from elsewhere, revoke it in [the app](https://app.hodeishield.com) under
 **Account → Applications**. Signing out of the web app does not cut it.
