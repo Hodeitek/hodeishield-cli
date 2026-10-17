@@ -37,24 +37,22 @@ Exit codes:
 #[derive(Debug, Parser)]
 #[command(name = "hodeishield", version, propagate_version = true, after_help = AFTER_HELP)]
 pub struct Cli {
-    /// Configuration profile to use.
+    /// Configuration profile to use. [env: HODEISHIELD_PROFILE]
+    // Read from the environment in `commands::run`, not by clap: clap would list the flag in every
+    // usage line while the variable is set.
     #[arg(
         long,
         global = true,
         help_heading = "Global options",
-        env = "HODEISHIELD_PROFILE",
-        hide_env_values = true,
         value_name = "NAME"
     )]
     pub profile: Option<String>,
 
-    /// Base URL of the API, overriding the profile.
+    /// Base URL of the API, overriding the profile. [env: HODEISHIELD_API_URL]
     #[arg(
         long,
         global = true,
         help_heading = "Global options",
-        env = "HODEISHIELD_API_URL",
-        hide_env_values = true,
         value_name = "URL"
     )]
     pub api_url: Option<String>,
