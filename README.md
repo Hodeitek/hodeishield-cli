@@ -88,7 +88,8 @@ scoop bucket add hodeishield https://github.com/Hodeitek/scoop-hodeishield
 scoop install hodeishield                                       # Windows, per user
 ```
 
-`scoop bucket add` needs Git: on a fresh Scoop, run `scoop install git` first. Scoop's own installer
+Scoop itself must be installed first (see [scoop.sh](https://scoop.sh)); on a clean Windows machine
+`scoop` is not a known command. `scoop bucket add` needs Git: on a fresh Scoop, run `scoop install git` first. Scoop's own installer
 refuses an elevated (administrator) shell unless it is run with `-RunAsAdmin`; installing per user,
 from a normal shell, is the recommended way and needs no administrator rights.
 
@@ -262,6 +263,21 @@ cosign verify-blob hodeishield-0.5.0-x86_64-unknown-linux-musl.tar.gz \
   --bundle hodeishield-0.5.0-x86_64-unknown-linux-musl.tar.gz.sigstore.json \
   --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.5.0 \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-github-workflow-trigger push
+```
+
+On Windows, PowerShell has no `sha256sum`: compare the hash of the zip or MSI with its line in
+`SHA256SUMS`. `cosign` for Windows is a `cosign-windows-amd64.exe` download on its
+[release page](https://github.com/sigstore/cosign/releases) (`winget install sigstore.cosign` may
+fail with a missing-source error), and the same `verify-blob` command works with Windows paths:
+
+```powershell
+(Get-FileHash .\hodeishield-0.5.0-x86_64-pc-windows-msvc.zip -Algorithm SHA256).Hash.ToLower()
+Select-String hodeishield-0.5.0-x86_64-pc-windows-msvc.zip SHA256SUMS      # the two hashes must match
+cosign verify-blob .\hodeishield-0.5.0-x86_64-pc-windows-msvc.zip `
+  --bundle .\hodeishield-0.5.0-x86_64-pc-windows-msvc.zip.sigstore.json `
+  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.5.0 `
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com `
   --certificate-github-workflow-trigger push
 ```
 
