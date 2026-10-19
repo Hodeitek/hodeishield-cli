@@ -6,6 +6,21 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ## [Unreleased]
 
+### Changed
+
+- The generated `/v1` client follows version 2026-10-25 of the API document. `alerts list` now
+  prints each alert's `updated_at` in `--json` and `--csv` output (the table is unchanged), and
+  `--sort` accepts `updated_at`. The `/v1/me` answer now also carries `beta` and `user`; a `null`
+  user (an API key) is still no user.
+  ([#210](https://github.com/Hodeitek/hodeishield-cli/issues/210))
+
+### Fixed
+
+- `alerts list` no longer depends on `page`, `total` and `total_pages` in the answer, which the API
+  now treats as optional. When they are missing, `--all` stops at a page with a null `next_cursor`
+  or fewer alerts than the page size, and the `Page N of M` line is not printed.
+  ([#210](https://github.com/Hodeitek/hodeishield-cli/issues/210))
+
 ## [0.5.1] - 2026-10-18
 
 ### Changed

@@ -144,7 +144,7 @@ fn list_portfolio(
             totals.push(response.data.pagination.total);
             Ok(response)
         },
-        |r: ListTenantsResponse| (r.data, r.pagination),
+        |r: ListTenantsResponse| (r.data, r.pagination.into()),
     )
     .map_err(|failure| {
         if failure.kind == Kind::Forbidden {
@@ -218,7 +218,7 @@ pub fn run(ctx: &Context, command: TenantsCommand, out: &mut dyn Write) -> Resul
             is_portfolio_key: is_portfolio,
         },
         &mut |page, per_page| client.list_tenants(&ListTenantsParams::alphabetical(page, per_page)),
-        |r| (r.data, r.pagination),
+        |r| (r.data, r.pagination.into()),
         tenant_rows,
     )
     .map_err(|failure| {

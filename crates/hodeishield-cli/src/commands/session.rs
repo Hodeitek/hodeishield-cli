@@ -243,8 +243,8 @@ pub fn whoami(ctx: &Context, out: &mut dyn Write) -> Result<()> {
     )
 }
 
-/// What `GET /v1/me` says about the credential: the generated type, and the signed-in user, which
-/// the document of the API does not describe yet and so is read from the body as received.
+/// What `GET /v1/me` says about the credential: the generated type, and the signed-in user, read
+/// again from the body as received so that a user with missing fields still shows what it has.
 struct Me {
     who: WhoAmI,
     user: Option<MeUser>,
@@ -985,8 +985,8 @@ mod tests {
 
     #[test]
     fn whoami_without_a_user_from_the_api_falls_back_to_userinfo() {
-        // Today's API (no `user` field), `user: null`, and a malformed `user`.
-        for user in [None, Some("null"), Some(r#""x""#), Some("[]"), Some("{}")] {
+        // An answer with no `user` field, and `user: null` (what an API key gets).
+        for user in [None, Some("null")] {
             let (text, printed) = whoami_of_a_sign_in(user, Some("Old Way <old@acme.example>"));
             assert!(
                 text.contains("User        Old Way <old@acme.example>\n"),
@@ -998,7 +998,7 @@ mod tests {
 
     #[test]
     fn whoami_without_any_user_has_no_user_line_and_does_not_fail() {
-        for user in [None, Some("null"), Some(r#""x""#), Some("42"), Some("{}")] {
+        for user in [None, Some("null")] {
             let (text, printed) = whoami_of_a_sign_in(user, None);
             assert!(!text.contains("User"), "{user:?}: {text}");
             assert_eq!(printed["user"], Value::Null, "{user:?}");
@@ -1020,8 +1020,16 @@ mod tests {
 
     #[test]
     fn whoami_uses_the_id_when_the_api_gives_no_name_or_email() {
-        let (text, _) = whoami_of_a_sign_in(Some(r#"{"id":"u-1","name":null}"#), None);
-        assert!(text.contains("User        u-1\n"), "{text}");
+        // Off the contract (`email` is required), so it is read from the raw body, not the typed one.
+        let user = MeUser::from_raw(&json!({"id": "u-1", "name": null})).expect("a user");
+        assert_eq!(user.label().as_deref(), Some("u-1"));
+    }
+
+    #[test]
+    fn a_user_that_is_not_an_object_with_a_field_is_no_user() {
+        for raw in [json!("x"), json!([]), json!(42), json!({}), Value::Null] {
+            assert!(MeUser::from_raw(&raw).is_none(), "{raw}");
+        }
     }
 
     #[test]

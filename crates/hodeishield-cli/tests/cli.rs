@@ -237,7 +237,7 @@ fn all_walks_every_page() {
                 mockito::Matcher::UrlEncoded("per_page".into(), "200".into()),
             ]))
             .with_body(format!(
-                r#"{{"data":[{{"id":"a{n}","vendor_id":"v","type":"cve","severity":null,"title":"{name}","description":null,"source_url":null,"economic_impact":null,"status":"open","acknowledged_at":null,"resolved_at":null,"resolution_reason":null,"created_at":"2026-01-01T00:00:00Z"}}],"pagination":{{"page":{n},"per_page":1,"total":2,"total_pages":2}}}}"#
+                r#"{{"data":[{{"id":"a{n}","vendor_id":"v","type":"cve","severity":null,"title":"{name}","description":null,"source_url":null,"economic_impact":null,"status":"open","acknowledged_at":null,"resolved_at":null,"resolution_reason":null,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-02T00:00:00Z"}}],"pagination":{{"page":{n},"per_page":1,"total":2,"total_pages":2}}}}"#
             ))
             .expect(1)
             .create();
@@ -256,6 +256,56 @@ fn all_walks_every_page() {
         .filter_map(|i| i["title"].as_str())
         .collect();
     assert_eq!(titles, ["First", "Second"]);
+}
+
+/// An alerts answer in the 2026-10-25 shape: no `page`, `total` or `total_pages`, only a cursor.
+fn cursor_page(n: i64, next_cursor: Option<&str>) -> String {
+    let next = next_cursor.map_or("null".to_owned(), |c| format!(r#""{c}""#));
+    format!(
+        r#"{{"data":[{{"id":"a{n}","vendor_id":"v","type":"cve","severity":null,"title":"T{n}","description":null,"source_url":null,"economic_impact":null,"status":"open","acknowledged_at":null,"resolved_at":null,"resolution_reason":null,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-02T00:00:00Z"}}],"pagination":{{"per_page":1,"next_cursor":{next}}}}}"#
+    )
+}
+
+#[test]
+fn alerts_without_page_counts_list_without_a_footer() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    server
+        .mock("GET", "/v1/alerts")
+        .match_query(mockito::Matcher::Any)
+        .with_body(cursor_page(1, Some("c1")))
+        .create();
+    let output = env
+        .api(&server)
+        .args(["alerts", "list"])
+        .output()
+        .expect("run");
+    assert!(output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stdout).contains("T1"));
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("Page "));
+}
+
+#[test]
+fn all_without_page_counts_stops_at_a_null_cursor() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    for (n, next) in [(1, Some("c1")), (2, None)] {
+        server
+            .mock("GET", "/v1/alerts")
+            .match_query(mockito::Matcher::UrlEncoded("page".into(), n.to_string()))
+            .with_body(cursor_page(n, next))
+            .expect(1)
+            .create();
+    }
+    let output = env
+        .api(&server)
+        .args(["alerts", "list", "--all", "--json"])
+        .output()
+        .expect("run");
+    assert!(output.status.success(), "{output:?}");
+    let items: serde_json::Value = serde_json::from_slice(&output.stdout).expect("json");
+    assert_eq!(items.as_array().expect("array").len(), 2);
+    assert_eq!(items[1]["updated_at"], "2026-01-02T00:00:00Z");
 }
 
 #[test]
@@ -724,7 +774,7 @@ fn csv_with_all_prints_one_header_and_every_page() {
             .mock("GET", "/v1/alerts")
             .match_query(mockito::Matcher::UrlEncoded("page".into(), n.to_string()))
             .with_body(format!(
-                r#"{{"data":[{{"id":"a{n}","vendor_id":"v","type":"cve","severity":null,"title":"{title}","description":null,"source_url":null,"economic_impact":-5,"status":"open","acknowledged_at":null,"resolved_at":null,"resolution_reason":null,"created_at":"2026-01-01T00:00:00Z"}}],"pagination":{{"page":{n},"per_page":1,"total":2,"total_pages":2}}}}"#
+                r#"{{"data":[{{"id":"a{n}","vendor_id":"v","type":"cve","severity":null,"title":"{title}","description":null,"source_url":null,"economic_impact":-5,"status":"open","acknowledged_at":null,"resolved_at":null,"resolution_reason":null,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-02T00:00:00Z"}}],"pagination":{{"page":{n},"per_page":1,"total":2,"total_pages":2}}}}"#
             ))
             .expect(1)
             .create();
@@ -738,9 +788,9 @@ fn csv_with_all_prints_one_header_and_every_page() {
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
         "id,vendor_id,type,severity,title,description,source_url,economic_impact,status,\
-         acknowledged_at,resolved_at,resolution_reason,created_at\r\n\
-         a1,v,cve,,'=cmd(),,,-5,open,,,,2026-01-01T00:00:00Z\r\n\
-         a2,v,cve,,\"Second, with a comma\",,,-5,open,,,,2026-01-01T00:00:00Z\r\n"
+         acknowledged_at,resolved_at,resolution_reason,created_at,updated_at\r\n\
+         a1,v,cve,,'=cmd(),,,-5,open,,,,2026-01-01T00:00:00Z,2026-01-02T00:00:00Z\r\n\
+         a2,v,cve,,\"Second, with a comma\",,,-5,open,,,,2026-01-01T00:00:00Z,2026-01-02T00:00:00Z\r\n"
     );
     assert!(String::from_utf8_lossy(&output.stderr).contains("2 alerts."));
 }
