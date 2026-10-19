@@ -44,6 +44,9 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 - The README says that `login` and `logout` exit with code 1 when the system keychain cannot be
   reached.
   ([#200](https://github.com/Hodeitek/hodeishield-cli/issues/200))
+- The Install section links to the steps for a binary that macOS or Windows blocks, and the Windows
+  steps (`Unblock-File`, SmartScreen's "More info → Run anyway") apply to every version.
+  ([#16](https://github.com/Hodeitek/hodeishield-cli/issues/16))
 
 ## [0.5.0] - 2026-10-15
 
