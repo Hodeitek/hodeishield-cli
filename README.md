@@ -49,7 +49,9 @@ endpoint agents from a terminal or a script.
 
 Download the archive for your platform from the
 [latest release](https://github.com/Hodeitek/hodeishield-cli/releases/latest), **verify it** (next
-section), and put `hodeishield` (`hodeishield.exe` on Windows) somewhere on your `PATH`.
+section), and put `hodeishield` (`hodeishield.exe` on Windows) somewhere on your `PATH`. If macOS or
+Windows blocks the downloaded binary, see
+[If macOS or Windows blocks the binary](#if-macos-or-windows-blocks-the-binary).
 
 | Platform | Archive |
 |---|---|
@@ -328,20 +330,20 @@ place:
 curl -LO https://github.com/Hodeitek/hodeishield-cli/releases/download/v0.5.1/hodeishield-0.5.1-universal-apple-darwin.tar.gz
 ```
 
-**Windows, before 0.2.0.** Unblock the archive before unpacking it, so the executable does not
-inherit the download mark:
+**Windows.** SmartScreen can warn about a signed file that is still new to it, and versions before
+0.2.0 are not signed at all. To avoid the warning, unblock the archive before unpacking it, so the
+executable does not inherit the download mark:
 
 ```powershell
-Unblock-File .\hodeishield-0.1.1-x86_64-pc-windows-msvc.zip
-Expand-Archive .\hodeishield-0.1.1-x86_64-pc-windows-msvc.zip
+Unblock-File .\hodeishield-<version>-x86_64-pc-windows-msvc.zip
+Expand-Archive .\hodeishield-<version>-x86_64-pc-windows-msvc.zip
 ```
 
 If you already unpacked it, run `Unblock-File` on `hodeishield.exe` instead. Windows PowerShell
 5.1's `Expand-Archive` does not copy the download mark to the unpacked files, so unblocking matters
 when you unpack with File Explorer's "Extract All" or another tool that carries the mark over.
-SmartScreen can also warn about a signed file that is still new to it; in either case, if it shows
-"Windows protected your PC", choose **More info → Run anyway** («Más información → Ejecutar de todos
-modos» on a Spanish system).
+If SmartScreen still shows "Windows protected your PC", choose **More info → Run anyway** («Más
+información → Ejecutar de todos modos» on a Spanish system).
 
 ## Authenticate
 
