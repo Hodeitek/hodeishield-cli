@@ -47,6 +47,8 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 - The Install section links to the steps for a binary that macOS or Windows blocks, and the Windows
   steps (`Unblock-File`, SmartScreen's "More info → Run anyway") apply to every version.
   ([#16](https://github.com/Hodeitek/hodeishield-cli/issues/16))
+- The README says that two profiles signed in as the same user, to the same tenant, with the same
+  flow share one sign-in, so logging out of either one signs out both.
 
 ## [0.5.0] - 2026-10-15
 
