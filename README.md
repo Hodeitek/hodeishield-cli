@@ -61,7 +61,7 @@ Windows blocks the downloaded binary, see
 | Windows x86_64 | `hodeishield-<version>-x86_64-pc-windows-msvc.zip` |
 | Windows arm64 | `hodeishield-<version>-aarch64-pc-windows-msvc.zip` (from 0.4.0) |
 
-`<version>` has no leading `v`: release `v0.5.0` ships `hodeishield-0.5.0-…`. The Linux binaries are
+`<version>` has no leading `v`: release `v0.5.1` ships `hodeishield-0.5.1-…`. The Linux binaries are
 statically linked and run on any distribution. Homebrew and Scoop packages (next section) and a
 [container image](#container-image) are also available.
 
@@ -76,7 +76,7 @@ neither is part of a distribution's default install.
 From source, with the Rust toolchain installed (pin the release tag you want):
 
 ```sh
-cargo install --locked --git https://github.com/Hodeitek/hodeishield-cli --tag v0.5.0 hodeishield-cli
+cargo install --locked --git https://github.com/Hodeitek/hodeishield-cli --tag v0.5.1 hodeishield-cli
 ```
 
 ### Homebrew and Scoop
@@ -222,7 +222,7 @@ exact version, or better its digest. The image carries no documentation: the
 0.4.2, as `USER-INFORMATION.md` in its archives.
 
 ```sh
-v=0.5.0   # the version you want
+v=0.5.1   # the version you want
 docker pull ghcr.io/hodeitek/hodeishield-cli:$v
 docker run --rm -e HODEISHIELD_API_KEY ghcr.io/hodeitek/hodeishield-cli:$v vendors list
 ```
@@ -236,7 +236,7 @@ The image is signed by digest with cosign (keyless) and carries the release's Cy
 signed attestation. Verify both before you rely on the image:
 
 ```sh
-v=0.5.0
+v=0.5.1
 image=ghcr.io/hodeitek/hodeishield-cli:$v
 cosign verify $image \
   --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/container-image.yml@refs/tags/v$v \
@@ -272,11 +272,11 @@ Each release has a `SHA256SUMS` file, a Sigstore bundle (`*.sigstore.json`) for 
 `SHA256SUMS`, and SLSA provenance (`hodeishield.intoto.jsonl`). In short:
 
 ```sh
-grep hodeishield-0.5.0-x86_64-unknown-linux-musl.tar.gz SHA256SUMS | sha256sum -c -
+grep hodeishield-0.5.1-x86_64-unknown-linux-musl.tar.gz SHA256SUMS | sha256sum -c -
 
-cosign verify-blob hodeishield-0.5.0-x86_64-unknown-linux-musl.tar.gz \
-  --bundle hodeishield-0.5.0-x86_64-unknown-linux-musl.tar.gz.sigstore.json \
-  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.5.0 \
+cosign verify-blob hodeishield-0.5.1-x86_64-unknown-linux-musl.tar.gz \
+  --bundle hodeishield-0.5.1-x86_64-unknown-linux-musl.tar.gz.sigstore.json \
+  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.5.1 \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --certificate-github-workflow-trigger push
 ```
@@ -287,12 +287,12 @@ On Windows, PowerShell has no `sha256sum`: compare the hash of the zip or MSI wi
 fail with a missing-source error), and the same `verify-blob` command works with Windows paths:
 
 ```powershell
-(Get-FileHash .\hodeishield-0.5.0-x86_64-pc-windows-msvc.zip -Algorithm SHA256).Hash.ToLower()
-Select-String hodeishield-0.5.0-x86_64-pc-windows-msvc.zip SHA256SUMS      # the two hashes must match
+(Get-FileHash .\hodeishield-0.5.1-x86_64-pc-windows-msvc.zip -Algorithm SHA256).Hash.ToLower()
+Select-String hodeishield-0.5.1-x86_64-pc-windows-msvc.zip SHA256SUMS      # the two hashes must match
 # the same two lines with .msi for the MSI
-cosign verify-blob .\hodeishield-0.5.0-x86_64-pc-windows-msvc.zip `
-  --bundle .\hodeishield-0.5.0-x86_64-pc-windows-msvc.zip.sigstore.json `
-  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.5.0 `
+cosign verify-blob .\hodeishield-0.5.1-x86_64-pc-windows-msvc.zip `
+  --bundle .\hodeishield-0.5.1-x86_64-pc-windows-msvc.zip.sigstore.json `
+  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.5.1 `
   --certificate-oidc-issuer https://token.actions.githubusercontent.com `
   --certificate-github-workflow-trigger push
 ```
@@ -327,7 +327,7 @@ on the binary, so the block still applies. A download with `curl` does not set i
 place:
 
 ```sh
-curl -LO https://github.com/Hodeitek/hodeishield-cli/releases/download/v0.5.0/hodeishield-0.5.0-universal-apple-darwin.tar.gz
+curl -LO https://github.com/Hodeitek/hodeishield-cli/releases/download/v0.5.1/hodeishield-0.5.1-universal-apple-darwin.tar.gz
 ```
 
 **Windows.** SmartScreen can warn about a signed file that is still new to it, and versions before
