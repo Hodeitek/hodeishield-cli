@@ -389,6 +389,10 @@ hodeishield login --profile client-b
 
 A profile that has not been defined is refused (`Profile ... is not defined`).
 
+Two profiles signed in as the same user, to the same tenant, with the same flow (browser or
+`--device`) share one sign-in at the app: logging out of either one signs out both. Profiles on
+different tenants, or one signed in with the browser and the other with `--device`, are independent.
+
 `login` first checks that the selected token store is available and stops before opening the browser
 or showing a code if it is not. On a machine without a keychain, see
 [Servers, containers and remote sessions](#servers-containers-and-remote-sessions).
