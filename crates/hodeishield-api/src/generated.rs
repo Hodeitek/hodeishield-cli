@@ -13,7 +13,7 @@
 use serde::{Deserialize, Serialize};
 
 /// `info.version` of the OpenAPI document this client was generated from.
-pub const OPENAPI_VERSION: &str = "2026-10-19";
+pub const OPENAPI_VERSION: &str = "2026-10-25";
 
 /// The server the OpenAPI document declares.
 pub const DEFAULT_SERVER: &str = "https://api.hodeishield.com";
@@ -147,12 +147,32 @@ pub struct Alert {
     pub resolution_reason: Option<String>,
     /// RFC 3339, UTC.
     pub created_at: String,
+    /// RFC 3339, UTC. Last change of severity, acknowledgement, resolution or CISA KEV status; equals the instant the service started tracking it for alerts older than that.
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AlertsPagination {
+    /// The page that was served.
+    #[serde(default)]
+    pub page: Option<i64>,
+    /// Items per page in effect.
+    pub per_page: i64,
+    /// Total items matching the filters, across all pages.
+    #[serde(default)]
+    pub total: Option<i64>,
+    /// Number of pages at this `per_page`.
+    #[serde(default)]
+    pub total_pages: Option<i64>,
+    /// Pass as `cursor` for the next page; null on the last page.
+    #[serde(default)]
+    pub next_cursor: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ListAlertsResponse {
     pub data: Vec<Alert>,
-    pub pagination: Pagination,
+    pub pagination: AlertsPagination,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -403,6 +423,28 @@ pub struct WhoAmIOrganization {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Beta {
+    /// The beta status of the tenant’s own organisation, or `active` while the beta of its parent MSSP runs and lifts its access. Open vocabulary: `active`, `ended` or `converted`.
+    pub status: String,
+    /// True while the beta runs: status `active` and `ends_at` in the future. While it runs the organisation has Enterprise access.
+    pub running: bool,
+    /// When the own organisation’s beta ends or ended, ISO 8601 UTC. Null when no end is recorded, and always null for a beta inherited from the parent MSSP.
+    #[serde(default)]
+    pub ends_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct User {
+    /// The user the access token belongs to (lowercase).
+    pub id: String,
+    /// The user’s display name. Untrusted text.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// The user’s email address.
+    pub email: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Portfolio {
     /// How many tenants this key can select, right now.
     pub tenant_count: i64,
@@ -420,6 +462,12 @@ pub struct WhoAmI {
     pub tenant: Option<Tenant>,
     /// The organisation of the tenant (tenant key, OAuth token) or the MSSP the key belongs to (portfolio key).
     pub organization: WhoAmIOrganization,
+    /// The beta of the tenant’s own organisation; while it does not run and the parent MSSP’s beta does, `active` and running with no date. Nothing else about the parent’s beta is described: not its end, nor whether it ended or converted. Null when the own organisation never joined the beta and no parent beta runs, and for a portfolio key.
+    #[serde(default)]
+    pub beta: Option<Beta>,
+    /// The signed-in user of an OAuth access token (`hs_at_…`): the CALLER’S OWN id, name and email, never another user’s. Null for a tenant API key and for a portfolio key, which act for no user, and for a token whose user row is no longer visible in the token’s tenant.
+    #[serde(default)]
+    pub user: Option<User>,
     /// Portfolio keys only. Null for a tenant key or an OAuth token.
     #[serde(default)]
     pub portfolio: Option<Portfolio>,
@@ -619,17 +667,20 @@ impl std::str::FromStr for BusinessCriticality {
 pub enum AlertSort {
     /// `created_at`
     CreatedAt,
+    /// `updated_at`
+    UpdatedAt,
 }
 
 impl AlertSort {
     /// Every accepted value, as sent on the wire.
-    pub const VALUES: &'static [&'static str] = &["created_at"];
+    pub const VALUES: &'static [&'static str] = &["created_at", "updated_at"];
 
     /// The value as sent on the wire.
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             Self::CreatedAt => "created_at",
+            Self::UpdatedAt => "updated_at",
         }
     }
 }
@@ -646,6 +697,7 @@ impl std::str::FromStr for AlertSort {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "created_at" => Ok(Self::CreatedAt),
+            "updated_at" => Ok(Self::UpdatedAt),
             _ => Err(crate::ParseEnumError::new(value, Self::VALUES)),
         }
     }
@@ -1155,11 +1207,13 @@ impl ListVendorsParams {
 /// Query parameters of `listAlerts`.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ListAlertsParams {
-    /// 1-based page number. Defaults to 1.
+    /// 1-based page number. Defaults to 1. Cannot be combined with `cursor`.
     pub page: Option<i64>,
     /// Items per page, 1..200. Defaults to 50.
     pub per_page: Option<i64>,
-    /// Field to order by. One of: created_at.
+    /// Opaque keyset cursor: pass the `next_cursor` of the previous page, with the same `sort`, `order` and filters. Cannot be combined with `page`.
+    pub cursor: Option<String>,
+    /// Field to order by. One of: created_at, updated_at.
     pub sort: Option<AlertSort>,
     /// Sort direction. Defaults to desc.
     pub order: Option<Order>,
@@ -1171,6 +1225,8 @@ pub struct ListAlertsParams {
     pub vendor_id: Option<String>,
     /// Only alerts created at or after this RFC 3339 instant.
     pub since: Option<String>,
+    /// Only alerts last changed at or after this RFC 3339 instant (`updated_at`), including ones created long before it. Poll changes with `sort=updated_at&order=asc`.
+    pub updated_since: Option<String>,
 }
 
 impl ListAlertsParams {
@@ -1183,6 +1239,9 @@ impl ListAlertsParams {
         }
         if let Some(value) = &self.per_page {
             pairs.push(("per_page", value.to_string()));
+        }
+        if let Some(value) = &self.cursor {
+            pairs.push(("cursor", value.clone()));
         }
         if let Some(value) = &self.sort {
             pairs.push(("sort", value.as_str().to_owned()));
@@ -1201,6 +1260,9 @@ impl ListAlertsParams {
         }
         if let Some(value) = &self.since {
             pairs.push(("since", value.clone()));
+        }
+        if let Some(value) = &self.updated_since {
+            pairs.push(("updated_since", value.clone()));
         }
         pairs
     }
@@ -1827,7 +1889,7 @@ impl crate::Client {
 
     /// List supply-chain alerts.
     ///
-    /// Alerts raised against the tenant vendors. Poll incrementally with `since` plus `order=asc`.
+    /// Alerts raised against the tenant vendors. Poll new alerts with `since` plus `order=asc`, changed ones with `updated_since` plus `sort=updated_at&order=asc`.
     ///
     /// Required scope: `supply_risk:read`. Published in `/v1` since 2026-09-20.
     ///
@@ -2037,7 +2099,7 @@ impl crate::Client {
 
     /// Describe the calling credential.
     ///
-    /// Who the presented credential is: its type and scopes, and the tenant and organisation it reads (a tenant API key or an OAuth token), or the MSSP organisation it belongs to and how many tenants it can reach (a portfolio key; the tenants themselves are on `GET /v1/portfolio/tenants`). It describes the caller only: no other tenant, no secret, never the key or its hash. Any valid credential may call it: it requires NO scope, and it uses the same authentication and the same rate limits as every other operation. It never takes `X-HS-Tenant`.
+    /// Who the presented credential is: its type and scopes, and the tenant and organisation it reads (a tenant API key or an OAuth token), for an OAuth token also the signed-in user (`user`: its own id, name and email, never another user’s; null for any key), or the MSSP organisation it belongs to and how many tenants it can reach (a portfolio key; the tenants themselves are on `GET /v1/portfolio/tenants`). It describes the caller only: no other tenant, no secret, never the key or its hash. Any valid credential may call it: it requires NO scope, and it uses the same authentication and the same rate limits as every other operation. It never takes `X-HS-Tenant`.
     ///
     /// Required scope: `none (any valid credential)`. Published in `/v1` since 2026-10-17.
     ///
