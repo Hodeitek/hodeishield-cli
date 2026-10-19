@@ -162,7 +162,7 @@ fn unstored_notice(revoked: &Result<()>) -> String {
         Err(revocation) => format!(
             "The session could not be stored on this machine, and the app did not confirm \
              revoking the tokens issued for it ({}). Revoke the CLI's access in the app under \
-             \"Application access\".",
+             Account → Applications.",
             clean(&revocation.message)
         ),
     }
@@ -1009,6 +1009,16 @@ mod tests {
     }
 
     #[test]
+    fn whoami_shows_the_email_when_the_api_gives_no_name() {
+        let (text, printed) = whoami_of_a_sign_in(
+            Some(r#"{"id":"u-1","name":null,"email":"ana@acme.example"}"#),
+            None,
+        );
+        assert!(text.contains("User        ana@acme.example\n"), "{text}");
+        assert_eq!(printed["user"], "ana@acme.example");
+    }
+
+    #[test]
     fn whoami_uses_the_id_when_the_api_gives_no_name_or_email() {
         let (text, _) = whoami_of_a_sign_in(Some(r#"{"id":"u-1","name":null}"#), None);
         assert!(text.contains("User        u-1\n"), "{text}");
@@ -1311,7 +1321,7 @@ mod tests {
     fn the_notice_for_unrevoked_tokens_points_to_the_app() {
         let notice = unstored_notice(&Err(Failure::general("the app refused to revoke")));
         assert!(
-            notice.contains("did not confirm") && notice.contains("Application access"),
+            notice.contains("did not confirm") && notice.contains("Account → Applications"),
             "{notice}"
         );
     }

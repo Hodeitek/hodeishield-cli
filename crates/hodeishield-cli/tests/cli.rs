@@ -108,6 +108,71 @@ fn assert_no_key(output: &std::process::Output) {
     );
 }
 
+/// A variable that only sets a global option must not turn that option into part of the usage line.
+#[test]
+fn usage_line_does_not_list_options_set_by_the_environment() {
+    let env = Env::new();
+    let output = env
+        .cmd()
+        .env("HODEISHIELD_API_URL", "http://127.0.0.1:9")
+        .env("HODEISHIELD_PROFILE", "default")
+        .args(["vendors", "get"])
+        .output()
+        .expect("run");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let usage = stderr
+        .lines()
+        .find(|l| l.starts_with("Usage:"))
+        .expect(&stderr);
+    assert!(
+        !usage.contains("--api-url") && !usage.contains("--profile"),
+        "{usage}"
+    );
+}
+
+/// The flag wins over the variable, and the variable still selects the profile when there is no flag.
+#[test]
+fn profile_flag_beats_the_environment() {
+    let env = Env::new();
+    let missing = "Profile `does-not-exist` is not defined";
+    let with_flag = env
+        .cmd()
+        .env("HODEISHIELD_PROFILE", "does-not-exist")
+        .args(["--profile", "default", "config", "show"])
+        .output()
+        .expect("run");
+    assert!(with_flag.status.success(), "{with_flag:?}");
+    assert!(!String::from_utf8_lossy(&with_flag.stderr).contains(missing));
+    let without_flag = env
+        .cmd()
+        .env("HODEISHIELD_PROFILE", "does-not-exist")
+        .args(["config", "show"])
+        .output()
+        .expect("run");
+    assert!(String::from_utf8_lossy(&without_flag.stderr).contains(missing));
+}
+
+/// `--help` names the variables but never prints their values, which end up in terminals and CI logs.
+#[test]
+fn help_does_not_print_the_values_of_the_environment() {
+    let env = Env::new();
+    let output = env
+        .cmd()
+        .env("HODEISHIELD_API_URL", "https://api-from-env.example.test")
+        .env("HODEISHIELD_PROFILE", "profile-from-env")
+        .env("HODEISHIELD_API_KEY", KEY)
+        .arg("--help")
+        .output()
+        .expect("run");
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("[env: HODEISHIELD_API_URL]"), "{text}");
+    assert!(
+        !text.contains("api-from-env") && !text.contains("profile-from-env"),
+        "{text}"
+    );
+    assert_no_key(&output);
+}
+
 #[test]
 fn vendors_list_prints_a_table_and_the_next_page() {
     let env = Env::new();

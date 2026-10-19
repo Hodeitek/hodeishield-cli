@@ -260,7 +260,10 @@ pub fn from_api(error: hodeishield_api::Error, context: &ApiContext<'_>) -> Fail
             failure.request_id = request_id;
             failure
         }
-        Error::Transport(e) => Failure::new(Kind::Unavailable, format!("Could not reach the API: {}.", error_chain(&e))),
+        Error::Transport(e) => {
+            let chain = error_chain(&e);
+            ca_hint(Failure::new(Kind::Unavailable, format!("Could not reach the API: {chain}.")), &chain)
+        }
         Error::Decode { operation, source } => Failure::general(format!(
             "The answer to {operation} does not match the API description this CLI was built from: {source}."
         ))
@@ -373,6 +376,16 @@ pub fn error_chain(error: &dyn std::error::Error) -> String {
     text
 }
 
+/// Adds the hint for a machine with no CA certificates, which the HTTP client reports only as
+/// "No CA certificates were loaded from the system".
+pub fn ca_hint(failure: Failure, chain: &str) -> Failure {
+    if chain.contains("No CA certificates were loaded") {
+        failure.hint("Install the system CA certificates package (for example `ca-certificates`).")
+    } else {
+        failure
+    }
+}
+
 /// Where the credential of a call came from, for the hint on a 401.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CredentialSource {
@@ -423,6 +436,20 @@ mod tests {
         assert_eq!(sentence_body("Bad value!  "), "Bad value");
         assert_eq!(sentence_body("send X-HS-Tenant.."), "send X-HS-Tenant");
         assert_eq!(sentence_body("version 1.2 is old"), "version 1.2 is old");
+    }
+
+    #[test]
+    fn a_missing_ca_bundle_gets_a_hint_and_other_errors_do_not() {
+        let chain =
+            "builder error: unexpected error: No CA certificates were loaded from the system";
+        let hinted = ca_hint(Failure::general("x"), chain);
+        assert!(
+            hinted
+                .hint
+                .as_deref()
+                .is_some_and(|h| h.contains("ca-certificates"))
+        );
+        assert!(ca_hint(Failure::general("x"), "dns error").hint.is_none());
     }
 
     #[test]

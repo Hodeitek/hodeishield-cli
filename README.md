@@ -25,6 +25,9 @@ hodeishield login            # sign in through the browser and pick a tenant
 hodeishield vendors list     # your third-party inventory
 ```
 
+On a server, in a container or in CI there is usually no keychain and `login` stops with an error: use a
+[tenant API key](#with-a-tenant-api-key-scripts-ci-servers) instead.
+
 Verify the download before you run it: see [Install](#install) and [Verify a download](#verify-a-download).
 
 Read your third-party inventory, supply-chain alerts, risk register, compliance posture, evidence and
@@ -46,7 +49,9 @@ endpoint agents from a terminal or a script.
 
 Download the archive for your platform from the
 [latest release](https://github.com/Hodeitek/hodeishield-cli/releases/latest), **verify it** (next
-section), and put `hodeishield` (`hodeishield.exe` on Windows) somewhere on your `PATH`.
+section), and put `hodeishield` (`hodeishield.exe` on Windows) somewhere on your `PATH`. If macOS or
+Windows blocks the downloaded binary, see
+[If macOS or Windows blocks the binary](#if-macos-or-windows-blocks-the-binary).
 
 | Platform | Archive |
 |---|---|
@@ -56,14 +61,22 @@ section), and put `hodeishield` (`hodeishield.exe` on Windows) somewhere on your
 | Windows x86_64 | `hodeishield-<version>-x86_64-pc-windows-msvc.zip` |
 | Windows arm64 | `hodeishield-<version>-aarch64-pc-windows-msvc.zip` (from 0.4.0) |
 
-`<version>` has no leading `v`: release `v0.5.0` ships `hodeishield-0.5.0-…`. The Linux binaries are
+`<version>` has no leading `v`: release `v0.5.1` ships `hodeishield-0.5.1-…`. The Linux binaries are
 statically linked and run on any distribution. Homebrew and Scoop packages (next section) and a
 [container image](#container-image) are also available.
+
+On Linux you need `curl` (or another way to download), `tar`, `gzip` and a CA certificate bundle
+(the `ca-certificates` package). Minimal Debian, Ubuntu and Alpine images do not include `curl` or
+the bundle: install them first, for example `apt-get install curl ca-certificates` or
+`apk add curl ca-certificates`. Verifying a download also needs
+[`cosign`](https://docs.sigstore.dev/cosign/system_config/installation/) v3 (or v2.4 or newer) and,
+for the provenance check, [`slsa-verifier`](https://github.com/slsa-framework/slsa-verifier#installation);
+neither is part of a distribution's default install.
 
 From source, with the Rust toolchain installed (pin the release tag you want):
 
 ```sh
-cargo install --locked --git https://github.com/Hodeitek/hodeishield-cli --tag v0.5.0 hodeishield-cli
+cargo install --locked --git https://github.com/Hodeitek/hodeishield-cli --tag v0.5.1 hodeishield-cli
 ```
 
 ### Homebrew and Scoop
@@ -77,7 +90,8 @@ scoop bucket add hodeishield https://github.com/Hodeitek/scoop-hodeishield
 scoop install hodeishield                                       # Windows, per user
 ```
 
-`scoop bucket add` needs Git: on a fresh Scoop, run `scoop install git` first. Scoop's own installer
+Scoop itself must be installed first (see [scoop.sh](https://scoop.sh)); on a clean Windows machine
+`scoop` is not a known command. `scoop bucket add` needs Git: on a fresh Scoop, run `scoop install git` first. Scoop's own installer
 refuses an elevated (administrator) shell unless it is run with `-RunAsAdmin`; installing per user,
 from a normal shell, is the recommended way and needs no administrator rights.
 
@@ -109,6 +123,35 @@ sudo dnf install ./hodeishield-<version>-1.x86_64.rpm     # Fedora, RHEL (arm64:
 
 Upgrading is the same command with the newer package; `sudo apt remove hodeishield` or
 `sudo dnf remove hodeishield` uninstalls it.
+
+### Uninstall an archive or install.sh install
+
+Nothing else is installed on the machine, so remove the files you copied. `install.sh` puts the
+binary in `/usr/local/bin` or `~/.local/bin` (or the `--dir` you gave) and the man pages in
+`share/man/man1` next to it:
+
+```sh
+hodeishield logout                      # revokes the sign-in and removes the stored token
+rm -f "$(hodeishield config path)"      # optional: the settings
+rm "$(command -v hodeishield)"          # the binary
+rm -f /usr/local/share/man/man1/hodeishield*.1     # man pages (~/.local/share/man/man1 for ~/.local/bin)
+```
+
+Run `hodeishield logout` and `config path` first; with the binary gone neither can run. If you
+installed completions from `hodeishield completions`, remove the file where you saved it, usually
+`~/.local/share/bash-completion/completions/hodeishield` (bash), `_hodeishield` in a directory of
+your `fpath` (zsh) or `~/.config/fish/completions/hodeishield.fish` (fish).
+
+On Windows, `hodeishield logout` first removes the sign-in from Credential Manager, then:
+
+- **Zip:** delete the folder you unpacked it into, and remove it from your `PATH` if you added it
+  (the zip never changes `PATH`).
+- **MSI:** uninstall from **Settings → Apps** or with `msiexec /x`. This removes the program folder,
+  the `PATH` entry and the Apps entry.
+- **Scoop:** `scoop uninstall hodeishield`, which removes the program and its shim.
+
+None of these remove the per-user settings in `%APPDATA%\Hodeitek\HodeiShield\config`, one folder
+in each user profile that ran `config set`; delete it if you want them gone.
 
 ### Windows installer (MSI)
 
@@ -179,7 +222,7 @@ exact version, or better its digest. The image carries no documentation: the
 0.4.2, as `USER-INFORMATION.md` in its archives.
 
 ```sh
-v=0.5.0   # the version you want
+v=0.5.1   # the version you want
 docker pull ghcr.io/hodeitek/hodeishield-cli:$v
 docker run --rm -e HODEISHIELD_API_KEY ghcr.io/hodeitek/hodeishield-cli:$v vendors list
 ```
@@ -193,7 +236,7 @@ The image is signed by digest with cosign (keyless) and carries the release's Cy
 signed attestation. Verify both before you rely on the image:
 
 ```sh
-v=0.5.0
+v=0.5.1
 image=ghcr.io/hodeitek/hodeishield-cli:$v
 cosign verify $image \
   --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/container-image.yml@refs/tags/v$v \
@@ -229,12 +272,28 @@ Each release has a `SHA256SUMS` file, a Sigstore bundle (`*.sigstore.json`) for 
 `SHA256SUMS`, and SLSA provenance (`hodeishield.intoto.jsonl`). In short:
 
 ```sh
-sha256sum --ignore-missing -c SHA256SUMS
+grep hodeishield-0.5.1-x86_64-unknown-linux-musl.tar.gz SHA256SUMS | sha256sum -c -
 
-cosign verify-blob hodeishield-0.5.0-x86_64-unknown-linux-musl.tar.gz \
-  --bundle hodeishield-0.5.0-x86_64-unknown-linux-musl.tar.gz.sigstore.json \
-  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.5.0 \
+cosign verify-blob hodeishield-0.5.1-x86_64-unknown-linux-musl.tar.gz \
+  --bundle hodeishield-0.5.1-x86_64-unknown-linux-musl.tar.gz.sigstore.json \
+  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.5.1 \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-github-workflow-trigger push
+```
+
+On Windows, PowerShell has no `sha256sum`: compare the hash of the zip or MSI with its line in
+`SHA256SUMS`. `cosign` for Windows is a `cosign-windows-amd64.exe` download on its
+[release page](https://github.com/sigstore/cosign/releases) (`winget install sigstore.cosign` may
+fail with a missing-source error), and the same `verify-blob` command works with Windows paths:
+
+```powershell
+(Get-FileHash .\hodeishield-0.5.1-x86_64-pc-windows-msvc.zip -Algorithm SHA256).Hash.ToLower()
+Select-String hodeishield-0.5.1-x86_64-pc-windows-msvc.zip SHA256SUMS      # the two hashes must match
+# the same two lines with .msi for the MSI
+cosign verify-blob .\hodeishield-0.5.1-x86_64-pc-windows-msvc.zip `
+  --bundle .\hodeishield-0.5.1-x86_64-pc-windows-msvc.zip.sigstore.json `
+  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.5.1 `
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com `
   --certificate-github-workflow-trigger push
 ```
 
@@ -268,23 +327,23 @@ on the binary, so the block still applies. A download with `curl` does not set i
 place:
 
 ```sh
-curl -LO https://github.com/Hodeitek/hodeishield-cli/releases/download/v0.5.0/hodeishield-0.5.0-universal-apple-darwin.tar.gz
+curl -LO https://github.com/Hodeitek/hodeishield-cli/releases/download/v0.5.1/hodeishield-0.5.1-universal-apple-darwin.tar.gz
 ```
 
-**Windows, before 0.2.0.** Unblock the archive before unpacking it, so the executable does not
-inherit the download mark:
+**Windows.** SmartScreen can warn about a signed file that is still new to it, and versions before
+0.2.0 are not signed at all. To avoid the warning, unblock the archive before unpacking it, so the
+executable does not inherit the download mark:
 
 ```powershell
-Unblock-File .\hodeishield-0.1.1-x86_64-pc-windows-msvc.zip
-Expand-Archive .\hodeishield-0.1.1-x86_64-pc-windows-msvc.zip
+Unblock-File .\hodeishield-<version>-x86_64-pc-windows-msvc.zip
+Expand-Archive .\hodeishield-<version>-x86_64-pc-windows-msvc.zip
 ```
 
 If you already unpacked it, run `Unblock-File` on `hodeishield.exe` instead. Windows PowerShell
 5.1's `Expand-Archive` does not copy the download mark to the unpacked files, so unblocking matters
 when you unpack with File Explorer's "Extract All" or another tool that carries the mark over.
-SmartScreen can also warn about a signed file that is still new to it; in either case, if it shows
-"Windows protected your PC", choose **More info → Run anyway** («Más información → Ejecutar de todos
-modos» on a Spanish system).
+If SmartScreen still shows "Windows protected your PC", choose **More info → Run anyway** («Más
+información → Ejecutar de todos modos» on a Spanish system).
 
 ## Authenticate
 
@@ -313,6 +372,7 @@ leaves those fields null and says why on standard error.
 ```sh
 hodeishield login            # opens the browser; the app redirects back to 127.0.0.1
 hodeishield login --device   # no browser here: approve a short code from another device
+hodeishield login --no-browser   # print the sign-in URL instead of opening a browser
 hodeishield whoami
 hodeishield logout           # revokes the token at the app and removes it from the keychain
 ```
@@ -328,6 +388,10 @@ hodeishield login --profile client-b
 ```
 
 A profile that has not been defined is refused (`Profile ... is not defined`).
+
+Two profiles signed in as the same user, to the same tenant, with the same flow (browser or
+`--device`) share one sign-in at the app: logging out of either one signs out both. Profiles on
+different tenants, or one signed in with the browser and the other with `--device`, are independent.
 
 `login` first checks that the selected token store is available and stops before opening the browser
 or showing a code if it is not. On a machine without a keychain, see
@@ -351,10 +415,11 @@ the file store below is an explicit choice, never a fallback.
 The keychain can also be out of reach in a session that has one on the machine, such as an SSH or
 other remote logon on Windows. With no API key set, commands then stop with exit code 3 and say that
 the system keychain is not available in this session; set `HODEISHIELD_API_KEY` in remote or
-automated sessions. With the key set, the keychain is not read at all.
+automated sessions. `login` and `logout` exit 1 in that case, not 3. With the key set, the keychain
+is not read at all.
 
 To cut the CLI's access from elsewhere, revoke it in [the app](https://app.hodeishield.com) under
-**Account → Application access**. Signing out of the web app does not cut it.
+**Account → Applications**. Signing out of the web app does not cut it.
 
 ### Servers, containers and remote sessions
 
@@ -373,7 +438,7 @@ a code. You have two options, in this order of preference:
    - **How long.** At most 90 days from the sign-in, however often the session is refreshed, and
      at most 30 days after the CLI last refreshed it. It ends earlier with `hodeishield logout`, when
      you change or reset your password, when an administrator revokes it, when you are removed from
-     the tenant, or when you revoke the access in the app under **Account › Applications**.
+     the tenant, or when you revoke the access in the app under **Account → Applications**.
    - **Reuse is detected.** Each refresh replaces the refresh token. If someone refreshes with a
      copy of your file, the next refresh by your own CLI is seen as a reuse of an old token and
      ends the session for both. An unexpected "sign in again" is a reason to revoke the access in
@@ -675,6 +740,10 @@ hodeishield --profile default vendors list   # or pick one per command
 | `HODEISHIELD_TOKEN_STORE` | Where sign-in tokens are kept: `keychain` (the default) or `plaintext-file`, an [opt-in](#servers-containers-and-remote-sessions); takes precedence over `token_store` in the configuration file |
 | `HODEISHIELD_NO_UPDATE_CHECK` | Any non-empty value turns off the [new-version notice](#new-version-notice) |
 
+`config set` and `config unset` take `api_url`, `app_url`, `oauth_client_id` and `oauth_scopes`
+(per profile), and `update_check` (`true` or `false`) and `token_store` (`keychain` or
+`plaintext-file`), which are global.
+
 The configuration file holds URLs and sign-in settings only, never a credential. `update_check` and
 `token_store` are global settings, not per profile. An older CLI refuses a configuration file that
 contains `token_store`; use the environment variable there. URLs must use HTTPS;
@@ -751,8 +820,8 @@ message that starts with `Could not reach the API:` (or `Could not reach the app
 followed by the cause. A certificate error there usually means the proxy's CA is missing from the
 store described above.
 
-This behaviour comes from the CLI's HTTP library. It is verified on Linux in CI against a
-TLS-inspecting proxy; macOS and Windows have not been verified yet.
+This behaviour comes from the CLI's HTTP library. It is verified in CI on Linux, macOS and Windows
+against a TLS-inspecting proxy whose CA is installed in the system store.
 
 ## Repository layout
 

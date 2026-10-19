@@ -37,22 +37,22 @@ Exit codes:
 #[derive(Debug, Parser)]
 #[command(name = "hodeishield", version, propagate_version = true, after_help = AFTER_HELP)]
 pub struct Cli {
-    /// Configuration profile to use.
+    /// Configuration profile to use. [env: HODEISHIELD_PROFILE]
+    // Read from the environment in `commands::run`, not by clap: clap would list the flag in every
+    // usage line while the variable is set.
     #[arg(
         long,
         global = true,
         help_heading = "Global options",
-        env = "HODEISHIELD_PROFILE",
         value_name = "NAME"
     )]
     pub profile: Option<String>,
 
-    /// Base URL of the API, overriding the profile.
+    /// Base URL of the API, overriding the profile. [env: HODEISHIELD_API_URL]
     #[arg(
         long,
         global = true,
         help_heading = "Global options",
-        env = "HODEISHIELD_API_URL",
         value_name = "URL"
     )]
     pub api_url: Option<String>,
@@ -147,7 +147,7 @@ With --device, you get a short code to type in on any other device instead.
 On the consent screen you choose the one tenant the CLI may read; the token covers only that \
 tenant, and only reads. The scopes asked for are the ones the CLI's commands need (see \
 `config set oauth_scopes` to ask for fewer). Revoke the access with `hodeishield logout`, or in the \
-app under Account → Application access.";
+app under Account → Applications.";
 
 #[derive(Debug, Args)]
 pub struct LoginArgs {
@@ -567,12 +567,12 @@ pub enum ConfigCommand {
     Path,
     /// Show the settings in effect for the profile.
     Show,
-    /// Set a key of the profile: api_url, app_url, oauth_client_id, oauth_scopes.
+    /// Set a key: api_url, app_url, oauth_client_id, oauth_scopes (per profile), update_check, token_store (global).
     Set {
         /// The key to set.
         #[arg(value_parser = PossibleValuesParser::new(crate::config::KEYS))]
         key: String,
-        /// The value. For oauth_scopes, a space-separated list.
+        /// The value. For oauth_scopes, a space-separated list; update_check takes true or false; token_store takes keychain or plaintext-file.
         value: String,
     },
     /// Remove a key from the profile, going back to the default.

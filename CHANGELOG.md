@@ -6,6 +6,50 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-10-18
+
+### Changed
+
+- When the system has no CA certificates, the error for a request that cannot start or reach the API
+  now suggests installing the system CA certificates package (for example `ca-certificates`). The
+  HTTP client reports that case only as "No CA certificates were loaded from the system".
+  ([#196](https://github.com/Hodeitek/hodeishield-cli/issues/196))
+- `--help` no longer prints the values of `HODEISHIELD_API_URL` and `HODEISHIELD_PROFILE` when they
+  are set in the environment.
+- The `login` help, the session notice and the README name the screen where an app's access is
+  revoked "Account → Applications", as the web app does, and the README and `config set --help`
+  match the code on `login --no-browser` and the configuration keys.
+  ([#199](https://github.com/Hodeitek/hodeishield-cli/issues/199))
+- CI now runs the proxy and TLS inspection test on macOS and Windows as well as Linux.
+
+### Fixed
+
+- Usage errors no longer list `--api-url` or `--profile` in the `Usage:` line when only
+  `HODEISHIELD_API_URL` or `HODEISHIELD_PROFILE` sets them. The variables still work the same and
+  `--help` still names them.
+  ([#201](https://github.com/Hodeitek/hodeishield-cli/issues/201))
+
+### Documentation
+
+- The README lists the Linux prerequisites to install and to verify a download, gives a checksum
+  command that BusyBox also runs, and has Windows steps to check a download and to get Scoop and
+  cosign.
+  ([#195](https://github.com/Hodeitek/hodeishield-cli/issues/195))
+- The README says how to uninstall the archive and `install.sh` installs, in which order (remove the
+  settings before the binary), what an uninstall leaves behind on Windows, how to remove the zip
+  and how to check the MSI.
+  ([#197](https://github.com/Hodeitek/hodeishield-cli/issues/197))
+- The Quick start points servers and CI from the interactive sign-in to the tenant API key.
+  ([#198](https://github.com/Hodeitek/hodeishield-cli/issues/198))
+- The README says that `login` and `logout` exit with code 1 when the system keychain cannot be
+  reached.
+  ([#200](https://github.com/Hodeitek/hodeishield-cli/issues/200))
+- The Install section links to the steps for a binary that macOS or Windows blocks, and the Windows
+  steps (`Unblock-File`, SmartScreen's "More info → Run anyway") apply to every version.
+  ([#16](https://github.com/Hodeitek/hodeishield-cli/issues/16))
+- The README says that two profiles signed in as the same user, to the same tenant, with the same
+  flow share one sign-in, so logging out of either one signs out both.
+
 ## [0.5.0] - 2026-10-15
 
 ### Added
@@ -381,7 +425,8 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 - Profiles (`config`), shell completions, and release archives for Linux, macOS and Windows signed
   with Sigstore and with SLSA provenance.
 
-[Unreleased]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.4.4...v0.5.0
 [0.4.4]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.4.2...v0.4.3
