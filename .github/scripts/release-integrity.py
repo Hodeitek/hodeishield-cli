@@ -17,8 +17,10 @@ What is checked, in both directions:
                      commit, and from 0.4.0 a successful container-image.yml run;
   files              every release file matches its line in the release's SHA256SUMS, and nothing
                      else is attached;
-  Rekor              every file the release signs (it has a `.sigstore.json` bundle) is looked up in
-                     Rekor by its SHA-256. An entry counts only if its signed entry timestamp
+  bundles            every archive and installer attached, every file in SHA256SUMS and SHA256SUMS
+                     itself must carry a `.sigstore.json` bundle; this set does not depend on which
+                     bundles are attached, so deleting a bundle is reported;
+  Rekor              every one of those files is looked up in Rekor by its SHA-256. An entry counts only if its signed entry timestamp
                      verifies with Rekor's key and its certificate chains to Sigstore's
                      certificate authority at the time it was logged: Rekor accepts any
                      certificate, so one that does not chain could claim any identity. At least
@@ -70,6 +72,10 @@ OID_RUN = "1.3.6.1.4.1.57264.1.21"  # DER UTF8String
 ACCEPTED_RUNS: dict[int, str] = {}
 
 VERSION_TAG = re.compile(r"^v(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z.-]+)?$")
+# The release assets release.yml signs, by name (the "Sign every archive and SHA256SUMS" step).
+SIGNED_ASSET = re.compile(
+    r"hodeishield-.*\.(tar\.gz|zip|msi|pkg|rpm|cdx\.json)|hodeishield[-_].*\.deb|install\.sh"
+)
 IMAGE_SIGNATURE_TAG = re.compile(r"^sha256-[0-9a-f]{64}(\.sig|\.att|\.sbom)?$")
 
 
@@ -230,6 +236,12 @@ def download(url: str) -> bytes:
     if status != 200:
         raise Unreadable(f"{url}: HTTP {status}")
     return body
+
+
+def must_be_signed(assets, sums) -> set[str]:
+    """The files that must carry a Sigstore bundle, whichever bundles are attached: SHA256SUMS,
+    every file it lists and every attached file that release.yml signs by name."""
+    return {"SHA256SUMS", *sums} | {name for name in assets if SIGNED_ASSET.fullmatch(name)}
 
 
 def parse_sha256sums(text: str) -> dict[str, str]:
@@ -575,9 +587,12 @@ def check(repository: str, cosign: str, trust: Trust, github: GitHub, out) -> bo
             ):
                 problem(f"{tag}: {name} is attached but not in SHA256SUMS")
 
-        signed = [name for name in digests if f"{name}.sigstore.json" in assets]
-        if not signed:
-            problem(f"{tag}: no file has a Sigstore bundle")
+        signed = []
+        for name in sorted(must_be_signed(assets, sums)):
+            if f"{name}.sigstore.json" not in assets:
+                problem(f"{tag}: {name} has no Sigstore bundle")
+            elif name in digests:
+                signed.append(name)
         for name in signed:
             matched, wrong = judge_rekor(
                 rekor_entries(digests[name], trust), repository=repository, tag=tag, releases=signers

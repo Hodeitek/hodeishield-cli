@@ -36,7 +36,7 @@ token is short-lived.
 | Who can read it | Keychain | File readable only by its owner | API key in the environment |
 |---|---|---|---|
 | Code running as the same user | Yes, if the keychain is unlocked | Yes | Yes (and child processes inherit it) |
-| Other users | No | No, if owner and mode are right | Depends on where it is kept |
+| Other users | No | No, if owner and mode are right (on macOS also no ACL: the CLI strips ACLs from what it creates and refuses one that has them) | Depends on where it is kept |
 | `root` | Yes | Yes | Yes |
 | Backups, snapshots, disk images | Encrypted at rest | Plaintext | Plaintext if kept in a file |
 | A container layer, if sign-in ran at build time or a signed-in container is published | Not applicable | Plaintext | Same through `ENV` or `ARG` |
