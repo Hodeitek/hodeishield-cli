@@ -864,7 +864,8 @@ jobs:
           retention-days: 1
 
   # Signs the MSI with the same Azure Artifact Signing profile as the exe. Like `sign-windows`, it
-  # checks nothing out and runs no repository or WiX code. The MSI is published only when signed.
+  # runs no repository or WiX code: the checkout is only the reference copy of LICENSE, NOTICE and
+  # user-information.md that the extracted payload is compared with. The MSI is published only when signed.
   sign-msi:
     name: msi (sign)
     needs: [version, sign-windows, windows-msi]
@@ -878,6 +879,11 @@ jobs:
       VERSION: ${{ needs.version.outputs.version }}
       SIGN: ${{ needs.version.outputs.sign_windows }}
     steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
       - name: Download the MSI
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -896,9 +902,11 @@ jobs:
 
       # The MSI was built by a job that ran WiX, third-party code: do not sign it on trust. Using
       # only Windows' own Installer API, check that it carries no custom actions or embedded
-      # binaries (so nothing runs at install time but standard actions), then extract it with an
-      # administrative install and check its payload is exactly the exe sign-windows signed, plus
-      # LICENSE, NOTICE and USER-INFORMATION.md.
+      # binaries (so nothing runs at install time but standard actions), and that its administrative
+      # sequences hold only passive standard actions: `msiexec /a` runs AdminExecuteSequence, and
+      # actions such as SelfRegModules would load a DLL shipped as a payload file. Then extract it
+      # with an administrative install and check its payload is exactly the exe sign-windows signed,
+      # plus LICENSE, NOTICE and USER-INFORMATION.md byte for byte as in the checked-out commit.
       - name: Check the MSI before signing it
         shell: powershell
         env:
@@ -917,8 +925,20 @@ jobs:
             [void]$view.Close()
             return [int]$n
           }
+          # The first column of every row of a table (an absent table has none).
+          function Get-Column([string]$table, [string]$column) {
+            try { $view = $db.OpenView("SELECT ``$column`` FROM ``$table``") } catch { return @() }
+            [void]$view.Execute()
+            $values = @()
+            while ($null -ne ($record = $view.Fetch())) { $values += $record.StringData(1) }
+            [void]$view.Close()
+            return $values
+          }
           $bad = @()
-          foreach ($table in @("CustomAction", "Binary", "MsiEmbeddedUI", "MsiEmbeddedChainer")) {
+          # Tables whose standard actions load code from the payload: SelfReg (SelfRegModules), Class,
+          # TypeLib, MsiAssembly (RegisterClassInfo, RegisterTypeLibraries, MsiPublishAssemblies),
+          # ODBC drivers and data sources, and services.
+          foreach ($table in @("CustomAction", "Binary", "MsiEmbeddedUI", "MsiEmbeddedChainer", "SelfReg", "Class", "TypeLib", "MsiAssembly", "ODBCDriver", "ODBCDataSource", "ServiceInstall", "ServiceControl")) {
             $n = [int](Count-Rows $table)
             Write-Host "$table rows: $n"
             if ($n -ne 0) { $bad += $table }
@@ -926,6 +946,19 @@ jobs:
           $files = [int](Count-Rows "File")
           Write-Host "File rows: $files"
           if ($files -ne 4) { $bad += "File ($files rows, expected 4)" }
+          # Only passive standard actions may run when the MSI is extracted or installed. A subset, so
+          # a WiX that omits one of them still passes; anything else, or a "Custom" sequence entry,
+          # does not.
+          $allowed = @{
+            AdminExecuteSequence = @("CostInitialize", "FileCost", "CostFinalize", "InstallValidate", "InstallInitialize", "InstallAdminPackage", "InstallFiles", "InstallFinalize")
+            AdminUISequence      = @("CostInitialize", "FileCost", "CostFinalize", "ExecuteAction")
+          }
+          foreach ($sequence in $allowed.Keys) {
+            $found = @(Get-Column $sequence "Action")
+            Write-Host "$sequence actions: $($found -join ', ')"
+            $extra = @($found | Where-Object { $allowed[$sequence] -notcontains $_ })
+            if ($extra.Count -gt 0) { $bad += "$sequence ($($extra -join ', '))" }
+          }
           [System.Runtime.InteropServices.Marshal]::ReleaseComObject($db) | Out-Null
           if ($bad.Count -gt 0) { Write-Host "::error::the MSI has unexpected content: $($bad -join ', ')"; exit 1 }
 
@@ -938,8 +971,15 @@ jobs:
           $exe = $payload | Where-Object { $_.Name -eq "hodeishield.exe" }
           $hash = (Get-FileHash -LiteralPath $exe.FullName -Algorithm SHA256).Hash.ToLower()
           if ($hash -ne $env:EXE_SHA256) { Write-Host "::error::the exe in the MSI is $hash, not the signed $env:EXE_SHA256"; exit 1 }
+          # The texts must be the ones in the repository at this commit, which windows-msi packaged.
+          $reference = @{ "LICENSE" = "LICENSE"; "NOTICE" = "NOTICE"; "USER-INFORMATION.md" = "docs\user-information.md" }
+          foreach ($name in $reference.Keys) {
+            $inMsi = (Get-FileHash -LiteralPath ($payload | Where-Object { $_.Name -eq $name }).FullName -Algorithm SHA256).Hash
+            $inRepo = (Get-FileHash -LiteralPath $reference[$name] -Algorithm SHA256).Hash
+            if ($inMsi -ne $inRepo) { Write-Host "::error::$name in the MSI ($inMsi) differs from the repository's ($inRepo)"; exit 1 }
+          }
           Remove-Item -Recurse -Force $target
-          Write-Host "MSI content: OK (no custom actions or binaries; payload is the signed exe, LICENSE, NOTICE, USER-INFORMATION.md)"
+          Write-Host "MSI content: OK (no custom actions or binaries; only passive admin actions; payload is the signed exe and the repository's LICENSE, NOTICE, USER-INFORMATION.md)"
 
       - name: Azure login (OIDC)
         if: env.SIGN == 'true'
