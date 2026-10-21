@@ -917,48 +917,59 @@ jobs:
           $installer = New-Object -ComObject WindowsInstaller.Installer
           $db = $installer.OpenDatabase($msi, 0)
           # The COM calls return values PowerShell would add to the function's output: discard them.
-          function Count-Rows([string]$table) {
-            try { $view = $db.OpenView("SELECT * FROM ``$table``") } catch { return [int]0 }
+          # Fails closed: only a table that is not in _Tables is empty; any other error stops the job.
+          function Get-Rows([string]$table, [string[]]$columns) {
+            $list = ($columns | ForEach-Object { "``$_``" }) -join ", "
+            $view = $db.OpenView("SELECT $list FROM ``$table``")
             [void]$view.Execute()
-            $n = 0
-            while ($null -ne $view.Fetch()) { $n++ }
+            $rows = @()
+            while ($null -ne ($record = $view.Fetch())) {
+              $rows += ,((1..$columns.Count | ForEach-Object { $record.StringData($_) }) -join "|")
+            }
             [void]$view.Close()
-            return [int]$n
-          }
-          # The first column of every row of a table (an absent table has none).
-          function Get-Column([string]$table, [string]$column) {
-            try { $view = $db.OpenView("SELECT ``$column`` FROM ``$table``") } catch { return @() }
-            [void]$view.Execute()
-            $values = @()
-            while ($null -ne ($record = $view.Fetch())) { $values += $record.StringData(1) }
-            [void]$view.Close()
-            return $values
+            return $rows
           }
           $bad = @()
-          # Tables whose standard actions load code from the payload: SelfReg (SelfRegModules), Class,
-          # TypeLib, MsiAssembly (RegisterClassInfo, RegisterTypeLibraries, MsiPublishAssemblies),
-          # ODBC drivers and data sources, and services.
-          foreach ($table in @("CustomAction", "Binary", "MsiEmbeddedUI", "MsiEmbeddedChainer", "SelfReg", "Class", "TypeLib", "MsiAssembly", "ODBCDriver", "ODBCDataSource", "ServiceInstall", "ServiceControl")) {
-            $n = [int](Count-Rows $table)
-            Write-Host "$table rows: $n"
-            if ($n -ne 0) { $bad += $table }
+          # Every table must be one of those WiX writes for this package (those of the published
+          # 0.5.1 MSI). Anything else, CustomAction, Binary, SelfReg, Class, TypeLib, MsiAssembly,
+          # ServiceInstall, RemoveFile, Shortcut, IniFile... included, is refused by not being listed.
+          $tables = @(Get-Rows "_Tables" @("Name"))
+          Write-Host "Tables: $($tables -join ', ')"
+          $knownTables = @("Property", "Upgrade", "LaunchCondition", "Directory", "File", "Component", "Environment", "Registry", "Feature", "FeatureComponents", "AdminUISequence", "AdminExecuteSequence", "AdvtExecuteSequence", "InstallUISequence", "InstallExecuteSequence", "Media", "MsiFileHash", "_Validation")
+          $extraTables = @($tables | Where-Object { $knownTables -notcontains $_ })
+          if ($extraTables.Count -gt 0) { $bad += "tables ($($extraTables -join ', '))" }
+          # Only these standard actions may appear in a sequence (a subset: a WiX that omits one
+          # still passes). `msiexec /a` runs AdminExecuteSequence, so a custom or payload-loading
+          # action there would run code on this runner.
+          $allowedActions = @{
+            AdminExecuteSequence   = @("CostInitialize", "FileCost", "CostFinalize", "InstallValidate", "InstallInitialize", "InstallAdminPackage", "InstallFiles", "InstallFinalize")
+            AdminUISequence        = @("CostInitialize", "FileCost", "CostFinalize", "ExecuteAction")
+            AdvtExecuteSequence    = @("CostInitialize", "CostFinalize", "InstallValidate", "InstallInitialize", "InstallFinalize", "PublishFeatures", "PublishProduct")
+            InstallUISequence      = @("CostInitialize", "FileCost", "CostFinalize", "ExecuteAction", "FindRelatedProducts", "LaunchConditions", "ValidateProductID", "MigrateFeatureStates")
+            InstallExecuteSequence = @("CostInitialize", "FileCost", "CostFinalize", "InstallValidate", "InstallInitialize", "InstallFiles", "InstallFinalize", "PublishFeatures", "PublishProduct", "FindRelatedProducts", "LaunchConditions", "ValidateProductID", "MigrateFeatureStates", "ProcessComponents", "UnpublishFeatures", "RemoveRegistryValues", "RemoveEnvironmentStrings", "RemoveFiles", "RemoveFolders", "CreateFolders", "WriteRegistryValues", "WriteEnvironmentStrings", "RegisterUser", "RegisterProduct", "RemoveExistingProducts")
           }
-          $files = [int](Count-Rows "File")
-          Write-Host "File rows: $files"
-          if ($files -ne 4) { $bad += "File ($files rows, expected 4)" }
-          # Only passive standard actions may run when the MSI is extracted or installed. A subset, so
-          # a WiX that omits one of them still passes; anything else, or a "Custom" sequence entry,
-          # does not.
-          $allowed = @{
-            AdminExecuteSequence = @("CostInitialize", "FileCost", "CostFinalize", "InstallValidate", "InstallInitialize", "InstallAdminPackage", "InstallFiles", "InstallFinalize")
-            AdminUISequence      = @("CostInitialize", "FileCost", "CostFinalize", "ExecuteAction")
-          }
-          foreach ($sequence in $allowed.Keys) {
-            $found = @(Get-Column $sequence "Action")
+          foreach ($sequence in $allowedActions.Keys) {
+            if ($tables -notcontains $sequence) { continue }
+            $found = @(Get-Rows $sequence @("Action"))
             Write-Host "$sequence actions: $($found -join ', ')"
-            $extra = @($found | Where-Object { $allowed[$sequence] -notcontains $_ })
+            $extra = @($found | Where-Object { $allowedActions[$sequence] -notcontains $_ })
             if ($extra.Count -gt 0) { $bad += "$sequence ($($extra -join ', '))" }
           }
+          # The only state the package changes: its InstallDir value and the machine PATH entry.
+          $pinned = @{
+            Registry    = @{ Columns = @("Root", "Key", "Name", "Value", "Component_"); Rows = @("2|Software\Hodeitek\HodeiShield CLI|InstallDir|[INSTALLFOLDER]|SystemPath") }
+            Environment = @{ Columns = @("Environment", "Name", "Value", "Component_"); Rows = @("PathEntry|=-*PATH|[~];[INSTALLFOLDER]|SystemPath") }
+          }
+          foreach ($table in $pinned.Keys) {
+            if ($tables -notcontains $table) { continue }
+            $rows = @(Get-Rows $table $pinned[$table].Columns)
+            Write-Host "$table rows: $($rows -join ' ; ')"
+            $extra = @($rows | Where-Object { $pinned[$table].Rows -notcontains $_ })
+            if ($extra.Count -gt 0) { $bad += "$table ($($extra -join ' ; '))" }
+          }
+          $files = @(Get-Rows "File" @("File")).Count
+          Write-Host "File rows: $files"
+          if ($files -ne 4) { $bad += "File ($files rows, expected 4)" }
           [System.Runtime.InteropServices.Marshal]::ReleaseComObject($db) | Out-Null
           if ($bad.Count -gt 0) { Write-Host "::error::the MSI has unexpected content: $($bad -join ', ')"; exit 1 }
 
