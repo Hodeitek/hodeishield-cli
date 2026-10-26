@@ -294,8 +294,8 @@ refuse)
 esac
 EOF
 
-# The DNF configuration as the README states it: the lines between `<< 'REPO'` and `REPO`.
-sed -n "/<< 'REPO'\$/,/^REPO\$/p" "$root/README.md" | sed '1d;$d' > "$work/bin/hodeishield.repo"
+# The DNF configuration as the README states it: the lines between the `<< 'REPO'` line and `REPO`.
+sed -n "/<< 'REPO'/,/^REPO\$/p" "$root/README.md" | sed '1d;$d' > "$work/bin/hodeishield.repo"
 grep -qx '\[hodeishield\]' "$work/bin/hodeishield.repo" || {
   echo "repo-test.sh: no DNF repository block in README.md" >&2
   exit 2

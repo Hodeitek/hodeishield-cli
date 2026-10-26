@@ -6,6 +6,11 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ## [Unreleased]
 
+### Fixed
+
+- The README's DNF setup block wrote an empty `/etc/yum.repos.d/hodeishield.repo`, so `dnf install
+  hodeishield` found no package. The file now gets the repository configuration.
+
 ## [0.6.0] - 2026-10-26
 
 ### Added
