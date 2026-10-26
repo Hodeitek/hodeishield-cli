@@ -104,8 +104,9 @@ sig_ok "$tmp/key.gpg" "$primary" "$tmp/probe.asc" "$tmp/probe" ||
 
 if [ -n "$apply" ]; then
   confirm=$(printf '%s' "${RESIGN_CONFIRM-}" | tr -d ' ' | tr a-f A-F)
-  [ -n "$confirm" ] && [ "$confirm" = "$primary" ] ||
+  if [ -z "$confirm" ] || [ "$confirm" != "$primary" ]; then
     die "--apply needs RESIGN_CONFIRM set to the primary key fingerprint published in the README ($primary)"
+  fi
   dry=
   printf 'resign.sh: APPLY, key %s: the bucket will be changed\n' "$primary"
 else

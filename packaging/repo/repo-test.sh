@@ -1033,8 +1033,10 @@ assets "$work/rv-other" "$pk"/v1/* "$pk/v1-other/hodeishield-0.2.0-1.x86_64.rpm"
 assets "$work/rv-otherdeb" "$pk"/v1/* "$pk/v1-other/hodeishield_0.2.0-1_amd64.deb"
 
 rvkeys old-sign-new-pub
-must_refuse R4 "resign: the old subkey's signature does not verify against the new key" rt-rv1 \
-  "resign.sh: a signature made with .* does not verify" "$work/rv-v1"
+# The old subkey is not in the new public key: resign.sh refuses it by its fingerprint, before its
+# test signature (which would not verify against the new key either) is made.
+must_refuse R4 "resign: signing with the old subkey, which the new key does not carry" rt-rv1 \
+  "resign.sh: .* has the signing subkey .*, not " "$work/rv-v1"
 rvkeys revoked-pub
 must_refuse R5 "resign: the public key still carries the revoked subkey" rt-rv1 \
   "resign.sh: .* carries a revoked subkey" "$work/rv-v1"
@@ -1211,7 +1213,7 @@ must_refuse R23 "resign: the new public key carries two signing subkeys" rt-rv0 
 rvkeys other-primary
 rconfirm=$(cat "$work/pub.fpr")
 must_refuse R24 "resign: another primary key, confirmed, that the README does not publish" rt-rv0 \
-  "resign.sh: the primary key of .* is not the one the README publishes" "$work/rv-v1"
+  "resign.sh: the primary key of .* is .*, not the one the README publishes" "$work/rv-v1"
 rvkeys new
 runner=publish
 rflags=

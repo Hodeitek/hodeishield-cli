@@ -163,7 +163,8 @@ if [ -n "$resign" ]; then
     [ -e "$rpm" ] || continue
     path=${rpm#"$repo"/}
     asset=$new/$(basename "$rpm")
-    mine=$(nevra "$rpm") && [ -n "$mine" ] || die "cannot read $path in the bucket; nothing is signed"
+    mine=$(nevra "$rpm") || mine=
+    [ -n "$mine" ] || die "cannot read $path in the bucket; nothing is signed"
     [ "$(nevra "$asset")" = "$mine" ] ||
       die "$path in the bucket is not the same package as its release asset; nothing is signed"
     want=$(identity "$asset") || die "cannot read the release asset of $path"
