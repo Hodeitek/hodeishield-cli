@@ -29,8 +29,9 @@ home=$(mktemp -d)
 trap 'rm -rf "$home"' EXIT
 primaries=$(GNUPGHOME=$home gpg --batch --with-colons --show-keys "$key" 2> /dev/null |
   awk -F: '$1 == "pub" { want = 1; next } $1 == "fpr" && want { print $10; want = 0 }')
-[ -n "$primaries" ] && [ "$(printf '%s\n' "$primaries" | wc -l)" -eq 1 ] ||
+if [ -z "$primaries" ] || [ "$(printf '%s\n' "$primaries" | wc -l)" -ne 1 ]; then
   die "$key does not hold exactly one primary key"
+fi
 [ "$primaries" = "$PINNED_FINGERPRINT" ] ||
   die "the primary key of $key is $primaries, not the pinned $PINNED_FINGERPRINT"
 
