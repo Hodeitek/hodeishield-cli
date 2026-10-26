@@ -16,6 +16,11 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ### Fixed
 
+- `whoami` works when the API leaves out the user's `email`, which it does for a token without the
+  `email` scope: it shows the name, or the id, and no longer fails to read the answer. Browser
+  sign-in now also asks for the `email` scope, but only when the app lists it among its supported
+  scopes. The generated client follows version 2026-10-26 of the API document.
+  ([#217](https://github.com/Hodeitek/hodeishield-cli/issues/217))
 - `alerts list` no longer depends on `page`, `total` and `total_pages` in the answer, which the API
   now treats as optional. When they are missing, `--all` stops at a page with a null `next_cursor`
   or fewer alerts than the page size, and the `Page N of M` line is not printed.

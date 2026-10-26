@@ -40,9 +40,14 @@ pub struct Metadata {
 /// Asks for a refresh token, so a sign-in outlives its short access token.
 const OFFLINE_ACCESS: &str = "offline_access";
 
+/// Lets the user's email address show in `whoami`. Asked for only when the app lists it.
+const EMAIL: &str = "email";
+
 /// The scopes to ask for when the profile names none: the ones the `/v1` operations this CLI calls
 /// need, with a template such as `compliance.<framework>:read` standing for every scope of that
-/// shape the app offers, plus a refresh token. An app that publishes no list gets the fixed ones.
+/// shape the app offers, plus a refresh token, plus `email` when the app lists it (so `whoami` can
+/// show the address). An app that publishes no list gets the fixed ones: it may reject a scope it
+/// does not know.
 /// Asking explicitly matters: an app may grant a request without scopes nothing at all.
 pub fn default_scopes(metadata: &Metadata) -> Vec<String> {
     let offered = metadata.scopes_supported.as_deref();
@@ -83,6 +88,9 @@ pub fn default_scopes(metadata: &Metadata) -> Vec<String> {
                 scopes.push(s);
             }
         }
+    }
+    if offered.is_some_and(|o| o.iter().any(|s| s == EMAIL)) {
+        scopes.push(EMAIL.to_owned());
     }
     scopes
 }
@@ -889,6 +897,28 @@ mod tests {
             .to_vec(),
         );
         assert_eq!(default_scopes(&hostile), ["compliance.ok_1-2:read"]);
+
+        // `email` is asked for only when the app lists it.
+        let mut with_email = metadata("https://app.example.test");
+        with_email.scopes_supported = Some(
+            ["supply_risk:read", "offline_access", "email"]
+                .map(str::to_owned)
+                .to_vec(),
+        );
+        assert_eq!(
+            default_scopes(&with_email),
+            ["supply_risk:read", "offline_access", "email"]
+        );
+        let mut without_email = metadata("https://app.example.test");
+        without_email.scopes_supported = Some(
+            ["supply_risk:read", "offline_access", "emails"]
+                .map(str::to_owned)
+                .to_vec(),
+        );
+        assert_eq!(
+            default_scopes(&without_email),
+            ["supply_risk:read", "offline_access"]
+        );
 
         // An app that does not publish its scopes gets the fixed ones; a template stands for none.
         assert_eq!(
