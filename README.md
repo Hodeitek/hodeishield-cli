@@ -196,11 +196,15 @@ gpg --show-keys --with-fingerprint hodeishield.asc     # shows the fingerprint a
 [ "$(gpg --show-keys --with-colons hodeishield.asc | awk -F: '$1=="pub"{n++} $1=="fpr"&&!f{f=$10} END{if(n==1)print f}')" = AA2AF21285A9AB990833908935D5F94171C1CD0B ] \
   && echo "OK: one key, with the fingerprint above" || { echo "STOP: wrong key"; rm -f hodeishield.asc; }
 sudo install -m 0644 hodeishield.asc /etc/pki/rpm-gpg/RPM-GPG-KEY-hodeishield && rm hodeishield.asc
-sudo rpm -e $(rpm -q gpg-pubkey --qf '%{NAME}-%{VERSION}-%{RELEASE} %{PACKAGER}\n' | awk '/HodeiShield Packages </ { print $1 }') && sudo rpm --import /etc/pki/rpm-gpg/RPM-GPG-KEY-hodeishield
+rpm -q gpg-pubkey --qf '%{NAME}-%{VERSION}-%{RELEASE} %{PACKAGER}\n' | awk '/HodeiShield Packages </ { print $1 }' | sudo xargs -r rpm -e
+sudo rpm --import /etc/pki/rpm-gpg/RPM-GPG-KEY-hodeishield
+sudo dnf clean all
 ```
 
-The `rpm` command removes the old copy of the key, which rpm would keep otherwise, and imports the one
-you checked.
+The `rpm -e` line removes the old copy of the key, which rpm would keep otherwise; it does nothing when
+there is none, so the import that follows always runs. The import adds the one you checked. DNF also
+keeps its own copy of the key it uses to check repository metadata (`repo_gpgcheck`), so `dnf clean all`
+drops the cached metadata and makes DNF read the key file again; it is harmless if nothing was cached.
 
 #### A single package file
 
