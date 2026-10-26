@@ -121,12 +121,19 @@ The repositories are signed with this key (RSA 4096); check its fingerprint befo
 AA2A F212 85A9 AB99 0833  9089 35D5 F941 71C1 CD0B
 ```
 
+The commands below check that the downloaded file holds exactly one key and that its fingerprint is this
+one. Reading the fingerprint is not enough: a file can hold the real key and a second one, and the
+second would then be trusted as well. If the check prints `STOP`, it deletes the file, so the next
+command fails; do not go on.
+
 #### Debian, Ubuntu (APT)
 
 ```sh
 sudo install -d -m 0755 /etc/apt/keyrings
 curl -fsSL https://packages.hodeishield.com/gpg.key -o hodeishield.asc
-gpg --show-keys --with-fingerprint hodeishield.asc     # must show the fingerprint above
+gpg --show-keys --with-fingerprint hodeishield.asc     # shows the fingerprint above
+[ "$(gpg --show-keys --with-colons hodeishield.asc | awk -F: '$1=="pub"{n++} $1=="fpr"&&!f{f=$10} END{if(n==1)print f}')" = AA2AF21285A9AB990833908935D5F94171C1CD0B ] \
+  && echo "OK: one key, with the fingerprint above" || { echo "STOP: wrong key"; rm -f hodeishield.asc; }
 sudo install -m 0644 hodeishield.asc /etc/apt/keyrings/hodeishield.asc && rm hodeishield.asc
 echo "deb [signed-by=/etc/apt/keyrings/hodeishield.asc] https://packages.hodeishield.com/apt stable main" \
   | sudo tee /etc/apt/sources.list.d/hodeishield.list
@@ -138,13 +145,15 @@ only. Upgrade with `sudo apt update && sudo apt upgrade` (or `sudo apt install -
 
 #### Fedora, RHEL, Rocky Linux, AlmaLinux (DNF)
 
-Download the key and check its fingerprint, then write the repository file below by hand. It turns on
+Download the key and check it (it must be exactly one key, with the fingerprint above), then write the repository file below by hand. It turns on
 signature checking of both the packages and the repository metadata (`gpgcheck=1`, `repo_gpgcheck=1`)
 and reads the key from the file you checked:
 
 ```sh
 curl -fsSL https://packages.hodeishield.com/gpg.key -o hodeishield.asc
-gpg --show-keys --with-fingerprint hodeishield.asc     # must show the fingerprint above
+gpg --show-keys --with-fingerprint hodeishield.asc     # shows the fingerprint above
+[ "$(gpg --show-keys --with-colons hodeishield.asc | awk -F: '$1=="pub"{n++} $1=="fpr"&&!f{f=$10} END{if(n==1)print f}')" = AA2AF21285A9AB990833908935D5F94171C1CD0B ] \
+  && echo "OK: one key, with the fingerprint above" || { echo "STOP: wrong key"; rm -f hodeishield.asc; }
 sudo install -m 0644 hodeishield.asc /etc/pki/rpm-gpg/RPM-GPG-KEY-hodeishield && rm hodeishield.asc
 sudo tee /etc/yum.repos.d/hodeishield.repo > /dev/null << 'REPO'
 [hodeishield]
@@ -176,12 +185,16 @@ expired key, or the release notes announce a renewal, run:
 ```sh
 # Debian, Ubuntu
 curl -fsSL https://packages.hodeishield.com/gpg.key -o hodeishield.asc
-gpg --show-keys --with-fingerprint hodeishield.asc     # must show the fingerprint above
+gpg --show-keys --with-fingerprint hodeishield.asc     # shows the fingerprint above
+[ "$(gpg --show-keys --with-colons hodeishield.asc | awk -F: '$1=="pub"{n++} $1=="fpr"&&!f{f=$10} END{if(n==1)print f}')" = AA2AF21285A9AB990833908935D5F94171C1CD0B ] \
+  && echo "OK: one key, with the fingerprint above" || { echo "STOP: wrong key"; rm -f hodeishield.asc; }
 sudo install -m 0644 hodeishield.asc /etc/apt/keyrings/hodeishield.asc && rm hodeishield.asc
 
 # Fedora, RHEL, Rocky Linux, AlmaLinux
 curl -fsSL https://packages.hodeishield.com/gpg.key -o hodeishield.asc
-gpg --show-keys --with-fingerprint hodeishield.asc     # must show the fingerprint above
+gpg --show-keys --with-fingerprint hodeishield.asc     # shows the fingerprint above
+[ "$(gpg --show-keys --with-colons hodeishield.asc | awk -F: '$1=="pub"{n++} $1=="fpr"&&!f{f=$10} END{if(n==1)print f}')" = AA2AF21285A9AB990833908935D5F94171C1CD0B ] \
+  && echo "OK: one key, with the fingerprint above" || { echo "STOP: wrong key"; rm -f hodeishield.asc; }
 sudo install -m 0644 hodeishield.asc /etc/pki/rpm-gpg/RPM-GPG-KEY-hodeishield && rm hodeishield.asc
 sudo rpm -e $(rpm -q gpg-pubkey --qf '%{NAME}-%{VERSION}-%{RELEASE} %{PACKAGER}\n' | awk '/HodeiShield Packages </ { print $1 }') && sudo rpm --import /etc/pki/rpm-gpg/RPM-GPG-KEY-hodeishield
 ```

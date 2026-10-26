@@ -22,6 +22,8 @@
 # or its signing subkey expires within 60 days (a warning, to renew it in time); 1 for anything else. Failing closed: a download that fails, an
 # unreadable or unsigned index, a hash that does not match or a version that cannot be read is never a pass.
 #
+# The key served at /gpg.key must hold exactly the committed primary key and no other one.
+#
 # Only what a signature covers is believed. The APT index is a single clear-signed message and only the
 # text that gpgv writes is read; each Packages file is fetched by hash and compared with the hash in
 # that text. For DNF, repomd.xml is verified with its detached signature and names the hash and the
@@ -101,6 +103,21 @@ judge() {
     die "$1: serves $newest, newer than the expected $3"
   fi
 }
+
+# --- The key served --------------------------------------------------------------------------------
+# The copy of the key at /gpg.key must hold exactly the committed primary key and no other primary key,
+# as publish.sh checks before it uploads (the same primaries logic).
+primaries() {
+  gpg --batch --with-colons --show-keys "$1" 2> /dev/null |
+    awk -F: '$1 == "pub" { want = 1; next } $1 == "fpr" && want { print $10; want = 0 }'
+}
+committed=$(primaries "$key")
+{ [ -n "$committed" ] && [ "$(printf '%s\n' "$committed" | wc -l)" -eq 1 ]; } ||
+  die "the public key $key does not hold exactly one key"
+fetch gpg.key "$work/served.key"
+served=$(primaries "$work/served.key")
+[ "$served" = "$committed" ] ||
+  die "the served $base/gpg.key is not exactly the repository key $committed (it holds: $(printf '%s' "${served:-no key}" | tr '\n' ' '))"
 
 # --- APT -------------------------------------------------------------------------------------------
 fetch apt/dists/stable/InRelease "$work/InRelease"

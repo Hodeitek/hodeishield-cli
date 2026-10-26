@@ -208,6 +208,21 @@ signer=$later_sub
 mk "$www/later" "0.9.0 0.10.0" "0.9.0 0.10.0"
 signer=$repo_sub
 
+# Every repository serves the public key at /gpg.key: the repository key, except where the fixture has its own.
+for d in "$www"/*; do cp "$work/repo.asc" "$d/gpg.key"; done
+cp "$work/expired.asc" "$www/expired-key/gpg.key"
+cp "$work/revoked.asc" "$www/revoked-key/gpg.key"
+cp "$work/soon-sub.asc" "$www/soon-sub/gpg.key"
+cp "$work/soon-primary.asc" "$www/soon-primary/gpg.key"
+cp "$work/later.asc" "$www/later/gpg.key"
+# The key served is another one, or the repository key and another one, or missing.
+cp -R "$www/fresh" "$www/served-other-key"
+cp "$work/other.asc" "$www/served-other-key/gpg.key"
+cp -R "$www/fresh" "$www/served-extra-key"
+cat "$work/repo.asc" "$work/other.asc" > "$www/served-extra-key/gpg.key"
+cp -R "$www/fresh" "$www/served-no-key"
+rm "$www/served-no-key/gpg.key"
+
 cp -R "$www/fresh" "$www/tampered-inrelease"
 sed -i 's/^Suite: stable$/Suite: stablf/' "$www/tampered-inrelease/apt/dists/stable/InRelease"
 
@@ -311,6 +326,9 @@ check 'stale DNF' 3 "$url/stale-dnf" 0.10.0 "$work/repo.asc"
 check 'a release not served yet' 3 "$url/fresh" 0.11.0 "$work/repo.asc"
 check 'newer than the release' 1 "$url/fresh" 0.9.0 "$work/repo.asc"
 check 'no hodeishield in APT' 1 "$url/no-package" 0.10.0 "$work/repo.asc"
+check 'served gpg.key is another key' 1 "$url/served-other-key" 0.10.0 "$work/repo.asc"
+check 'served gpg.key holds an extra key' 1 "$url/served-extra-key" 0.10.0 "$work/repo.asc"
+check 'no gpg.key served' 1 "$url/served-no-key" 0.10.0 "$work/repo.asc"
 check 'tampered InRelease' 1 "$url/tampered-inrelease" 0.10.0 "$work/repo.asc"
 check 'text after the signature' 1 "$url/text-after-signature" 0.10.0 "$work/repo.asc"
 check 'two signed messages' 1 "$url/two-messages" 0.10.0 "$work/repo.asc"
