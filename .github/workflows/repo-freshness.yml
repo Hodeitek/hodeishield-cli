@@ -62,20 +62,21 @@ jobs:
           GRACE_HOURS: ${{ inputs.grace_hours || '48' }}
         run: |
           rc=0
+          # This subshell is the left side of ||, so set -e does not apply inside it: every command
+          # that can fail says so with its own || exit 1.
           (
-            set -euo pipefail
-            sh packaging/repo/keycheck.sh packaging/gpg.key
+            sh packaging/repo/keycheck.sh packaging/gpg.key || exit 1
             [[ "$GRACE_HOURS" =~ ^[0-9]+$ ]] || { echo "live.sh: the grace period is not a number of hours."; exit 1; }
             release=$(gh release view -R "$GITHUB_REPOSITORY" --json tagName,isDraft,isPrerelease,publishedAt) ||
               { echo "live.sh: the latest release cannot be read."; exit 1; }
-            tag=$(jq -r .tagName <<< "$release")
+            tag=$(jq -r .tagName <<< "$release") || { echo "live.sh: the tag of the latest release cannot be read."; exit 1; }
             [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "live.sh: the tag of the latest release is not a stable version."; exit 1; }
             published=$(date -d "$(jq -r .publishedAt <<< "$release")" +%s) ||
               { echo "live.sh: the publication time of the latest release cannot be read."; exit 1; }
             export FRESHNESS_LATEST_RELEASE=${tag#v}
             export FRESHNESS_RELEASE_AGE_HOURS=$(( ($(date +%s) - published) / 3600 ))
             export FRESHNESS_GRACE_HOURS=$GRACE_HOURS
-            sh packaging/repo/live.sh "$BASE_URL" packaging/gpg.key
+            sh packaging/repo/live.sh "$BASE_URL" packaging/gpg.key || exit $?
           ) > "$RUNNER_TEMP/report.txt" 2>&1 || rc=$?
           cat "$RUNNER_TEMP/report.txt"
           case $rc in
