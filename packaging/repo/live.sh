@@ -67,6 +67,7 @@ if [ "$served" = 0 ]; then
 fi
 
 printf 'live.sh: %s serves an index (%s of 3 entry points).\n' "$base" "$served"
-[ -f "$key" ] && [ -r "$key" ] && [ -s "$key" ] ||
+if [ ! -f "$key" ] || [ ! -r "$key" ] || [ ! -s "$key" ]; then
   die "the repositories are live but the public key $key is missing, empty or unreadable"
+fi
 exit 0
