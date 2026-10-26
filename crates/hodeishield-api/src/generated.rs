@@ -13,7 +13,7 @@
 use serde::{Deserialize, Serialize};
 
 /// `info.version` of the OpenAPI document this client was generated from.
-pub const OPENAPI_VERSION: &str = "2026-10-25";
+pub const OPENAPI_VERSION: &str = "2026-10-26";
 
 /// The server the OpenAPI document declares.
 pub const DEFAULT_SERVER: &str = "https://api.hodeishield.com";
@@ -440,8 +440,9 @@ pub struct User {
     /// The user’s display name. Untrusted text.
     #[serde(default)]
     pub name: Option<String>,
-    /// The user’s email address.
-    pub email: String,
+    /// The user’s email address. Present only when the access token carries the `email` scope; omitted otherwise.
+    #[serde(default)]
+    pub email: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -465,7 +466,7 @@ pub struct WhoAmI {
     /// The beta of the tenant’s own organisation; while it does not run and the parent MSSP’s beta does, `active` and running with no date. Nothing else about the parent’s beta is described: not its end, nor whether it ended or converted. Null when the own organisation never joined the beta and no parent beta runs, and for a portfolio key.
     #[serde(default)]
     pub beta: Option<Beta>,
-    /// The signed-in user of an OAuth access token (`hs_at_…`): the CALLER’S OWN id, name and email, never another user’s. Null for a tenant API key and for a portfolio key, which act for no user, and for a token whose user row is no longer visible in the token’s tenant.
+    /// The signed-in user of an OAuth access token (`hs_at_…`): the CALLER’S OWN id, name and, with the `email` scope, email; never another user’s. Null for a tenant API key and for a portfolio key, which act for no user, and for a token whose user row is no longer visible in the token’s tenant.
     #[serde(default)]
     pub user: Option<User>,
     /// Portfolio keys only. Null for a tenant key or an OAuth token.
@@ -2099,7 +2100,7 @@ impl crate::Client {
 
     /// Describe the calling credential.
     ///
-    /// Who the presented credential is: its type and scopes, and the tenant and organisation it reads (a tenant API key or an OAuth token), for an OAuth token also the signed-in user (`user`: its own id, name and email, never another user’s; null for any key), or the MSSP organisation it belongs to and how many tenants it can reach (a portfolio key; the tenants themselves are on `GET /v1/portfolio/tenants`). It describes the caller only: no other tenant, no secret, never the key or its hash. Any valid credential may call it: it requires NO scope, and it uses the same authentication and the same rate limits as every other operation. It never takes `X-HS-Tenant`.
+    /// Who the presented credential is: its type and scopes, and the tenant and organisation it reads (a tenant API key or an OAuth token), for an OAuth token also the signed-in user (`user`: its own id and name, and its email only when the token carries the `email` scope; never another user’s; null for any key), or the MSSP organisation it belongs to and how many tenants it can reach (a portfolio key; the tenants themselves are on `GET /v1/portfolio/tenants`). It describes the caller only: no other tenant, no secret, never the key or its hash. Any valid credential may call it: it requires NO scope, and it uses the same authentication and the same rate limits as every other operation. It never takes `X-HS-Tenant`.
     ///
     /// Required scope: `none (any valid credential)`. Published in `/v1` since 2026-10-17.
     ///

@@ -14,6 +14,13 @@ commands, `--json` output and exit codes. Each release's notes start with its se
   that states the fingerprint and the repository configuration: check the key against it.
   ([#161](https://github.com/Hodeitek/hodeishield-cli/issues/161))
 
+### Security
+
+- ctutils is updated from 0.4.3 to 0.4.4 and tokio from 1.53.2 to 1.53.3. They fix RUSTSEC-2026-0385
+  (ctutils mask generation and `u128` comparisons were not constant-time on some platforms) and
+  RUSTSEC-2026-0386 (`AsyncFd::new` and related constructors in tokio violate I/O safety). The CLI
+  does not call either affected API directly; both crates are dependencies of its dependencies.
+
 ### Changed
 
 - The generated `/v1` client follows version 2026-10-25 of the API document. `alerts list` now
@@ -24,6 +31,11 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ### Fixed
 
+- `whoami` works when the API leaves out the user's `email`, which it does for a token without the
+  `email` scope: it shows the name, or the id, and no longer fails to read the answer. Browser
+  sign-in now also asks for the `email` scope, but only when the app lists it among its supported
+  scopes. The generated client follows version 2026-10-26 of the API document.
+  ([#217](https://github.com/Hodeitek/hodeishield-cli/issues/217))
 - `alerts list` no longer depends on `page`, `total` and `total_pages` in the answer, which the API
   now treats as optional. When they are missing, `--all` stops at a page with a null `next_cursor`
   or fewer alerts than the page size, and the `Page N of M` line is not printed.
