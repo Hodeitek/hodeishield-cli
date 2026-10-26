@@ -15,13 +15,20 @@
 # Environment:
 #   FRESHNESS_ALLOW_HTTP  1 allows a plain http base URL, which is only for testing against a local server
 #   FRESHNESS_RETRIES     retries of a failed request (default 3)
+#   FRESHNESS_LATEST_RELEASE      version of the latest stable release (0.5.2, no leading "v"); required
+#   FRESHNESS_RELEASE_AGE_HOURS   hours since that release was published; required
+#   FRESHNESS_GRACE_HOURS         hours a new release may take to appear (default 48)
 #
 # Time bound: no retry starts once 40 s have passed since the first attempt of a request, and an attempt
 # lasts at most 20 s, so a request takes at most 60 s and the three of them 180 s.
 #
+# "Not live" is acceptable only before the first release that publishes the repositories. Every release up
+# to LAST_RELEASE_WITHOUT_REPOSITORY (below) predates them. A clean 404 with a newer latest release is
+# accepted only during the grace period after that release was published, and is a failure afterwards.
+#
 # Exit status: 0 when an index is served and the key is present and readable (run freshness.sh);
-# 10 when every entry point answers with a clean 404 (not live yet: nothing to check); 1 for anything
-# else. Failing closed: only a plain HTTP 404 means "not there". A DNS or TLS failure, a timeout, a 403,
+# 10 when every entry point answers with a clean 404 and not being live is still acceptable (nothing to
+# check); 1 for anything else, including a clean 404 that is no longer acceptable. Failing closed: only a plain HTTP 404 means "not there". A DNS or TLS failure, a timeout, a 403,
 # a 5xx, a redirect or any other answer is a failure, and so is a served index without the key.
 
 set -eu
@@ -29,6 +36,12 @@ set -eu
 base=$1
 key=$2
 retries=${FRESHNESS_RETRIES:-3}
+# The last release published before the repositories existed. Raise it never: it is what makes a 404 a
+# failure for every later release.
+LAST_RELEASE_WITHOUT_REPOSITORY=0.5.1
+latest=${FRESHNESS_LATEST_RELEASE:-}
+age=${FRESHNESS_RELEASE_AGE_HOURS:-}
+grace=${FRESHNESS_GRACE_HOURS:-48}
 
 die() {
   printf 'live.sh: %s\n' "$*" >&2
@@ -37,6 +50,15 @@ die() {
 
 case $retries in
   *[!0-9]* | '') die "FRESHNESS_RETRIES is not a number" ;;
+esac
+case $latest in
+  *[!0-9.]* | '' | .* | *.) die "FRESHNESS_LATEST_RELEASE is not a version: $latest" ;;
+esac
+case $age in
+  *[!0-9]* | '') die "FRESHNESS_RELEASE_AGE_HOURS is not a number" ;;
+esac
+case $grace in
+  *[!0-9]* | '') die "FRESHNESS_GRACE_HOURS is not a number" ;;
 esac
 proto='=https'
 if [ "${FRESHNESS_ALLOW_HTTP:-}" = 1 ]; then proto='=http,https'; fi
@@ -64,6 +86,15 @@ for path in apt/dists/stable/InRelease rpm/x86_64/repodata/repomd.xml rpm/aarch6
 done
 
 if [ "$served" = 0 ]; then
+  # Not live is fine before the first release that publishes the repositories, and shortly after it.
+  if [ "$(printf '%s\n%s\n' "$latest" "$LAST_RELEASE_WITHOUT_REPOSITORY" | LC_ALL=C sort -V | tail -n 1)" != "$LAST_RELEASE_WITHOUT_REPOSITORY" ]; then
+    if [ "$age" -ge "$grace" ]; then
+      die "$base serves no APT or DNF index, but release $latest (published $age hours ago, grace $grace hours) is newer than $LAST_RELEASE_WITHOUT_REPOSITORY, the last one without the repositories"
+    fi
+    printf 'live.sh: release %s is only %s hours old (grace %s hours); %s serves no index yet.\n' \
+      "$latest" "$age" "$grace" "$base"
+    exit 10
+  fi
   printf 'live.sh: %s serves no APT or DNF index yet (%s of 3 entry points answer 404); nothing to check.\n' \
     "$base" "$missing"
   exit 10

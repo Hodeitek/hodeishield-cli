@@ -8,7 +8,8 @@ name: Repository freshness
 # `repo-freshness`: opened (or commented on) while the check fails, and closed when it passes again.
 #
 # It does nothing only while the domain serves no APT or DNF index (every entry point answers a clean
-# 404: the repositories are not live yet). Once any index is served, packaging/gpg.key must be present
+# 404) and the latest release is not newer than the last one published without the repositories, or is
+# still inside the grace period (packaging/repo/live.sh): a 404 after that is a failure. Once any index is served, packaging/gpg.key must be present
 # or the run fails, so removing the key cannot silence the monitor. From then on it fails closed: a
 # download that fails, an unreadable release or a signature that does not verify is a failure, never
 # a pass (packaging/repo/live.sh decides which of the two applies).
@@ -48,18 +49,37 @@ jobs:
         with:
           persist-credentials: false
 
-      # Inert only while no index is served. Any other answer than a clean 404 (a network error, a
-      # 403, a 5xx, a redirect) or a served index without packaging/gpg.key fails the run, and the
-      # report step below opens or reuses the issue.
+      # Inert only while no index is served, and only while that is acceptable: a clean 404 is fine
+      # before the first release that publishes the repositories, and during the grace period after a
+      # later one (LAST_RELEASE_WITHOUT_REPOSITORY in packaging/repo/live.sh decides). Any other answer
+      # than a clean 404 (a network error, a 403, a 5xx, a redirect), a 404 that is no longer
+      # acceptable, a latest release that cannot be read or a served index without packaging/gpg.key
+      # fails the run, and the report step below opens or reuses the issue.
       - name: Check whether the repositories are live
         id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GRACE_HOURS: ${{ inputs.grace_hours || '48' }}
         run: |
           rc=0
-          sh packaging/repo/live.sh "$BASE_URL" packaging/gpg.key > "$RUNNER_TEMP/report.txt" 2>&1 || rc=$?
+          (
+            set -euo pipefail
+            [[ "$GRACE_HOURS" =~ ^[0-9]+$ ]] || { echo "live.sh: the grace period is not a number of hours."; exit 1; }
+            release=$(gh release view -R "$GITHUB_REPOSITORY" --json tagName,isDraft,isPrerelease,publishedAt) ||
+              { echo "live.sh: the latest release cannot be read."; exit 1; }
+            tag=$(jq -r .tagName <<< "$release")
+            [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "live.sh: the tag of the latest release is not a stable version."; exit 1; }
+            published=$(date -d "$(jq -r .publishedAt <<< "$release")" +%s) ||
+              { echo "live.sh: the publication time of the latest release cannot be read."; exit 1; }
+            export FRESHNESS_LATEST_RELEASE=${tag#v}
+            export FRESHNESS_RELEASE_AGE_HOURS=$(( ($(date +%s) - published) / 3600 ))
+            export FRESHNESS_GRACE_HOURS=$GRACE_HOURS
+            sh packaging/repo/live.sh "$BASE_URL" packaging/gpg.key
+          ) > "$RUNNER_TEMP/report.txt" 2>&1 || rc=$?
           cat "$RUNNER_TEMP/report.txt"
           case $rc in
             0) echo "active=true" >> "$GITHUB_OUTPUT" ;;
-            10) echo "::notice::The repositories are not live yet (no index is served); nothing to check." ;;
+            10) echo "::notice::The repositories are not live yet and that is still acceptable; nothing to check." ;;
             *)
               echo "active=true" >> "$GITHUB_OUTPUT"
               echo "result=fail" >> "$GITHUB_OUTPUT"

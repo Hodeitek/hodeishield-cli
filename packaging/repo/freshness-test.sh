@@ -350,7 +350,8 @@ check 'plain http not allowed' 1 "$url/fresh" 0.10.0 "$work/repo.asc"
 # checklive <name> <wanted status> <base URL> <public key> [<text the output must contain>]
 checklive() {
   status=0
-  sh "$here/live.sh" "$3" "$4" > "$work/out" 2>&1 || status=$?
+  FRESHNESS_LATEST_RELEASE=${LIVE_RELEASE:-0.5.1} FRESHNESS_RELEASE_AGE_HOURS=${LIVE_AGE:-1000} \
+    sh "$here/live.sh" "$3" "$4" > "$work/out" 2>&1 || status=$?
   if [ "$status" = "$2" ] && { [ -z "${5:-}" ] || grep -Fq -- "$5" "$work/out"; }; then result=ok; else result=WRONG; bad=1; fi
   printf '%-34s %-6s %-6s %-6s %s\n' "$1" "$2" "$status" "$result" "$(sed -n 's/^live.sh: //p' "$work/out" | head -n 1)"
   [ "$result" = ok ] || sed 's/^/    /' "$work/out"
@@ -361,6 +362,14 @@ printf '\n%-34s %-6s %-6s %-6s %s\n' 'LIVE CASE' WANT GOT RESULT WHY
 # Nothing served: inert, with or without a key.
 checklive 'domain serves nothing (all 404)' 10 "$url/nowhere" "$work/repo.asc"
 checklive 'serves nothing, no key' 10 "$url/nowhere" "$work/missing.asc"
+# A clean 404 is acceptable only before the first release that publishes the repositories (0.5.1 is the
+# last one without), or inside the grace period after a newer one.
+LIVE_RELEASE=0.5.1 LIVE_AGE=5000 checklive 'all 404, latest release 0.5.1' 10 "$url/nowhere" "$work/repo.asc"
+LIVE_RELEASE=0.5.2 LIVE_AGE=100 checklive 'all 404, newer, past the grace' 1 "$url/nowhere" "$work/repo.asc" 'newer than 0.5.1'
+LIVE_RELEASE=0.5.2 LIVE_AGE=5 checklive 'all 404, newer, inside the grace' 10 "$url/nowhere" "$work/repo.asc" 'only 5 hours old'
+LIVE_RELEASE=0.10.0 LIVE_AGE=48 checklive 'all 404, 0.10.0, exactly at the grace' 1 "$url/nowhere" "$work/repo.asc"
+LIVE_RELEASE=0.5.2 LIVE_AGE=100 checklive 'newer release, index served' 0 "$url/fresh" "$work/repo.asc"
+LIVE_RELEASE=v0.5.2 checklive 'latest release not a version' 1 "$url/nowhere" "$work/repo.asc" 'not a version'
 # An index is served.
 checklive 'live repo, key present' 0 "$url/fresh" "$work/repo.asc"
 checklive 'live repo, key missing' 1 "$url/fresh" "$work/missing.asc" 'the repositories are live but the public key'
