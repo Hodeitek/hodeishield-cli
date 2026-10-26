@@ -17,11 +17,18 @@ sig_ok() {
   sig_keyring=$1
   sig_primary=$2
   shift 2
-  sig_status=$(gpgv --keyring "$sig_keyring" --status-fd 1 "$@" 2> /dev/null) || return 1
+  # On a failure the status lines go to stderr, so the log says why (they hold no key material).
+  sig_status=$(gpgv --keyring "$sig_keyring" --status-fd 1 "$@" 2> /dev/null) || {
+    printf '%s\n' "$sig_status" >&2
+    return 1
+  }
   printf '%s\n' "$sig_status" | awk -v primary="$sig_primary" '
     $1 != "[GNUPG:]" { next }
     $2 == "EXPKEYSIG" || $2 == "REVKEYSIG" || $2 == "EXPSIG" || $2 == "BADSIG" || $2 == "ERRSIG" { bad = 1 }
     $2 == "GOODSIG" { good++ }
     $2 == "VALIDSIG" { if ($12 == primary) valid++; else bad = 1 }
-    END { exit (bad || good < 1 || valid < 1) }'
+    END { exit (bad || good < 1 || valid < 1) }' || {
+    printf '%s\n' "$sig_status" >&2
+    return 1
+  }
 }
