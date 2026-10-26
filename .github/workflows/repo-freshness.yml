@@ -64,6 +64,7 @@ jobs:
           rc=0
           (
             set -euo pipefail
+            sh packaging/repo/keycheck.sh packaging/gpg.key
             [[ "$GRACE_HOURS" =~ ^[0-9]+$ ]] || { echo "live.sh: the grace period is not a number of hours."; exit 1; }
             release=$(gh release view -R "$GITHUB_REPOSITORY" --json tagName,isDraft,isPrerelease,publishedAt) ||
               { echo "live.sh: the latest release cannot be read."; exit 1; }

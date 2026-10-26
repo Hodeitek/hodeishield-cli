@@ -238,6 +238,11 @@ jobs:
       - name: shellcheck
         run: shellcheck -s sh install.sh packaging/repo/*.sh packaging/build/*.sh
 
+      # packaging/gpg.key, the README and the constant in keycheck.sh must all name the same key, and
+      # the file must hold that one key and no other.
+      - name: The repository key is the pinned one
+        run: sh packaging/repo/keycheck.sh packaging/gpg.key README.md
+
       - name: Every curl call in install.sh is HTTPS-only
         run: |
           awk '

@@ -232,6 +232,8 @@ jobs:
             echo "::error::packaging/gpg.key (the public key of the signing subkey) is not in this release; the repositories cannot be published."
             exit 1
           fi
+          # Exactly one key, and the pinned one, before anything is signed or uploaded.
+          sh packaging/repo/keycheck.sh packaging/gpg.key
 
       - name: Install cosign
         if: steps.config.outputs.ready == 'true'
