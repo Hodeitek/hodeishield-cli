@@ -182,7 +182,7 @@ are in [CONTRIBUTING.md](../CONTRIBUTING.md#security-testing). The workflows are
 | [repo-builder-tests.yml](../.github/workflows/repo-builder-tests.yml) | The APT and DNF repository builder refuses forged packages and indexes |
 | [release.yml](../.github/workflows/release.yml) | Builds, tests the MSI, signs and publishes a release, with its SBOM and provenance |
 | [container-image.yml](../.github/workflows/container-image.yml) | Builds, publishes and signs the container image when a release is published |
-| [package-managers.yml](../.github/workflows/package-managers.yml) | Publishes the Homebrew, Scoop, APT and DNF channels when a release is published |
+| [package-managers.yml](../.github/workflows/package-managers.yml) | Publishes the Homebrew, Scoop, APT and DNF channels when a release is published; a manual run from `main` republishes APT and DNF for the latest release |
 | [release-integrity.yml](../.github/workflows/release-integrity.yml) | Weekly check that release runs, published files, signature log entries and image signatures match |
 | [repo-freshness.yml](../.github/workflows/repo-freshness.yml) | Weekly check that the APT and DNF repositories are signed and current |
 
