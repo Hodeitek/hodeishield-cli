@@ -6,6 +6,13 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ## [Unreleased]
 
+### Security
+
+- ctutils is updated from 0.4.3 to 0.4.4 and tokio from 1.53.2 to 1.53.3. They fix RUSTSEC-2026-0385
+  (ctutils mask generation and `u128` comparisons were not constant-time on some platforms) and
+  RUSTSEC-2026-0386 (`AsyncFd::new` and related constructors in tokio violate I/O safety). The CLI
+  does not call either affected API directly; both crates are dependencies of its dependencies.
+
 ### Changed
 
 - The generated `/v1` client follows version 2026-10-25 of the API document. `alerts list` now
