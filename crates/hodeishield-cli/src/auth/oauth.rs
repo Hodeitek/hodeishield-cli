@@ -7,9 +7,10 @@
 //!
 //! No endpoint is written here: every URL comes from the metadata the app publishes.
 
-use crate::failure::{Failure, Kind, Result, error_chain};
+use crate::failure::{Failure, Kind, Result, ca_hint, error_chain};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use hodeishield_api::v1::operations;
 use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -39,15 +40,23 @@ pub struct Metadata {
 /// Asks for a refresh token, so a sign-in outlives its short access token.
 const OFFLINE_ACCESS: &str = "offline_access";
 
+/// Lets the user's email address show in `whoami`. Asked for only when the app lists it.
+const EMAIL: &str = "email";
+
 /// The scopes to ask for when the profile names none: the ones the `/v1` operations this CLI calls
 /// need, with a template such as `compliance.<framework>:read` standing for every scope of that
-/// shape the app offers, plus a refresh token. An app that publishes no list gets the fixed ones.
+/// shape the app offers, plus a refresh token, plus `email` when the app lists it (so `whoami` can
+/// show the address). An app that publishes no list gets the fixed ones: it may reject a scope it
+/// does not know.
 /// Asking explicitly matters: an app may grant a request without scopes nothing at all.
 pub fn default_scopes(metadata: &Metadata) -> Vec<String> {
     let offered = metadata.scopes_supported.as_deref();
     let mut scopes: Vec<String> = Vec::new();
-    let needed = hodeishield_api::v1::operations::ALL
+    let needed = operations::ALL
         .iter()
+        // The tenant listing answers a portfolio key only, never a sign-in: its scope is not
+        // asked for.
+        .filter(|operation| operation.id != operations::LIST_PORTFOLIO_TENANTS.id)
         .flat_map(|operation| operation.scopes.iter().copied())
         .chain([OFFLINE_ACCESS]);
     for scope in needed {
@@ -80,6 +89,9 @@ pub fn default_scopes(metadata: &Metadata) -> Vec<String> {
             }
         }
     }
+    if offered.is_some_and(|o| o.iter().any(|s| s == EMAIL)) {
+        scopes.push(EMAIL.to_owned());
+    }
     scopes
 }
 
@@ -98,10 +110,11 @@ pub fn http_client(app_url: &Url) -> Result<reqwest::blocking::Client> {
         .https_only(!hodeishield_api::is_loopback_host(app_url))
         .build()
         .map_err(|e| {
-            Failure::general(format!(
-                "Cannot start the HTTP client: {}.",
-                error_chain(&e)
-            ))
+            let chain = error_chain(&e);
+            ca_hint(
+                Failure::general(format!("Cannot start the HTTP client: {chain}.")),
+                &chain,
+            )
         })
 }
 
@@ -885,6 +898,28 @@ mod tests {
         );
         assert_eq!(default_scopes(&hostile), ["compliance.ok_1-2:read"]);
 
+        // `email` is asked for only when the app lists it.
+        let mut with_email = metadata("https://app.example.test");
+        with_email.scopes_supported = Some(
+            ["supply_risk:read", "offline_access", "email"]
+                .map(str::to_owned)
+                .to_vec(),
+        );
+        assert_eq!(
+            default_scopes(&with_email),
+            ["supply_risk:read", "offline_access", "email"]
+        );
+        let mut without_email = metadata("https://app.example.test");
+        without_email.scopes_supported = Some(
+            ["supply_risk:read", "offline_access", "emails"]
+                .map(str::to_owned)
+                .to_vec(),
+        );
+        assert_eq!(
+            default_scopes(&without_email),
+            ["supply_risk:read", "offline_access"]
+        );
+
         // An app that does not publish its scopes gets the fixed ones; a template stands for none.
         assert_eq!(
             default_scopes(&metadata("https://app.example.test")),
@@ -892,6 +927,7 @@ mod tests {
                 "supply_risk:read",
                 "evidence:read",
                 "endpoints:read",
+                "reports:read",
                 "offline_access"
             ]
         );

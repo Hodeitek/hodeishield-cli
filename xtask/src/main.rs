@@ -13,7 +13,8 @@
 //!
 //! Rules it applies:
 //! - Response objects become structs that ignore unknown fields, so a newer `/v1` (which only adds)
-//!   does not break an older client.
+//!   does not break an older client. An object declared open (`additionalProperties: true`) stays
+//!   a JSON map instead, so none of its keys is lost.
 //! - Enums in responses stay `String`: the contract says vocabularies may grow.
 //! - Enums in query parameters become Rust enums: the client only sends what the document lists.
 //! - Two schemas with the same shape become one type; two different shapes wanting the same name
@@ -31,12 +32,21 @@ use std::process::{Command, ExitCode, Stdio};
 const SPEC: &str = "openapi/v1.json";
 const OUT: &str = "crates/hodeishield-api/src/generated.rs";
 /// SHA-256 of `openapi/v1.json`. Updating the document means updating this and `openapi/README.md`.
-const EXPECTED_SHA256: &str = "103e86f38f7b3eff45a0f764c8142b4bdd2e8d576385b1b4ccf588cbf0518fb3";
+const EXPECTED_SHA256: &str = "5c556941cddd90d4ed6e9c017e80639849b81f7e91f5ea1465fb45d8d6c99a3c";
 
 /// Type names that the default naming rules would get wrong, keyed by the schema's location.
 const RENAMES: &[(&str, &str)] = &[
     ("#/components/schemas/Error", "ErrorEnvelope"),
     ("#/components/schemas/Error/properties/error", "ErrorBody"),
+    (
+        "whoAmI/responses/200/properties/data/properties/organization",
+        "WhoAmIOrganization",
+    ),
+    ("getReport/responses/200/properties/data", "ReportDetail"),
+    (
+        "listAlerts/responses/200/properties/pagination",
+        "AlertsPagination",
+    ),
 ];
 
 type Result<T> = std::result::Result<T, String>;
@@ -176,7 +186,19 @@ struct Param {
     is_enum: bool,
     /// The values `x-hs-known-values` lists, in document order; empty without the extension.
     known_values: Vec<String>,
+    /// The values `x-hs-deprecated-values` lists, in document order; empty without the extension.
+    deprecated_values: Vec<String>,
+    /// `x-hs-deprecated-values-sunset`: the last day the deprecated values are accepted.
+    sunset: Option<String>,
     doc: Option<String>,
+}
+
+/// What a successful answer carries.
+enum Response {
+    /// JSON, decoded into this generated type.
+    Json(String),
+    /// A file: the `Accept` value to send (the declared media types, then JSON for the errors).
+    Binary(String),
 }
 
 struct OperationDef {
@@ -187,7 +209,9 @@ struct OperationDef {
     scopes: Vec<String>,
     path_params: Vec<Param>,
     query_params: Vec<Param>,
-    response: String,
+    response: Response,
+    /// Whether the operation takes the `X-HS-Tenant` header that selects a client tenant.
+    tenant_scoped: bool,
 }
 
 struct Generator<'a> {
@@ -372,12 +396,16 @@ impl<'a> Generator<'a> {
                 .collect::<std::result::Result<Vec<_>, _>>()?
         } else if let Some(template) = scope.get("template").and_then(Value::as_str) {
             vec![template.to_owned()]
+        } else if scope.get("none").and_then(Value::as_bool) == Some(true) {
+            // Any valid credential may call it (`GET /v1/me`).
+            Vec::new()
         } else {
             return Err(format!("{id}: x-hs-scope has neither scopes nor template"));
         };
 
         let mut path_params = Vec::new();
         let mut query_params = Vec::new();
+        let mut tenant_scoped = false;
         for param in operation
             .get("parameters")
             .and_then(Value::as_array)
@@ -389,6 +417,12 @@ impl<'a> Generator<'a> {
                 .and_then(Value::as_str)
                 .ok_or_else(|| format!("{id}: parameter without name"))?;
             let location = param.get("in").and_then(Value::as_str).unwrap_or_default();
+            // The tenant selection is not an argument of the generated function: the client adds it
+            // to every request of an operation that takes it (see `ClientBuilder::tenant`).
+            if location == "header" && name.eq_ignore_ascii_case("X-HS-Tenant") {
+                tenant_scoped = true;
+                continue;
+            }
             let required = param
                 .get("required")
                 .and_then(Value::as_bool)
@@ -414,6 +448,8 @@ impl<'a> Generator<'a> {
                 required,
                 is_enum,
                 known_values: known_values(&id, name, param)?,
+                deprecated_values: deprecated_values(&id, name, param)?,
+                sunset: sunset(&id, name, param)?,
                 doc: param
                     .get("description")
                     .and_then(Value::as_str)
@@ -430,15 +466,19 @@ impl<'a> Generator<'a> {
             }
         }
 
-        let schema = operation
-            .pointer("/responses/200/content/application~1json/schema")
-            .ok_or_else(|| format!("{id}: no JSON 200 response"))?;
-        let response_name = format!("{}Response", pascal(&id));
-        let (response, nullable) =
-            self.rust_type(schema, &response_name, &format!("{id}/responses/200"))?;
-        if nullable {
-            return Err(format!("{id}: a nullable 200 body is not supported"));
-        }
+        let response = if let Some(schema) =
+            operation.pointer("/responses/200/content/application~1json/schema")
+        {
+            let response_name = format!("{}Response", pascal(&id));
+            let (response, nullable) =
+                self.rust_type(schema, &response_name, &format!("{id}/responses/200"))?;
+            if nullable {
+                return Err(format!("{id}: a nullable 200 body is not supported"));
+            }
+            Response::Json(response)
+        } else {
+            Response::Binary(binary_accept(&id, operation)?)
+        };
         self.operations.push(OperationDef {
             id,
             path: path.to_owned(),
@@ -448,6 +488,7 @@ impl<'a> Generator<'a> {
             path_params,
             query_params,
             response,
+            tenant_scoped,
         });
         Ok(())
     }
@@ -514,6 +555,11 @@ impl<'a> Generator<'a> {
     }
 
     fn object_type(&mut self, schema: &Value, hint: &str, location: &str) -> Result<String> {
+        // An object declared open keeps every key it is sent: a struct would drop the ones it does
+        // not list. Its listed properties are documented, not typed.
+        if schema.get("additionalProperties") == Some(&Value::Bool(true)) {
+            return Ok("serde_json::Map<String, serde_json::Value>".to_owned());
+        }
         let Some(properties) = schema.get("properties").and_then(Value::as_object) else {
             return match schema.get("additionalProperties") {
                 Some(additional @ Value::Object(_)) => {
@@ -756,9 +802,27 @@ impl<'a> Generator<'a> {
                     format!("({:?}, &[{}])", p.json_name, values.join(", "))
                 })
                 .collect();
+            let deprecated: Vec<String> = op
+                .query_params
+                .iter()
+                .filter(|p| !p.deprecated_values.is_empty())
+                .map(|p| {
+                    let values: Vec<String> = p
+                        .deprecated_values
+                        .iter()
+                        .map(|v| format!("{v:?}"))
+                        .collect();
+                    format!(
+                        "crate::DeprecatedValues {{ param: {:?}, values: &[{}], sunset: {:?} }}",
+                        p.json_name,
+                        values.join(", "),
+                        p.sunset
+                    )
+                })
+                .collect();
             let _ = writeln!(
                 out,
-                "    /// `GET {}`: {}.\n    pub const {}: Operation = Operation {{ id: {:?}, method: \"GET\", path: {:?}, summary: {:?}, scopes: &[{}], known_values: &[{}] }};\n",
+                "    /// `GET {}`: {}.\n    pub const {}: Operation = Operation {{ id: {:?}, method: \"GET\", path: {:?}, summary: {:?}, scopes: &[{}], known_values: &[{}], deprecated_values: &[{}], tenant_scoped: {} }};\n",
                 op.path,
                 op.summary,
                 screaming(&op.id),
@@ -766,7 +830,9 @@ impl<'a> Generator<'a> {
                 op.path,
                 op.summary,
                 scopes.join(", "),
-                known.join(", ")
+                known.join(", "),
+                deprecated.join(", "),
+                op.tenant_scoped
             );
         }
         let all: Vec<String> = self.operations.iter().map(|op| screaming(&op.id)).collect();
@@ -807,18 +873,54 @@ impl<'a> Generator<'a> {
             } else {
                 "params.query_pairs()"
             };
-            let _ = writeln!(
-                out,
-                "    pub fn {}({}) -> Result<crate::ApiResponse<{}>, crate::Error> {{\n        self.get(&operations::{}, {path_value}, {query})\n    }}\n",
-                snake(&op.id),
-                args.join(", "),
-                op.response,
-                screaming(&op.id),
-            );
+            match &op.response {
+                Response::Json(ty) => {
+                    let _ = writeln!(
+                        out,
+                        "    pub fn {}({}) -> Result<crate::ApiResponse<{ty}>, crate::Error> {{\n        self.get(&operations::{}, {path_value}, {query})\n    }}\n",
+                        snake(&op.id),
+                        args.join(", "),
+                        screaming(&op.id),
+                    );
+                }
+                Response::Binary(accept) => {
+                    let _ = writeln!(
+                        out,
+                        "    pub fn {}({}) -> Result<crate::Download, crate::Error> {{\n        self.get_binary(&operations::{}, {path_value}, {query}, {accept:?})\n    }}\n",
+                        snake(&op.id),
+                        args.join(", "),
+                        screaming(&op.id),
+                    );
+                }
+            }
         }
         out.push_str("}\n");
         out
     }
+}
+
+/// The `Accept` value of an operation whose 200 answer is a file: every media type it declares, each
+/// with a `format: binary` string schema, then `application/json` for the error bodies.
+fn binary_accept(id: &str, operation: &Value) -> Result<String> {
+    let content = operation
+        .pointer("/responses/200/content")
+        .and_then(Value::as_object)
+        .filter(|content| !content.is_empty())
+        .ok_or_else(|| format!("{id}: no 200 response content"))?;
+    let mut types = Vec::new();
+    for (media_type, body) in content {
+        let schema = body.get("schema");
+        let is_file = schema.and_then(|s| s.get("type")).and_then(Value::as_str) == Some("string")
+            && schema.and_then(|s| s.get("format")).and_then(Value::as_str) == Some("binary");
+        if !is_file {
+            return Err(format!(
+                "{id}: 200 `{media_type}` is neither JSON nor a binary string"
+            ));
+        }
+        types.push(media_type.as_str());
+    }
+    types.push("application/json");
+    Ok(types.join(", "))
 }
 
 fn render_doc(out: &mut String, doc: Option<&str>, indent: &str) {
@@ -832,10 +934,19 @@ fn render_doc(out: &mut String, doc: Option<&str>, indent: &str) {
     }
 }
 
-/// The vocabulary `x-hs-known-values` publishes for a query parameter, in document order. The
-/// extension is optional; when present it must be an array of strings, anything else is an error.
-fn known_values(operation: &str, name: &str, param: &Value) -> Result<Vec<String>> {
-    let Some(list) = param.get("x-hs-known-values") else {
+/// The extension `key` of a parameter: on its `schema`, where the document puts it, or else on the
+/// parameter object itself.
+fn extension<'v>(param: &'v Value, key: &str) -> Option<&'v Value> {
+    param
+        .get("schema")
+        .and_then(|schema| schema.get(key))
+        .or_else(|| param.get(key))
+}
+
+/// The extension `key` of a parameter as a list of strings, in document order; empty when it is
+/// absent. When present it must be an array of strings, anything else is an error.
+fn string_list(operation: &str, name: &str, param: &Value, key: &str) -> Result<Vec<String>> {
+    let Some(list) = extension(param, key) else {
         return Ok(Vec::new());
     };
     list.as_array()
@@ -845,7 +956,43 @@ fn known_values(operation: &str, name: &str, param: &Value) -> Result<Vec<String
                 .map(|v| v.as_str().map(str::to_owned))
                 .collect::<Option<Vec<_>>>()
         })
-        .ok_or_else(|| format!("{operation}.{name}: x-hs-known-values must be an array of strings"))
+        .ok_or_else(|| format!("{operation}.{name}: {key} must be an array of strings"))
+}
+
+/// The vocabulary `x-hs-known-values` publishes for a query parameter, in document order.
+fn known_values(operation: &str, name: &str, param: &Value) -> Result<Vec<String>> {
+    string_list(operation, name, param, "x-hs-known-values")
+}
+
+/// The values `x-hs-deprecated-values` lists for a query parameter, in document order: still
+/// accepted by the API, but on their way out.
+fn deprecated_values(operation: &str, name: &str, param: &Value) -> Result<Vec<String>> {
+    string_list(operation, name, param, "x-hs-deprecated-values")
+}
+
+/// `x-hs-deprecated-values-sunset`: the last day the deprecated values are accepted. Optional; when
+/// present it must be a `YYYY-MM-DD` date and the parameter must list deprecated values.
+fn sunset(operation: &str, name: &str, param: &Value) -> Result<Option<String>> {
+    let key = "x-hs-deprecated-values-sunset";
+    let Some(value) = extension(param, key) else {
+        return Ok(None);
+    };
+    let date = value
+        .as_str()
+        .filter(|date| {
+            date.len() == 10
+                && date.bytes().enumerate().all(|(i, b)| match i {
+                    4 | 7 => b == b'-',
+                    _ => b.is_ascii_digit(),
+                })
+        })
+        .ok_or_else(|| format!("{operation}.{name}: {key} must be a YYYY-MM-DD date"))?;
+    if deprecated_values(operation, name, param)?.is_empty() {
+        return Err(format!(
+            "{operation}.{name}: {key} without x-hs-deprecated-values"
+        ));
+    }
+    Ok(Some(date.to_owned()))
 }
 
 fn operation_id(operation: &Value) -> Result<&str> {
@@ -998,6 +1145,17 @@ mod tests {
         if let Some(extension) = extension {
             severity["x-hs-known-values"] = extension;
         }
+        document_with(severity, &[])
+    }
+
+    /// The same document with the `severity` parameter given whole, and `headers` added after the
+    /// query parameters.
+    fn document_with(severity: Value, headers: &[Value]) -> Value {
+        let mut parameters = vec![
+            severity,
+            serde_json::json!({"name": "page", "in": "query", "schema": {"type": "string"}}),
+        ];
+        parameters.extend(headers.iter().cloned());
         serde_json::json!({
             "info": {"version": "test"},
             "servers": [{"url": "https://api.example.test"}],
@@ -1006,7 +1164,7 @@ mod tests {
                 "operationId": "listThings",
                 "summary": "List things",
                 "x-hs-scope": {"scopes": ["things:read"]},
-                "parameters": [severity, {"name": "page", "in": "query", "schema": {"type": "string"}}],
+                "parameters": parameters,
                 "responses": {"200": {"content": {"application/json": {"schema": {
                     "type": "object",
                     "properties": {"ok": {"type": "boolean"}},
@@ -1017,10 +1175,22 @@ mod tests {
     }
 
     fn generate(extension: Option<Value>) -> Result<String> {
-        let spec = document(extension);
-        Generator::new(&spec)
+        generate_from(&document(extension))
+    }
+
+    fn generate_from(spec: &Value) -> Result<String> {
+        Generator::new(spec)
             .run()
             .map(|out| out.split_whitespace().collect::<Vec<_>>().join(" "))
+    }
+
+    /// A `severity` parameter whose schema carries `extensions`, as the published document does.
+    fn severity_schema(extensions: Value) -> Value {
+        let mut schema = serde_json::json!({"type": "string"});
+        for (key, value) in extensions.as_object().expect("object") {
+            schema[key] = value.clone();
+        }
+        serde_json::json!({"name": "severity", "in": "query", "schema": schema})
     }
 
     #[test]
@@ -1060,5 +1230,193 @@ mod tests {
                 "{bad}"
             );
         }
+    }
+
+    #[test]
+    fn known_values_are_read_from_the_parameter_schema() {
+        let spec = document_with(
+            severity_schema(serde_json::json!({"x-hs-known-values": ["critical", "high"]})),
+            &[],
+        );
+        let out = generate_from(&spec).expect("generates");
+        assert!(
+            out.contains(r#"known_values: &[("severity", &["critical", "high"])]"#),
+            "{out}"
+        );
+        let spec = document_with(
+            severity_schema(serde_json::json!({"x-hs-known-values": "critical"})),
+            &[],
+        );
+        assert_eq!(
+            generate_from(&spec).expect_err("malformed"),
+            "listThings.severity: x-hs-known-values must be an array of strings"
+        );
+    }
+
+    #[test]
+    fn deprecated_values_and_their_sunset_are_emitted_in_document_order() {
+        let spec = document_with(
+            severity_schema(serde_json::json!({
+                "x-hs-known-values": ["critical", "high"],
+                "x-hs-deprecated-values": ["critico", "alto"],
+                "x-hs-deprecated-values-sunset": "2027-01-14"
+            })),
+            &[],
+        );
+        let out = generate_from(&spec).expect("generates");
+        assert!(
+            out.contains(concat!(
+                r#"deprecated_values: &[crate::DeprecatedValues { param: "severity", "#,
+                r#"values: &["critico", "alto"], sunset: Some("2027-01-14") }]"#
+            )),
+            "{out}"
+        );
+        let spec = document_with(
+            severity_schema(serde_json::json!({"x-hs-deprecated-values": ["alto"]})),
+            &[],
+        );
+        let out = generate_from(&spec).expect("generates");
+        assert!(out.contains("values: &[\"alto\"], sunset: None"), "{out}");
+    }
+
+    #[test]
+    fn a_parameter_without_deprecated_values_has_none() {
+        let out = generate(Some(serde_json::json!(["critical"]))).expect("generates");
+        assert!(out.contains("deprecated_values: &[]"), "{out}");
+        let spec = document_with(
+            severity_schema(serde_json::json!({"x-hs-deprecated-values": []})),
+            &[],
+        );
+        let out = generate_from(&spec).expect("generates");
+        assert!(out.contains("deprecated_values: &[]"), "{out}");
+    }
+
+    #[test]
+    fn malformed_deprecated_values_are_a_generator_error() {
+        for (extensions, expected) in [
+            (
+                serde_json::json!({"x-hs-deprecated-values": "alto"}),
+                "listThings.severity: x-hs-deprecated-values must be an array of strings",
+            ),
+            (
+                serde_json::json!({"x-hs-deprecated-values": ["alto", 1]}),
+                "listThings.severity: x-hs-deprecated-values must be an array of strings",
+            ),
+            (
+                serde_json::json!({
+                    "x-hs-deprecated-values": ["alto"],
+                    "x-hs-deprecated-values-sunset": "14/01/2027"
+                }),
+                "listThings.severity: x-hs-deprecated-values-sunset must be a YYYY-MM-DD date",
+            ),
+            (
+                serde_json::json!({
+                    "x-hs-deprecated-values": ["alto"],
+                    "x-hs-deprecated-values-sunset": 20_270_114
+                }),
+                "listThings.severity: x-hs-deprecated-values-sunset must be a YYYY-MM-DD date",
+            ),
+            (
+                serde_json::json!({"x-hs-deprecated-values-sunset": "2027-01-14"}),
+                "listThings.severity: x-hs-deprecated-values-sunset without \
+                 x-hs-deprecated-values",
+            ),
+            (
+                serde_json::json!({
+                    "x-hs-deprecated-values": [],
+                    "x-hs-deprecated-values-sunset": "2027-01-14"
+                }),
+                "listThings.severity: x-hs-deprecated-values-sunset without \
+                 x-hs-deprecated-values",
+            ),
+        ] {
+            let spec = document_with(severity_schema(extensions.clone()), &[]);
+            let err = generate_from(&spec).expect_err("malformed");
+            assert_eq!(err, expected, "{extensions}");
+        }
+    }
+
+    #[test]
+    fn the_tenant_header_marks_the_operation_tenant_scoped() {
+        let severity =
+            || serde_json::json!({"name": "severity", "in": "query", "schema": {"type": "string"}});
+        for name in ["X-HS-Tenant", "x-hs-tenant"] {
+            let header = serde_json::json!({
+                "name": name, "in": "header", "required": false,
+                "schema": {"type": "string", "format": "uuid"}
+            });
+            let out = generate_from(&document_with(severity(), &[header])).expect("generates");
+            assert!(out.contains("tenant_scoped: true"), "{out}");
+            // The header is not an argument of the generated function.
+            assert!(!out.to_lowercase().contains("x_hs_tenant"), "{out}");
+        }
+        let out = generate_from(&document_with(severity(), &[])).expect("generates");
+        assert!(out.contains("tenant_scoped: false"), "{out}");
+    }
+
+    #[test]
+    fn an_open_object_stays_a_map_even_when_it_lists_properties() {
+        let mut spec = document(None);
+        let response = "/paths/~1v1~1things/get/responses/200/content/application~1json/schema";
+        let properties = &mut spec.pointer_mut(response).expect("response schema")["properties"];
+        properties["details"] = serde_json::json!({
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {"code": {"type": "string"}}
+        });
+        let out = generate_from(&spec).expect("generates");
+        assert!(
+            out.contains("pub details: Option<serde_json::Map<String, serde_json::Value>>"),
+            "{out}"
+        );
+        assert!(!out.contains("pub struct Details"), "{out}");
+    }
+
+    #[test]
+    fn any_other_header_parameter_is_a_generator_error() {
+        let header = serde_json::json!({
+            "name": "X-Other", "in": "header", "schema": {"type": "string"}
+        });
+        let spec = document_with(
+            serde_json::json!({"name": "severity", "in": "query", "schema": {"type": "string"}}),
+            &[header],
+        );
+        assert_eq!(
+            generate_from(&spec).expect_err("unsupported"),
+            "listThings.X-Other: parameters in `header` are not supported"
+        );
+    }
+
+    #[test]
+    fn an_operation_that_needs_no_scope_lists_none() {
+        let mut spec = document(None);
+        spec["paths"]["/v1/things"]["get"]["x-hs-scope"] = serde_json::json!({"none": true});
+        let out = generate_from(&spec).expect("generate");
+        assert!(out.contains("scopes: &[],"), "{out}");
+        spec["paths"]["/v1/things"]["get"]["x-hs-scope"] = serde_json::json!({"none": false});
+        assert_eq!(
+            generate_from(&spec).expect_err("not none"),
+            "listThings: x-hs-scope has neither scopes nor template"
+        );
+    }
+
+    #[test]
+    fn a_file_answer_is_a_download_with_its_media_types_then_json() {
+        let mut spec = document(None);
+        spec["paths"]["/v1/things"]["get"]["responses"]["200"]["content"] = serde_json::json!({
+            "application/pdf": {"schema": {"type": "string", "format": "binary"}},
+            "text/csv": {"schema": {"type": "string", "format": "binary"}}
+        });
+        let out = generate_from(&spec).expect("generate");
+        assert!(
+            out.contains("-> Result<crate::Download, crate::Error> { self.get_binary(&operations::LIST_THINGS, \"/v1/things\".to_owned(), params.query_pairs(), \"application/pdf, text/csv, application/json\") }"),
+            "{out}"
+        );
+        spec["paths"]["/v1/things"]["get"]["responses"]["200"]["content"] =
+            serde_json::json!({"text/plain": {"schema": {"type": "string"}}});
+        assert_eq!(
+            generate_from(&spec).expect_err("not a file"),
+            "listThings: 200 `text/plain` is neither JSON nor a binary string"
+        );
     }
 }

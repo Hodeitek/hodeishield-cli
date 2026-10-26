@@ -53,6 +53,8 @@ die() {
   exit 1
 }
 
+[ -n "$primary" ] || die "cannot read the fingerprint of the public key $PUBLIC_KEY"
+
 # Every publication, not only a recovery: the key to publish carries no revoked subkey and exactly one
 # usable signing subkey, which is SIGNING_KEY.
 problem=$(public_key_problem "$PUBLIC_KEY" "$SIGNING_KEY")
@@ -244,13 +246,15 @@ for arch in x86_64 aarch64; do
   gpg --batch --yes --local-user "$SIGNING_KEY" --digest-algo SHA512 --armor --detach-sign \
     --output "$dir/repodata/repomd.xml.asc" "$dir/repodata/repomd.xml"
 done
-cp "$here/hodeishield.repo" "$repo/rpm/hodeishield.repo"
 
 # --- Key and landing page --------------------------------------------------------------------------
+# What users check the repositories against, the key's fingerprint and the DNF configuration, is
+# stated only in the README of the source repository, never here: whoever can write to the bucket
+# could change it here too. The landing page only points there.
 cp "$PUBLIC_KEY" "$repo/gpg.key"
 fingerprint=$(gpg --batch --with-colons --show-keys "$PUBLIC_KEY" | awk -F: '$1 == "fpr" { print $10; exit }')
 [ -n "$fingerprint" ] || die "cannot read the fingerprint of $PUBLIC_KEY"
-sed "s/@FINGERPRINT@/$fingerprint/g" "$here/index.html" > "$repo/index.html"
+cp "$here/index.html" "$repo/index.html"
 
 # --- Self-check before anything is uploaded ---------------------------------------------------------
 sig_ok "$check/key.gpg" "$primary" "$dists/InRelease" || die "InRelease does not verify"

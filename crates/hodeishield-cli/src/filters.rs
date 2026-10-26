@@ -4,6 +4,10 @@
 //! The values the API document lists for a filter (`x-hs-known-values`): shown in `--help` and
 //! checked before a request. The lists are open vocabularies, so a value that is not listed is
 //! warned about and sent exactly as typed; nothing here refuses a value or rewrites it.
+//!
+//! The document may also mark values as deprecated (`x-hs-deprecated-values`, with the last day
+//! they are accepted in `x-hs-deprecated-values-sunset`). Such a value gets its own warning, which
+//! points to the listed values, and is still sent exactly as typed.
 
 use crate::output::clean;
 use hodeishield_api::Operation;
@@ -19,63 +23,77 @@ pub fn help(base: &str, operation: &Operation, param: &str) -> String {
     }
 }
 
-/// The legacy values of the alert `severity` filter and their current names.
+/// Replacements for the deprecated values of the alert `severity` filter.
 ///
-/// The API is moving alert severity from a legacy Spanish scale to an English vocabulary, and
-/// for a transition period its filter accepts both. A legacy value typed by the user is still
-/// sent exactly as typed (the server accepts it); this table only lets the CLI say what to use
-/// instead. It applies to the alert severity filter alone and can be removed, with
-/// [`legacy_hint`], after [`LEGACY_SEVERITY_END`].
-const LEGACY_SEVERITY: &[(&str, &str)] = &[
+/// This table exists only because the API document lists the deprecated values without their
+/// replacements. Remove it, and its use in [`deprecated_hint`], after the sunset, 2027-01-14.
+const SEVERITY_REPLACEMENTS: &[(&str, &str)] = &[
     ("critico", "critical"),
     ("alto", "high"),
     ("medio", "medium"),
     ("bajo", "low"),
-    ("info", "info"),
 ];
 
-/// The last day the API accepts the legacy severity values.
-const LEGACY_SEVERITY_END: &str = "2027-01-14";
-
-/// The specific hint for a legacy severity value, or `None` when the generic warning applies.
-///
-/// It fires only when the API document lists the English values, so only once the server has
-/// switched. Until then the API still returns the legacy scale and the legacy values are the
-/// working spelling; telling users to move away from them would send them to values that match
-/// nothing. A document without a list stays silent, like every other filter.
-fn legacy_hint(operation: &Operation, param: &str, value: &str, known: &[&str]) -> Option<String> {
+/// The listed value that replaces the deprecated `value`, when [`SEVERITY_REPLACEMENTS`] knows one
+/// and the document lists it.
+fn replacement(operation: &Operation, param: &str, value: &str) -> Option<&'static str> {
     if operation.id != "listAlerts" || param != "severity" {
         return None;
     }
-    let (_, current) = LEGACY_SEVERITY
+    let (_, current) = SEVERITY_REPLACEMENTS
         .iter()
-        .find(|(legacy, _)| legacy.eq_ignore_ascii_case(value))?;
-    if !known.contains(current) {
+        .find(|(deprecated, _)| deprecated.eq_ignore_ascii_case(value))?;
+    operation
+        .known_values(param)
+        .is_some_and(|known| known.contains(current))
+        .then_some(*current)
+}
+
+/// The warning for a value the document marks as deprecated for `param` (matched without regard
+/// to case), or `None` when it does not.
+fn deprecated_hint(operation: &Operation, param: &str, value: &str) -> Option<String> {
+    let deprecated = operation.deprecated_values(param)?;
+    if !deprecated
+        .values
+        .iter()
+        .any(|d| d.eq_ignore_ascii_case(value))
+    {
         return None;
     }
+    let until = deprecated.sunset.map_or_else(String::new, |date| {
+        format!(", accepted by the API until {date}")
+    });
+    let known = operation.known_values(param).filter(|v| !v.is_empty());
+    let advice = match (replacement(operation, param, value), known) {
+        (Some(current), _) => format!("; use `{current}`"),
+        (None, Some(known)) => format!("; use one of the listed values ({})", known.join(", ")),
+        (None, None) => String::new(),
+    };
     Some(format!(
-        "warning: `{}` is a legacy severity value, accepted by the API until \
-         {LEGACY_SEVERITY_END}; use `{current}`. Sending it as typed.",
+        "warning: `{}` is a deprecated value for --{}{until}{advice}. Sending it as typed.",
         clean(value),
+        param.replace('_', "-"),
     ))
 }
 
-/// The warnings for the `(parameter, value)` pairs the user gave, one per value that is not in the
-/// list the document publishes for that parameter. A parameter without a list never warns. The
-/// match is exact and case-sensitive, as the API is; a value that differs only by case also gets
-/// the listed spelling as a hint.
+/// The warnings for the `(parameter, value)` pairs the user gave: one per value the document marks
+/// as deprecated for that parameter, and one per value that is not in the list it publishes. A
+/// parameter without either list never warns. The match against the list is exact and
+/// case-sensitive, as the API is; a value that differs only by case also gets the listed spelling
+/// as a hint.
 pub fn warnings(operation: &Operation, filters: &[(&str, Option<&str>)]) -> Vec<String> {
     filters
         .iter()
         .filter_map(|&(param, value)| {
             let value = value?;
-            let known = operation.known_values(param).filter(|v| !v.is_empty())?;
-            if known.contains(&value) {
+            let known = operation.known_values(param).filter(|v| !v.is_empty());
+            if known.is_some_and(|known| known.contains(&value)) {
                 return None;
             }
-            if let Some(hint) = legacy_hint(operation, param, value, known) {
+            if let Some(hint) = deprecated_hint(operation, param, value) {
                 return Some(hint);
             }
+            let known = known?;
             let tail = known
                 .iter()
                 .find(|k| k.eq_ignore_ascii_case(value))
@@ -103,6 +121,7 @@ pub fn warn_unknown(operation: &Operation, filters: &[(&str, Option<&str>)]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hodeishield_api::DeprecatedValues;
 
     const WITH_LISTS: Operation = Operation {
         id: "listAlerts",
@@ -111,6 +130,8 @@ mod tests {
         summary: "List alerts",
         scopes: &[],
         known_values: &[("severity", &["critical", "high", "medium", "low"])],
+        deprecated_values: &[],
+        tenant_scoped: true,
     };
 
     const WITHOUT_LISTS: Operation = Operation {
@@ -152,82 +173,137 @@ mod tests {
         assert!(warnings(&WITHOUT_LISTS, &[("severity", Some("urgent"))]).is_empty());
     }
 
-    const ENGLISH: Operation = Operation {
+    const ALERTS: Operation = Operation {
         known_values: &[("severity", &["critical", "high", "medium", "low", "info"])],
+        deprecated_values: &[DeprecatedValues {
+            param: "severity",
+            values: &["critico", "alto", "medio", "bajo", "urgente"],
+            sunset: Some("2027-01-14"),
+        }],
         ..WITH_LISTS
     };
 
     #[test]
-    fn a_legacy_severity_points_to_its_new_name() {
+    fn a_deprecated_value_with_a_replacement_points_to_it() {
         assert_eq!(
-            warnings(&ENGLISH, &[("severity", Some("alto"))]),
+            warnings(&ALERTS, &[("severity", Some("alto"))]),
             [
-                "warning: `alto` is a legacy severity value, accepted by the API until \
+                "warning: `alto` is a deprecated value for --severity, accepted by the API until \
                  2027-01-14; use `high`. Sending it as typed."
             ]
         );
-        for (legacy, current) in [
+        for (deprecated, current) in [
             ("critico", "critical"),
             ("medio", "medium"),
             ("bajo", "low"),
         ] {
-            let out = warnings(&ENGLISH, &[("severity", Some(legacy))]);
+            let out = warnings(&ALERTS, &[("severity", Some(deprecated))]);
             assert!(out[0].contains(&format!("use `{current}`")), "{out:?}");
         }
     }
 
     #[test]
-    fn a_legacy_severity_is_matched_without_regard_to_case() {
-        let out = warnings(&ENGLISH, &[("severity", Some("ALTO"))]);
+    fn a_deprecated_value_is_matched_without_regard_to_case() {
+        let out = warnings(&ALERTS, &[("severity", Some("ALTO"))]);
         assert_eq!(out.len(), 1);
-        assert!(out[0].starts_with("warning: `ALTO` is a legacy severity value"));
+        assert!(out[0].starts_with("warning: `ALTO` is a deprecated value for --severity"));
         assert!(out[0].contains("use `high`"), "{out:?}");
+    }
+
+    #[test]
+    fn a_deprecated_value_without_a_replacement_points_to_the_listed_values() {
+        assert_eq!(
+            warnings(&ALERTS, &[("severity", Some("urgente"))]),
+            [
+                "warning: `urgente` is a deprecated value for --severity, accepted by the API \
+                 until 2027-01-14; use one of the listed values (critical, high, medium, low, \
+                 info). Sending it as typed."
+            ]
+        );
+        // A replacement the document does not list is not offered.
+        let unlisted = Operation {
+            known_values: &[("severity", &["urgent"])],
+            ..ALERTS
+        };
+        let out = warnings(&unlisted, &[("severity", Some("alto"))]);
+        assert!(
+            out[0].ends_with("use one of the listed values (urgent). Sending it as typed."),
+            "{out:?}"
+        );
+    }
+
+    #[test]
+    fn a_deprecated_value_without_a_sunset_or_a_list() {
+        let no_sunset = Operation {
+            id: "listRisks",
+            known_values: &[("min_score", &["low", "high"])],
+            deprecated_values: &[DeprecatedValues {
+                param: "min_score",
+                values: &["bajo"],
+                sunset: None,
+            }],
+            ..WITH_LISTS
+        };
+        assert_eq!(
+            warnings(&no_sunset, &[("min_score", Some("bajo"))]),
+            [
+                "warning: `bajo` is a deprecated value for --min-score; use one of the listed \
+                 values (low, high). Sending it as typed."
+            ]
+        );
+        let no_list = Operation {
+            known_values: &[],
+            ..no_sunset
+        };
+        assert_eq!(
+            warnings(&no_list, &[("min_score", Some("bajo"))]),
+            ["warning: `bajo` is a deprecated value for --min-score. Sending it as typed."]
+        );
+    }
+
+    #[test]
+    fn the_replacements_apply_to_the_alert_severity_filter_only() {
+        let other = Operation {
+            id: "listRisks",
+            ..ALERTS
+        };
+        let out = warnings(&other, &[("severity", Some("alto"))]);
+        assert!(out[0].contains("use one of the listed values"), "{out:?}");
     }
 
     #[test]
     fn a_current_severity_is_silent() {
         for value in ["critical", "high", "medium", "low", "info"] {
-            assert!(warnings(&ENGLISH, &[("severity", Some(value))]).is_empty());
+            assert!(warnings(&ALERTS, &[("severity", Some(value))]).is_empty());
         }
     }
 
     #[test]
     fn an_unrelated_severity_keeps_the_generic_warning() {
-        let out = warnings(&ENGLISH, &[("severity", Some("urgent"))]);
+        let out = warnings(&ALERTS, &[("severity", Some("urgent"))]);
         assert!(
             out[0].contains("is not one of the values the API lists"),
             "{out:?}"
         );
     }
 
+    /// Fails when the document adds or removes a deprecated severity, so the table above follows
+    /// it, and when a replacement is not a listed value.
     #[test]
-    fn the_legacy_hint_waits_for_the_english_list() {
-        // No list yet: the API still speaks the legacy scale, so say nothing.
-        assert!(warnings(&WITHOUT_LISTS, &[("severity", Some("alto"))]).is_empty());
-        // A list without the new name: nothing to point to, so the generic warning stays.
-        let other_list = Operation {
-            known_values: &[("severity", &["urgent"])],
-            ..WITH_LISTS
-        };
-        let out = warnings(&other_list, &[("severity", Some("bajo"))]);
-        assert!(
-            out[0].contains("is not one of the values the API lists"),
-            "{out:?}"
-        );
-    }
-
-    #[test]
-    fn the_legacy_hint_is_scoped_to_the_alert_severity_filter() {
-        let other = Operation {
-            id: "listRisks",
-            known_values: &[("severity", &["high"])],
-            ..WITH_LISTS
-        };
-        let out = warnings(&other, &[("severity", Some("alto"))]);
-        assert!(
-            out[0].contains("is not one of the values the API lists"),
-            "{out:?}"
-        );
+    fn the_replacements_match_the_generated_alert_severity_filter() {
+        let operation = hodeishield_api::v1::operations::LIST_ALERTS;
+        let deprecated = operation
+            .deprecated_values("severity")
+            .expect("the document deprecates severity values");
+        let mut listed: Vec<&str> = deprecated.values.to_vec();
+        listed.sort_unstable();
+        let mut mapped: Vec<&str> = SEVERITY_REPLACEMENTS.iter().map(|(d, _)| *d).collect();
+        mapped.sort_unstable();
+        assert_eq!(mapped, listed);
+        let known = operation.known_values("severity").expect("listed values");
+        for (_, current) in SEVERITY_REPLACEMENTS {
+            assert!(known.contains(current), "{current}");
+        }
     }
 
     #[test]

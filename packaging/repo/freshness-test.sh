@@ -208,6 +208,21 @@ signer=$later_sub
 mk "$www/later" "0.9.0 0.10.0" "0.9.0 0.10.0"
 signer=$repo_sub
 
+# Every repository serves the public key at /gpg.key: the repository key, except where the fixture has its own.
+for d in "$www"/*; do cp "$work/repo.asc" "$d/gpg.key"; done
+cp "$work/expired.asc" "$www/expired-key/gpg.key"
+cp "$work/revoked.asc" "$www/revoked-key/gpg.key"
+cp "$work/soon-sub.asc" "$www/soon-sub/gpg.key"
+cp "$work/soon-primary.asc" "$www/soon-primary/gpg.key"
+cp "$work/later.asc" "$www/later/gpg.key"
+# The key served is another one, or the repository key and another one, or missing.
+cp -R "$www/fresh" "$www/served-other-key"
+cp "$work/other.asc" "$www/served-other-key/gpg.key"
+cp -R "$www/fresh" "$www/served-extra-key"
+cat "$work/repo.asc" "$work/other.asc" > "$www/served-extra-key/gpg.key"
+cp -R "$www/fresh" "$www/served-no-key"
+rm "$www/served-no-key/gpg.key"
+
 cp -R "$www/fresh" "$www/tampered-inrelease"
 sed -i 's/^Suite: stable$/Suite: stablf/' "$www/tampered-inrelease/apt/dists/stable/InRelease"
 
@@ -311,6 +326,9 @@ check 'stale DNF' 3 "$url/stale-dnf" 0.10.0 "$work/repo.asc"
 check 'a release not served yet' 3 "$url/fresh" 0.11.0 "$work/repo.asc"
 check 'newer than the release' 1 "$url/fresh" 0.9.0 "$work/repo.asc"
 check 'no hodeishield in APT' 1 "$url/no-package" 0.10.0 "$work/repo.asc"
+check 'served gpg.key is another key' 1 "$url/served-other-key" 0.10.0 "$work/repo.asc"
+check 'served gpg.key holds an extra key' 1 "$url/served-extra-key" 0.10.0 "$work/repo.asc"
+check 'no gpg.key served' 1 "$url/served-no-key" 0.10.0 "$work/repo.asc"
 check 'tampered InRelease' 1 "$url/tampered-inrelease" 0.10.0 "$work/repo.asc"
 check 'text after the signature' 1 "$url/text-after-signature" 0.10.0 "$work/repo.asc"
 check 'two signed messages' 1 "$url/two-messages" 0.10.0 "$work/repo.asc"
@@ -350,7 +368,8 @@ check 'plain http not allowed' 1 "$url/fresh" 0.10.0 "$work/repo.asc"
 # checklive <name> <wanted status> <base URL> <public key> [<text the output must contain>]
 checklive() {
   status=0
-  sh "$here/live.sh" "$3" "$4" > "$work/out" 2>&1 || status=$?
+  FRESHNESS_LATEST_RELEASE=${LIVE_RELEASE:-0.5.1} FRESHNESS_RELEASE_AGE_HOURS=${LIVE_AGE:-1000} \
+    sh "$here/live.sh" "$3" "$4" > "$work/out" 2>&1 || status=$?
   if [ "$status" = "$2" ] && { [ -z "${5:-}" ] || grep -Fq -- "$5" "$work/out"; }; then result=ok; else result=WRONG; bad=1; fi
   printf '%-34s %-6s %-6s %-6s %s\n' "$1" "$2" "$status" "$result" "$(sed -n 's/^live.sh: //p' "$work/out" | head -n 1)"
   [ "$result" = ok ] || sed 's/^/    /' "$work/out"
@@ -361,6 +380,14 @@ printf '\n%-34s %-6s %-6s %-6s %s\n' 'LIVE CASE' WANT GOT RESULT WHY
 # Nothing served: inert, with or without a key.
 checklive 'domain serves nothing (all 404)' 10 "$url/nowhere" "$work/repo.asc"
 checklive 'serves nothing, no key' 10 "$url/nowhere" "$work/missing.asc"
+# A clean 404 is acceptable only before the first release that publishes the repositories (0.5.1 is the
+# last one without), or inside the grace period after a newer one.
+LIVE_RELEASE=0.5.1 LIVE_AGE=5000 checklive 'all 404, latest release 0.5.1' 10 "$url/nowhere" "$work/repo.asc"
+LIVE_RELEASE=0.5.2 LIVE_AGE=100 checklive 'all 404, newer, past the grace' 1 "$url/nowhere" "$work/repo.asc" 'newer than 0.5.1'
+LIVE_RELEASE=0.5.2 LIVE_AGE=5 checklive 'all 404, newer, inside the grace' 10 "$url/nowhere" "$work/repo.asc" 'only 5 hours old'
+LIVE_RELEASE=0.10.0 LIVE_AGE=48 checklive 'all 404, 0.10.0, exactly at the grace' 1 "$url/nowhere" "$work/repo.asc"
+LIVE_RELEASE=0.5.2 LIVE_AGE=100 checklive 'newer release, index served' 0 "$url/fresh" "$work/repo.asc"
+LIVE_RELEASE=v0.5.2 checklive 'latest release not a version' 1 "$url/nowhere" "$work/repo.asc" 'not a version'
 # An index is served.
 checklive 'live repo, key present' 0 "$url/fresh" "$work/repo.asc"
 checklive 'live repo, key missing' 1 "$url/fresh" "$work/missing.asc" 'the repositories are live but the public key'

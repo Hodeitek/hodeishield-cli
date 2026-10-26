@@ -3,7 +3,9 @@
 
 use crate::error::Error;
 use reqwest::StatusCode;
-use reqwest::header::{ACCEPT, AUTHORIZATION, HeaderMap, HeaderValue};
+use reqwest::header::{
+    ACCEPT, AUTHORIZATION, CONTENT_DISPOSITION, CONTENT_TYPE, HeaderMap, HeaderValue,
+};
 use secrecy::{ExposeSecret, SecretString};
 use serde::de::DeserializeOwned;
 use std::collections::hash_map::RandomState;
@@ -34,6 +36,14 @@ pub struct Operation {
     /// open: the server may accept a value that is not listed, so use this to help and to warn,
     /// never to refuse. Read it through [`Operation::known_values`].
     pub known_values: &'static [(&'static str, &'static [&'static str])],
+    /// The values the document marks as deprecated for a query parameter
+    /// (`x-hs-deprecated-values`), only for the parameters that have some. The server still
+    /// accepts them until their sunset date. Read it through [`Operation::deprecated_values`].
+    pub deprecated_values: &'static [DeprecatedValues],
+    /// Whether a client built for one client tenant selects that tenant on this operation and
+    /// checks the answer's confirmation. True for the data operations, false for the portfolio
+    /// listing, which is never scoped.
+    pub tenant_scoped: bool,
 }
 
 impl Operation {
@@ -46,6 +56,25 @@ impl Operation {
             .find(|(name, _)| *name == param)
             .map(|(_, values)| *values)
     }
+
+    /// The deprecated values the document lists for the query parameter `param`, or `None` when
+    /// it lists none.
+    #[must_use]
+    pub fn deprecated_values(&self, param: &str) -> Option<&'static DeprecatedValues> {
+        self.deprecated_values.iter().find(|d| d.param == param)
+    }
+}
+
+/// Values of a query parameter that the API still accepts but has deprecated, as the document
+/// lists them (`x-hs-deprecated-values` and `x-hs-deprecated-values-sunset`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeprecatedValues {
+    /// The query parameter, e.g. `severity`.
+    pub param: &'static str,
+    /// The deprecated values, in document order.
+    pub values: &'static [&'static str],
+    /// The last day the API accepts them (`YYYY-MM-DD`), when the document gives one.
+    pub sunset: Option<&'static str>,
 }
 
 /// A successful answer: the typed body, the body exactly as received (for `--json`, so fields this
@@ -56,6 +85,21 @@ pub struct ApiResponse<T> {
     pub data: T,
     /// The body as received.
     pub raw: serde_json::Value,
+    /// Status, request id and rate-limit headers.
+    pub meta: ResponseMeta,
+}
+
+/// A successful answer of an operation whose body is a file (`format: binary`), such as a report
+/// download.
+#[derive(Debug, Clone)]
+pub struct Download {
+    /// The file, exactly as received.
+    pub bytes: Vec<u8>,
+    /// `Content-Type`, as sent.
+    pub content_type: Option<String>,
+    /// The `filename` of `Content-Disposition`, as sent. It comes from the server: a caller that
+    /// writes the file must reduce it to a plain file name of its own choosing.
+    pub file_name: Option<String>,
     /// Status, request id and rate-limit headers.
     pub meta: ResponseMeta,
 }
@@ -134,12 +178,7 @@ fn tenant_header(headers: &HeaderMap) -> Option<String> {
     if values.next().is_some() {
         return None;
     }
-    let canonical = value.len() == 36
-        && value.bytes().enumerate().all(|(i, b)| match i {
-            8 | 13 | 18 | 23 => b == b'-',
-            _ => b.is_ascii_hexdigit(),
-        });
-    canonical.then(|| value.to_ascii_lowercase())
+    crate::portfolio::is_uuid(value).then(|| value.to_ascii_lowercase())
 }
 
 /// What the client reports about each request it sends, for `--verbose`. It carries no header and
@@ -175,6 +214,15 @@ pub struct RetryEvent<'a> {
 type Observer = Arc<dyn Fn(&RequestEvent<'_>) + Send + Sync>;
 type RetryObserver = Arc<dyn Fn(&RetryEvent<'_>) + Send + Sync>;
 type Renew = Arc<dyn Fn() -> Option<SecretString> + Send + Sync>;
+type AnswerCheck = Arc<dyn Fn(&HeaderMap) -> Result<(), Error> + Send + Sync>;
+
+/// Extra headers a client sends on data requests, and the check its successful answers must pass.
+/// The portfolio module fills it in; this file knows nothing about what the headers mean.
+#[derive(Clone, Default)]
+pub(crate) struct Scope {
+    pub(crate) headers: HeaderMap,
+    pub(crate) check: Option<AnswerCheck>,
+}
 
 /// Builds a [`Client`].
 pub struct ClientBuilder {
@@ -189,6 +237,7 @@ pub struct ClientBuilder {
     observer: Option<Observer>,
     retry_observer: Option<RetryObserver>,
     renew: Option<Renew>,
+    pub(crate) scope: Scope,
 }
 
 impl fmt::Debug for ClientBuilder {
@@ -308,6 +357,7 @@ impl ClientBuilder {
             observer: self.observer,
             retry_observer: self.retry_observer,
             renew: self.renew,
+            scope: self.scope,
         })
     }
 }
@@ -325,6 +375,7 @@ pub struct Client {
     observer: Option<Observer>,
     retry_observer: Option<RetryObserver>,
     renew: Option<Renew>,
+    scope: Scope,
 }
 
 impl fmt::Debug for Client {
@@ -361,6 +412,7 @@ impl Client {
             observer: None,
             retry_observer: None,
             renew: None,
+            scope: Scope::default(),
         }
     }
 
@@ -409,24 +461,84 @@ impl Client {
         std::thread::sleep(wait);
     }
 
+    /// A GET whose answer is JSON, decoded into `T`.
     pub(crate) fn get<T: DeserializeOwned>(
         &self,
         operation: &'static Operation,
         path: String,
         query: Vec<(&'static str, String)>,
     ) -> Result<ApiResponse<T>, Error> {
-        let url = self.url(&path, &query);
+        let (meta, _, body) = self.fetch(operation, &path, &query, None, MAX_RESPONSE_BYTES)?;
+        let raw: serde_json::Value =
+            serde_json::from_slice(&body).map_err(|source| Error::Decode {
+                operation: operation.id,
+                source,
+            })?;
+        let data = T::deserialize(&raw).map_err(|source| Error::Decode {
+            operation: operation.id,
+            source,
+        })?;
+        Ok(ApiResponse { data, raw, meta })
+    }
+
+    /// A GET whose answer is a file. `accept` lists the media types the document declares (an
+    /// error still comes back as JSON).
+    pub(crate) fn get_binary(
+        &self,
+        operation: &'static Operation,
+        path: String,
+        query: Vec<(&'static str, String)>,
+        accept: &'static str,
+    ) -> Result<Download, Error> {
+        let (meta, headers, bytes) =
+            self.fetch(operation, &path, &query, Some(accept), MAX_DOWNLOAD_BYTES)?;
+        let text = |name| {
+            headers
+                .get(name)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_owned)
+        };
+        Ok(Download {
+            bytes,
+            content_type: text(CONTENT_TYPE),
+            file_name: text(CONTENT_DISPOSITION)
+                .as_deref()
+                .and_then(content_disposition_file_name),
+            meta,
+        })
+    }
+
+    /// Sends a GET, with the retries, the credential renewal and the tenant check, and returns a
+    /// successful answer's metadata, headers and body (at most `limit` bytes; the body of an error is
+    /// read up to [`MAX_RESPONSE_BYTES`] whatever `limit` is). The operation decides
+    /// whether the client's tenant selection applies: scope headers are sent and checked only when
+    /// `operation.tenant_scoped`.
+    fn fetch(
+        &self,
+        operation: &'static Operation,
+        path: &str,
+        query: &[(&'static str, String)],
+        accept: Option<&'static str>,
+        limit: u64,
+    ) -> Result<(ResponseMeta, HeaderMap, Vec<u8>), Error> {
+        let scoped = operation.tenant_scoped;
+        let url = self.url(path, query);
         let mut rate_limit_retries = 0;
         let mut transient_retries = 0;
         let mut renewed = false;
         loop {
             let started = Instant::now();
-            let response = match self
+            let mut request = self
                 .http
                 .get(url.clone())
-                .header(AUTHORIZATION, self.authorization()?)
-                .send()
-            {
+                .header(AUTHORIZATION, self.authorization()?);
+            if scoped {
+                request = request.headers(self.scope.headers.clone());
+            }
+            if let Some(accept) = accept {
+                request = request.header(ACCEPT, accept);
+            }
+            let response = match request.send() {
                 Ok(response) => response,
                 Err(e)
                     if (e.is_connect() || e.is_timeout())
@@ -455,18 +567,21 @@ impl Client {
                     elapsed: started.elapsed(),
                 });
             }
-            let body = read_body(response, MAX_RESPONSE_BYTES).map_err(Error::Body)?;
+            // A scoped answer that does not carry the scope that was asked for is never decoded.
+            let verdict = match (&self.scope.check, scoped, status.is_success()) {
+                (Some(check), true, true) => check(response.headers()),
+                _ => Ok(()),
+            };
+            let headers = response.headers().clone();
+            let limit = if status.is_success() {
+                limit
+            } else {
+                MAX_RESPONSE_BYTES
+            };
+            let body = read_body(response, limit).map_err(Error::Body)?;
             if status.is_success() {
-                let raw: serde_json::Value =
-                    serde_json::from_slice(&body).map_err(|source| Error::Decode {
-                        operation: operation.id,
-                        source,
-                    })?;
-                let data = T::deserialize(&raw).map_err(|source| Error::Decode {
-                    operation: operation.id,
-                    source,
-                })?;
-                return Ok(ApiResponse { data, raw, meta });
+                verdict?;
+                return Ok((meta, headers, body));
             }
 
             if status == StatusCode::TOO_MANY_REQUESTS
@@ -542,6 +657,27 @@ fn backoff(base: Duration, retry: u32) -> Duration {
 /// Largest answer body this client reads: far above any `/v1` page, well below what would strain
 /// memory.
 pub const MAX_RESPONSE_BYTES: u64 = 8 * 1024 * 1024;
+
+/// Largest file this client downloads: the limit the document sets for a report file (20 MiB; a
+/// larger one is refused by the server with `FILE_TOO_LARGE`).
+pub const MAX_DOWNLOAD_BYTES: u64 = 20 * 1024 * 1024;
+
+/// The `filename` parameter of a `Content-Disposition` value (`attachment; filename="a.pdf"`),
+/// quoted or not, or `None` when there is none or it is empty.
+fn content_disposition_file_name(value: &str) -> Option<String> {
+    value.split(';').skip(1).find_map(|part| {
+        let (key, raw) = part.split_once('=')?;
+        if !key.trim().eq_ignore_ascii_case("filename") {
+            return None;
+        }
+        let raw = raw.trim();
+        let name = raw
+            .strip_prefix('"')
+            .and_then(|r| r.strip_suffix('"'))
+            .unwrap_or(raw);
+        (!name.is_empty()).then(|| name.to_owned())
+    })
+}
 
 /// Reads the body of `response`, failing once it is larger than `limit` bytes instead of buffering
 /// the rest.
@@ -637,12 +773,22 @@ mod tests {
             summary: "List things",
             scopes: &[],
             known_values: &[("severity", &["critical", "high"])],
+            deprecated_values: &[DeprecatedValues {
+                param: "severity",
+                values: &["alto"],
+                sunset: Some("2027-01-14"),
+            }],
+            tenant_scoped: true,
         };
         assert_eq!(
             operation.known_values("severity"),
             Some(&["critical", "high"][..])
         );
         assert_eq!(operation.known_values("page"), None);
+        let deprecated = operation.deprecated_values("severity").expect("listed");
+        assert_eq!(deprecated.values, &["alto"]);
+        assert_eq!(deprecated.sunset, Some("2027-01-14"));
+        assert_eq!(operation.deprecated_values("page"), None);
     }
 
     fn client(base: &str) -> Client {

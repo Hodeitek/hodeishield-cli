@@ -24,12 +24,14 @@
 
 mod client;
 mod error;
+pub mod portfolio;
 #[allow(missing_docs)]
 #[path = "generated.rs"]
 pub mod v1;
 
 pub use client::{
-    ApiResponse, Client, ClientBuilder, MAX_RESPONSE_BYTES, Operation, RateLimit, RequestEvent,
-    ResponseMeta, RetryEvent, encode_path_segment, is_loopback_host, read_body,
+    ApiResponse, Client, ClientBuilder, DeprecatedValues, Download, MAX_DOWNLOAD_BYTES,
+    MAX_RESPONSE_BYTES, Operation, RateLimit, RequestEvent, ResponseMeta, RetryEvent,
+    encode_path_segment, is_loopback_host, read_body,
 };
 pub use error::{ApiError, ApiErrorBody, Error, ParseEnumError};

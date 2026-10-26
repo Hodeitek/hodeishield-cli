@@ -2,33 +2,47 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 Hodeitek S.L.
 #
-# Proves the README's "Networking: proxies and TLS inspection" claims on Linux, end to end, with a
-# real TLS-inspecting proxy (mitmproxy) and a fake API, all on this machine:
+# Proves the README's "Networking: proxies and TLS inspection" claims on Linux, macOS and Windows,
+# end to end, with a real TLS-inspecting proxy (mitmproxy) and a fake API, all on this machine:
 #
 #   1. HTTPS_PROXY set, proxy CA not trusted       -> exit 7, "error: Could not reach the API:", certificate
 #   2. proxy CA in the system store                -> works, and the proxy saw the request
-#   3. proxy CA only in SSL_CERT_FILE              -> works
+#   3. proxy CA only in SSL_CERT_FILE              -> works on Linux; no effect on macOS and
+#                                                     Windows (same failure as case 1)
 #   4. NO_PROXY covers the host                    -> the proxy is not used
 #   5. lower-case https_proxy                      -> works like HTTPS_PROXY
 #   6. --verbose                                   -> the request line goes to stderr only
 #
-# The API is reached as api.test:8443, mapped to 127.0.0.1 in /etc/hosts, because the CLI never uses
+# The API is reached as api.test:8443, mapped to 127.0.0.1 in the hosts file, because the CLI never uses
 # a proxy for a loopback URL. The fake API's certificate comes from one throwaway CA that only the
 # proxy trusts; the proxy re-signs with another throwaway CA, the one the CLI must trust.
 #
-# This is meant to run in CI (GitHub Actions): it edits /etc/hosts and the system certificate store,
-# and case 1 is a deliberate failure. It refuses to run elsewhere.
+# The CA goes into the system store the way an administrator would do it: update-ca-certificates
+# on Linux, `security add-trusted-cert` on macOS, Import-Certificate on Windows. On macOS and
+# Windows the fake API's CA goes there too (case 4), since SSL_CERT_FILE is not read there.
+#
+# This is meant to run in CI (GitHub Actions): it edits the hosts file and the system certificate
+# store, and case 1 is a deliberate failure. It refuses to run elsewhere. On Windows it runs in Git
+# Bash, as an administrator.
 #
 # Usage: proxy-tls-test.sh PATH_TO_HODEISHIELD PATH_TO_MITMPROXY_DIR
 set -euo pipefail
 
 if [ "${GITHUB_ACTIONS:-}" != "true" ]; then
-  echo "proxy-tls-test.sh edits /etc/hosts and the system certificate store: it only runs in GitHub Actions." >&2
+  echo "proxy-tls-test.sh edits the hosts file and the system certificate store: it only runs in GitHub Actions." >&2
   exit 2
 fi
+export MSYS_NO_PATHCONV=1 # Git Bash on Windows: keep arguments such as -subj /CN=... as they are
+case "$(uname -s)" in
+  Linux) OS=linux ;;
+  Darwin) OS=macos ;;
+  MINGW* | MSYS* | CYGWIN*) OS=windows ;;
+  *) echo "unsupported system: $(uname -s)" >&2; exit 2 ;;
+esac
 BIN=$(realpath "${1:?usage: proxy-tls-test.sh HODEISHIELD MITMPROXY_DIR}")
 MITM=$(realpath "${2:?usage: proxy-tls-test.sh HODEISHIELD MITMPROXY_DIR}")
 SCRIPTS=$(cd "$(dirname "$0")" && pwd)
+if [ "$OS" = windows ]; then SCRIPTS=$(cygpath -m "$SCRIPTS"); fi # handed to python.exe
 
 HOST=api.test
 API_PORT=8443
@@ -37,11 +51,12 @@ API_URL="https://$HOST:$API_PORT"
 REQ_RE="GET https://$HOST:$API_PORT/v1/vendors"
 
 WORK=$(mktemp -d)
+if [ "$OS" = windows ]; then WORK=$(cygpath -m "$WORK"); fi # C:/... form, understood by native programs
 PIDS=()
 # shellcheck disable=SC2329  # invoked by the EXIT trap
 cleanup() {
-  for pid in "${PIDS[@]}"; do kill "$pid" 2> /dev/null || true; done
-  rm -rf "$WORK"
+  for pid in ${PIDS[@]+"${PIDS[@]}"}; do kill "$pid" 2> /dev/null || true; done
+  rm -rf "$WORK" || true # on Windows a file can still be open for a moment
 }
 trap cleanup EXIT
 
@@ -56,19 +71,47 @@ make_ca proxy    # the "corporate" CA the proxy re-signs with; what the CLI must
 
 openssl req -newkey rsa:2048 -nodes -subj "/CN=$HOST" \
   -keyout "$WORK/api.key" -out "$WORK/api.csr" 2> /dev/null
+# A file, not <(...): a native openssl.exe on Windows cannot open /dev/fd paths.
+printf 'subjectAltName=DNS:%s\nbasicConstraints=CA:FALSE\n' "$HOST" > "$WORK/api.ext"
 openssl x509 -req -in "$WORK/api.csr" -CA "$WORK/upstream-ca.crt" -CAkey "$WORK/upstream-ca.key" \
-  -CAcreateserial -days 2 -out "$WORK/api.crt" \
-  -extfile <(printf 'subjectAltName=DNS:%s\nbasicConstraints=CA:FALSE\n' "$HOST") 2> /dev/null
+  -CAcreateserial -days 2 -out "$WORK/api.crt" -extfile "$WORK/api.ext" 2> /dev/null
 
 mkdir "$WORK/confdir"
 cat "$WORK/proxy-ca.key" "$WORK/proxy-ca.crt" > "$WORK/confdir/mitmproxy-ca.pem"
 cp "$WORK/proxy-ca.crt" "$WORK/confdir/mitmproxy-ca-cert.pem"
 
 # --- Name, fake API, proxy --------------------------------------------------------------------
-echo "127.0.0.1 $HOST" | sudo tee -a /etc/hosts > /dev/null
+SUDO=sudo
+HOSTS_FILE=/etc/hosts
+PY=python3
+if [ "$OS" = windows ]; then
+  SUDO= # the runner account is already an administrator
+  HOSTS_FILE=/c/Windows/System32/drivers/etc/hosts
+  PY=python
+fi
+echo "127.0.0.1 $HOST" | $SUDO tee -a "$HOSTS_FILE" > /dev/null
+if [ "$OS" = macos ]; then sudo dscacheutil -flushcache; fi
+if [ "$OS" = windows ]; then ipconfig /flushdns > /dev/null; fi
+
+# Puts a CA certificate (PEM) into the system store, the way an administrator would.
+trust_ca() {
+  case "$OS" in
+    linux)
+      sudo cp "$1" "/usr/local/share/ca-certificates/hodeishield-test-$2.crt"
+      sudo update-ca-certificates > /dev/null
+      ;;
+    macos)
+      sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain "$1"
+      ;;
+    windows)
+      powershell.exe -NoProfile -Command \
+        "Import-Certificate -FilePath '$1' -CertStoreLocation Cert:\\LocalMachine\\Root | Out-Null"
+      ;;
+  esac
+}
 
 : > "$WORK/api.log"
-python3 -I "$SCRIPTS/proxy-tls-fake-api.py" "$WORK/api.crt" "$WORK/api.key" "$API_PORT" "$WORK/api.log" &
+"$PY" -I "$SCRIPTS/proxy-tls-fake-api.py" "$WORK/api.crt" "$WORK/api.key" "$API_PORT" "$WORK/api.log" &
 PIDS+=($!)
 
 PYTHONUNBUFFERED=1 "$MITM/mitmdump" --set "confdir=$WORK/confdir" \
@@ -148,16 +191,23 @@ else
 fi
 
 # --- Case 3: the proxy's CA only in SSL_CERT_FILE (run before it enters the system store) -----
-p0=$(proxy_seen)
+# Linux reads the variable; macOS and Windows use the system store only (README), so there it
+# must fail like case 1.
+p0=$(proxy_seen) a0=$(api_seen)
 cli HTTPS_PROXY="$PROXY" SSL_CERT_FILE="$WORK/proxy-ca.crt" -- vendors list --json
-if works && wait_proxy_above "$p0"; then
-  record 3 "proxy CA only in SSL_CERT_FILE: works through the proxy" PASS "exit $rc"
+if [ "$OS" = linux ]; then
+  desc="proxy CA only in SSL_CERT_FILE: works through the proxy"
+  if works && wait_proxy_above "$p0"; then ok=1; else ok=0; fi
 else
-  record 3 "proxy CA only in SSL_CERT_FILE: works through the proxy" FAIL "exit $rc"
-  show_failure 3
+  desc="proxy CA only in SSL_CERT_FILE: no effect here, exit 7, certificate error"
+  sleep 1
+  if [ "$rc" -eq 7 ] && [[ "$(cat "$WORK/err")" == "error: Could not reach the API:"* ]] \
+    && [ "$(proxy_seen)" -eq "$p0" ] && [ "$(api_seen)" -eq "$a0" ]; then ok=1; else ok=0; fi
 fi
+if [ "$ok" -eq 1 ]; then record 3 "$desc" PASS "exit $rc"; else record 3 "$desc" FAIL "exit $rc"; show_failure 3; fi
 
 # --- Case 4: NO_PROXY covers the host: direct, the proxy never sees it ------------------------
+if [ "$OS" != linux ]; then trust_ca "$WORK/upstream-ca.crt" upstream; fi
 p0=$(proxy_seen) a0=$(api_seen)
 cli HTTPS_PROXY="$PROXY" NO_PROXY="$HOST" SSL_CERT_FILE="$WORK/upstream-ca.crt" -- vendors list --json
 sleep 1
@@ -169,8 +219,7 @@ else
 fi
 
 # --- Case 2: the proxy's CA in the system store ------------------------------------------------
-sudo cp "$WORK/proxy-ca.crt" /usr/local/share/ca-certificates/hodeishield-test-proxy-ca.crt
-sudo update-ca-certificates > /dev/null
+trust_ca "$WORK/proxy-ca.crt" proxy
 p0=$(proxy_seen)
 cli HTTPS_PROXY="$PROXY" -- vendors list --json
 if works && wait_proxy_above "$p0"; then
