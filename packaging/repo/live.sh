@@ -16,6 +16,9 @@
 #   FRESHNESS_ALLOW_HTTP  1 allows a plain http base URL, which is only for testing against a local server
 #   FRESHNESS_RETRIES     retries of a failed request (default 3)
 #
+# Time bound: no retry starts once 40 s have passed since the first attempt of a request, and an attempt
+# lasts at most 20 s, so a request takes at most 60 s and the three of them 180 s.
+#
 # Exit status: 0 when an index is served and the key is present and readable (run freshness.sh);
 # 10 when every entry point answers with a clean 404 (not live yet: nothing to check); 1 for anything
 # else. Failing closed: only a plain HTTP 404 means "not there". A DNS or TLS failure, a timeout, a 403,
@@ -48,8 +51,8 @@ served=0
 missing=0
 for path in apt/dists/stable/InRelease rpm/x86_64/repodata/repomd.xml rpm/aarch64/repodata/repomd.xml; do
   # No --fail: the status itself is the answer. Redirects are not followed, so one is not a 404.
-  code=$(curl --silent --show-error --proto "$proto" --connect-timeout 10 --max-time 60 \
-    --retry "$retries" --retry-delay 2 \
+  code=$(curl --silent --show-error --proto "$proto" --connect-timeout 10 --max-time 20 \
+    --retry "$retries" --retry-delay 2 --retry-max-time 40 \
     --header 'Cache-Control: no-cache' --header 'Pragma: no-cache' \
     --output /dev/null --write-out '%{http_code}' "$base/$path?nocache=$stamp") ||
     die "cannot reach $base/$path"
