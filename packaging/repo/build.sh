@@ -50,6 +50,8 @@ die() {
   exit 1
 }
 
+[ -n "$primary" ] || die "cannot read the fingerprint of the public key $PUBLIC_KEY"
+
 # Copies a new package into place, refusing to change a package that is already published.
 place() {
   src=$1 dest=$2
