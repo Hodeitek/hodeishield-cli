@@ -158,7 +158,7 @@ gpg --show-keys --with-fingerprint hodeishield.asc     # shows the fingerprint a
 [ "$(gpg --show-keys --with-colons hodeishield.asc | awk -F: '$1=="pub"{n++} $1=="fpr"&&!f{f=$10} END{if(n==1)print f}')" = AA2AF21285A9AB990833908935D5F94171C1CD0B ] \
   && sudo install -m 0644 hodeishield.asc /etc/pki/rpm-gpg/RPM-GPG-KEY-hodeishield \
   && rm hodeishield.asc \
-  && sudo tee /etc/yum.repos.d/hodeishield.repo > /dev/null || { echo "STOP: the file is not the one key with the fingerprint above, or an install step failed"; rm -f hodeishield.asc; } << 'REPO'
+  && sudo tee /etc/yum.repos.d/hodeishield.repo > /dev/null << 'REPO' || { echo "STOP: the file is not the one key with the fingerprint above, or an install step failed"; rm -f hodeishield.asc; }
 [hodeishield]
 name=HodeiShield CLI
 baseurl=https://packages.hodeishield.com/rpm/$basearch
