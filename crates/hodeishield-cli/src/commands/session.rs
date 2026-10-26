@@ -1020,9 +1020,23 @@ mod tests {
 
     #[test]
     fn whoami_uses_the_id_when_the_api_gives_no_name_or_email() {
-        // Off the contract (`email` is required), so it is read from the raw body, not the typed one.
+        // `email` is optional in the contract (absent without the `email` scope); `name` may be null.
         let user = MeUser::from_raw(&json!({"id": "u-1", "name": null})).expect("a user");
         assert_eq!(user.label().as_deref(), Some("u-1"));
+    }
+
+    #[test]
+    fn whoami_renders_a_user_with_no_email_key() {
+        let (text, printed) = whoami_of_a_sign_in(Some(r#"{"id":"u-1","name":"Ana"}"#), None);
+        assert!(text.contains("User        Ana\n"), "{text}");
+        assert!(
+            !text.contains("User        \n") && !text.contains('<'),
+            "{text}"
+        );
+        assert_eq!(printed["user"], "Ana");
+        let (text, printed) = whoami_of_a_sign_in(Some(r#"{"id":"u-1"}"#), None);
+        assert!(text.contains("User        u-1\n"), "{text}");
+        assert_eq!(printed["user"], "u-1");
     }
 
     #[test]
