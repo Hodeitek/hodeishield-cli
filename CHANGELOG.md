@@ -6,6 +6,8 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-26
+
 ### Added
 
 - Signed APT and DNF repositories at `packages.hodeishield.com` for x86_64 and arm64, so `apt` and
@@ -13,13 +15,6 @@ commands, `--json` output and exit codes. Each release's notes start with its se
   Fedora, RHEL, Rocky Linux and AlmaLinux, with the signing key's fingerprint. It is the only place
   that states the fingerprint and the repository configuration: check the key against it.
   ([#161](https://github.com/Hodeitek/hodeishield-cli/issues/161))
-
-### Security
-
-- ctutils is updated from 0.4.3 to 0.4.4 and tokio from 1.53.2 to 1.53.3. They fix RUSTSEC-2026-0385
-  (ctutils mask generation and `u128` comparisons were not constant-time on some platforms) and
-  RUSTSEC-2026-0386 (`AsyncFd::new` and related constructors in tokio violate I/O safety). The CLI
-  does not call either affected API directly; both crates are dependencies of its dependencies.
 
 ### Changed
 
@@ -40,6 +35,13 @@ commands, `--json` output and exit codes. Each release's notes start with its se
   now treats as optional. When they are missing, `--all` stops at a page with a null `next_cursor`
   or fewer alerts than the page size, and the `Page N of M` line is not printed.
   ([#210](https://github.com/Hodeitek/hodeishield-cli/issues/210))
+
+### Security
+
+- ctutils is updated from 0.4.3 to 0.4.4 and tokio from 1.53.2 to 1.53.3. They fix RUSTSEC-2026-0385
+  (ctutils mask generation and `u128` comparisons were not constant-time on some platforms) and
+  RUSTSEC-2026-0386 (`AsyncFd::new` and related constructors in tokio violate I/O safety). The CLI
+  does not call either affected API directly; both crates are dependencies of its dependencies.
 
 ## [0.5.1] - 2026-10-18
 
@@ -460,7 +462,8 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 - Profiles (`config`), shell completions, and release archives for Linux, macOS and Windows signed
   with Sigstore and with SLSA provenance.
 
-[Unreleased]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.4.4...v0.5.0
 [0.4.4]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.4.3...v0.4.4
