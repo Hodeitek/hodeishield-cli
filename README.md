@@ -61,7 +61,7 @@ Windows blocks the downloaded binary, see
 | Windows x86_64 | `hodeishield-<version>-x86_64-pc-windows-msvc.zip` |
 | Windows arm64 | `hodeishield-<version>-aarch64-pc-windows-msvc.zip` (from 0.4.0) |
 
-`<version>` has no leading `v`: release `v0.5.1` ships `hodeishield-0.5.1-…`. The Linux binaries are
+`<version>` has no leading `v`: release `v0.6.0` ships `hodeishield-0.6.0-…`. The Linux binaries are
 statically linked and run on any distribution. Homebrew and Scoop packages (next section) and a
 [container image](#container-image) are also available.
 
@@ -76,7 +76,7 @@ neither is part of a distribution's default install.
 From source, with the Rust toolchain installed (pin the release tag you want):
 
 ```sh
-cargo install --locked --git https://github.com/Hodeitek/hodeishield-cli --tag v0.5.1 hodeishield-cli
+cargo install --locked --git https://github.com/Hodeitek/hodeishield-cli --tag v0.6.0 hodeishield-cli
 ```
 
 ### Homebrew and Scoop
@@ -110,19 +110,120 @@ repository; it is not available yet.
 
 ### Debian, Ubuntu, Fedora, RHEL and other Linux distributions
 
-From 0.3.0, each release also publishes `.deb` and `.rpm` packages for x86_64 and arm64. They install `/usr/bin/hodeishield`, the man pages and the bash, zsh and fish completions.
-From 0.4.2 they also install the [user information](docs/user-information.md) in
-`/usr/share/doc/hodeishield/USER-INFORMATION.md`.
-Verify the package as in the next section (it has its own `.sigstore.json` and is listed in
-`SHA256SUMS`), then:
+Signed APT and DNF repositories at `packages.hodeishield.com` provide `.deb` and `.rpm` packages for
+x86_64 and arm64, and your system's normal upgrades keep the CLI current. The packages install
+`/usr/bin/hodeishield`, the man pages and the bash, zsh and fish completions, and from 0.4.2 the
+[user information](docs/user-information.md) in `/usr/share/doc/hodeishield/USER-INFORMATION.md`.
+
+The repositories are signed with this key (RSA 4096); check its fingerprint before trusting it:
+
+```text
+AA2A F212 85A9 AB99 0833  9089 35D5 F941 71C1 CD0B
+```
+
+The commands below check that the downloaded file holds exactly one key and that its fingerprint is this
+one. Reading the fingerprint is not enough: a file can hold the real key and a second one, and the
+second would then be trusted as well. Each command below runs the check first and goes on to install
+the key, and to write the repository source, only when it passes; otherwise it prints `STOP` and
+deletes the file. The check needs `gpg` (`sudo apt-get install gnupg` on a minimal Debian or Ubuntu
+image).
+
+#### Debian, Ubuntu (APT)
+
+```sh
+sudo install -d -m 0755 /etc/apt/keyrings
+curl -fsSL https://packages.hodeishield.com/gpg.key -o hodeishield.asc
+gpg --show-keys --with-fingerprint hodeishield.asc     # shows the fingerprint above
+[ "$(gpg --show-keys --with-colons hodeishield.asc | awk -F: '$1=="pub"{n++} $1=="fpr"&&!f{f=$10} END{if(n==1)print f}')" = AA2AF21285A9AB990833908935D5F94171C1CD0B ] \
+  && sudo install -m 0644 hodeishield.asc /etc/apt/keyrings/hodeishield.asc \
+  && rm hodeishield.asc \
+  && echo "deb [signed-by=/etc/apt/keyrings/hodeishield.asc] https://packages.hodeishield.com/apt stable main" \
+    | sudo tee /etc/apt/sources.list.d/hodeishield.list \
+  || { echo "STOP: the file is not the one key with the fingerprint above, or an install step failed"; rm -f hodeishield.asc; }
+sudo apt update && sudo apt install hodeishield
+```
+
+Do not install the key into `/etc/apt/trusted.gpg.d`: with `signed-by`, it is trusted for this repository
+only. Upgrade with `sudo apt update && sudo apt upgrade` (or `sudo apt install --only-upgrade hodeishield`).
+
+#### Fedora, RHEL, Rocky Linux, AlmaLinux (DNF)
+
+Download the key and check it (it must be exactly one key, with the fingerprint above), then write the repository file below by hand. It turns on
+signature checking of both the packages and the repository metadata (`gpgcheck=1`, `repo_gpgcheck=1`)
+and reads the key from the file you checked:
+
+```sh
+curl -fsSL https://packages.hodeishield.com/gpg.key -o hodeishield.asc
+gpg --show-keys --with-fingerprint hodeishield.asc     # shows the fingerprint above
+[ "$(gpg --show-keys --with-colons hodeishield.asc | awk -F: '$1=="pub"{n++} $1=="fpr"&&!f{f=$10} END{if(n==1)print f}')" = AA2AF21285A9AB990833908935D5F94171C1CD0B ] \
+  && sudo install -m 0644 hodeishield.asc /etc/pki/rpm-gpg/RPM-GPG-KEY-hodeishield \
+  && rm hodeishield.asc \
+  && sudo tee /etc/yum.repos.d/hodeishield.repo > /dev/null || { echo "STOP: the file is not the one key with the fingerprint above, or an install step failed"; rm -f hodeishield.asc; } << 'REPO'
+[hodeishield]
+name=HodeiShield CLI
+baseurl=https://packages.hodeishield.com/rpm/$basearch
+enabled=1
+gpgcheck=1
+repo_gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-hodeishield
+REPO
+sudo dnf install hodeishield
+```
+
+The first time, DNF shows the key and asks to import it: confirm only if the fingerprint is the one above.
+Upgrade with `sudo dnf upgrade hodeishield`. `sudo apt remove hodeishield` or
+`sudo dnf remove hodeishield` uninstalls it.
+
+This README is the only place that states the key's fingerprint and the repository configuration. The
+site `packages.hodeishield.com` serves the packages, the indexes and a copy of the key, and points here
+for the rest.
+
+#### When the repository key is renewed
+
+The signing key has an expiry date and is extended before it passes. The fingerprint stays the same, so
+only your copy of the public key needs refreshing, and it must be refreshed before the old expiry date:
+clients that still hold the old copy reject signatures made after it. If `apt update` or `dnf` reports an
+expired key, or the release notes announce a renewal, run:
+
+```sh
+# Debian, Ubuntu
+curl -fsSL https://packages.hodeishield.com/gpg.key -o hodeishield.asc
+gpg --show-keys --with-fingerprint hodeishield.asc     # shows the fingerprint above
+[ "$(gpg --show-keys --with-colons hodeishield.asc | awk -F: '$1=="pub"{n++} $1=="fpr"&&!f{f=$10} END{if(n==1)print f}')" = AA2AF21285A9AB990833908935D5F94171C1CD0B ] \
+  && sudo install -m 0644 hodeishield.asc /etc/apt/keyrings/hodeishield.asc \
+  && rm hodeishield.asc \
+  || { echo "STOP: the file is not the one key with the fingerprint above, or an install step failed"; rm -f hodeishield.asc; }
+
+# Fedora, RHEL, Rocky Linux, AlmaLinux
+curl -fsSL https://packages.hodeishield.com/gpg.key -o hodeishield.asc
+gpg --show-keys --with-fingerprint hodeishield.asc     # shows the fingerprint above
+[ "$(gpg --show-keys --with-colons hodeishield.asc | awk -F: '$1=="pub"{n++} $1=="fpr"&&!f{f=$10} END{if(n==1)print f}')" = AA2AF21285A9AB990833908935D5F94171C1CD0B ] \
+  && sudo install -m 0644 hodeishield.asc /etc/pki/rpm-gpg/RPM-GPG-KEY-hodeishield \
+  && rm hodeishield.asc \
+  && { rpm -q gpg-pubkey --qf '%{NAME}-%{VERSION}-%{RELEASE} %{PACKAGER}\n' | awk '/HodeiShield Packages </ { print $1 }' | sudo xargs -r rpm -e; } \
+  && sudo rpm --import /etc/pki/rpm-gpg/RPM-GPG-KEY-hodeishield \
+  && sudo dnf clean all \
+  || { echo "STOP: the file is not the one key with the fingerprint above, or an install step failed"; rm -f hodeishield.asc; }
+```
+
+The `rpm -e` line removes the old copy of the key, which rpm would keep otherwise; it does nothing when
+there is none, so the import that follows always runs. The import adds the one you checked. DNF may
+also keep its own copy of the key it uses to check repository metadata (`repo_gpgcheck`); `dnf clean all`
+is harmless, but whether it is enough to refresh that copy has not been verified yet, and a test of this
+renewal on a DNF system is planned. If `dnf` still reports an expired key after these steps, please
+open an issue.
+
+#### A single package file
+
+Each release also attaches the `.deb` and `.rpm` packages (from 0.3.0). Verify the package as in the next
+section (it has its own `.sigstore.json` and is listed in `SHA256SUMS`), then:
 
 ```sh
 sudo apt install ./hodeishield_<version>-1_amd64.deb      # Debian, Ubuntu (arm64: _arm64.deb)
 sudo dnf install ./hodeishield-<version>-1.x86_64.rpm     # Fedora, RHEL (arm64: .aarch64.rpm)
 ```
 
-Upgrading is the same command with the newer package; `sudo apt remove hodeishield` or
-`sudo dnf remove hodeishield` uninstalls it.
+Upgrading is the same command with the newer package.
 
 ### Uninstall an archive or install.sh install
 
@@ -222,7 +323,7 @@ exact version, or better its digest. The image carries no documentation: the
 0.4.2, as `USER-INFORMATION.md` in its archives.
 
 ```sh
-v=0.5.1   # the version you want
+v=0.6.0   # the version you want
 docker pull ghcr.io/hodeitek/hodeishield-cli:$v
 docker run --rm -e HODEISHIELD_API_KEY ghcr.io/hodeitek/hodeishield-cli:$v vendors list
 ```
@@ -236,7 +337,7 @@ The image is signed by digest with cosign (keyless) and carries the release's Cy
 signed attestation. Verify both before you rely on the image:
 
 ```sh
-v=0.5.1
+v=0.6.0
 image=ghcr.io/hodeitek/hodeishield-cli:$v
 cosign verify $image \
   --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/container-image.yml@refs/tags/v$v \
@@ -272,11 +373,11 @@ Each release has a `SHA256SUMS` file, a Sigstore bundle (`*.sigstore.json`) for 
 `SHA256SUMS`, and SLSA provenance (`hodeishield.intoto.jsonl`). In short:
 
 ```sh
-grep hodeishield-0.5.1-x86_64-unknown-linux-musl.tar.gz SHA256SUMS | sha256sum -c -
+grep hodeishield-0.6.0-x86_64-unknown-linux-musl.tar.gz SHA256SUMS | sha256sum -c -
 
-cosign verify-blob hodeishield-0.5.1-x86_64-unknown-linux-musl.tar.gz \
-  --bundle hodeishield-0.5.1-x86_64-unknown-linux-musl.tar.gz.sigstore.json \
-  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.5.1 \
+cosign verify-blob hodeishield-0.6.0-x86_64-unknown-linux-musl.tar.gz \
+  --bundle hodeishield-0.6.0-x86_64-unknown-linux-musl.tar.gz.sigstore.json \
+  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.6.0 \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --certificate-github-workflow-trigger push
 ```
@@ -287,12 +388,12 @@ On Windows, PowerShell has no `sha256sum`: compare the hash of the zip or MSI wi
 fail with a missing-source error), and the same `verify-blob` command works with Windows paths:
 
 ```powershell
-(Get-FileHash .\hodeishield-0.5.1-x86_64-pc-windows-msvc.zip -Algorithm SHA256).Hash.ToLower()
-Select-String hodeishield-0.5.1-x86_64-pc-windows-msvc.zip SHA256SUMS      # the two hashes must match
+(Get-FileHash .\hodeishield-0.6.0-x86_64-pc-windows-msvc.zip -Algorithm SHA256).Hash.ToLower()
+Select-String hodeishield-0.6.0-x86_64-pc-windows-msvc.zip SHA256SUMS      # the two hashes must match
 # the same two lines with .msi for the MSI
-cosign verify-blob .\hodeishield-0.5.1-x86_64-pc-windows-msvc.zip `
-  --bundle .\hodeishield-0.5.1-x86_64-pc-windows-msvc.zip.sigstore.json `
-  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.5.1 `
+cosign verify-blob .\hodeishield-0.6.0-x86_64-pc-windows-msvc.zip `
+  --bundle .\hodeishield-0.6.0-x86_64-pc-windows-msvc.zip.sigstore.json `
+  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.6.0 `
   --certificate-oidc-issuer https://token.actions.githubusercontent.com `
   --certificate-github-workflow-trigger push
 ```
@@ -327,7 +428,7 @@ on the binary, so the block still applies. A download with `curl` does not set i
 place:
 
 ```sh
-curl -LO https://github.com/Hodeitek/hodeishield-cli/releases/download/v0.5.1/hodeishield-0.5.1-universal-apple-darwin.tar.gz
+curl -LO https://github.com/Hodeitek/hodeishield-cli/releases/download/v0.6.0/hodeishield-0.6.0-universal-apple-darwin.tar.gz
 ```
 
 **Windows.** SmartScreen can warn about a signed file that is still new to it, and versions before

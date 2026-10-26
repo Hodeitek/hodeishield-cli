@@ -174,6 +174,25 @@ class TrustRoot(unittest.TestCase):
         self.assertFalse(self.trust.certificate_chains(changed, self.entry["integratedTime"]))
 
 
+class Bundles(unittest.TestCase):
+    SUMS = {"hodeishield-1.0.0-x86_64.tar.gz": "a" * 64, "hodeishield-1.0.0.pkg": "b" * 64}
+
+    def test_the_required_set_ignores_which_bundles_are_attached(self):
+        assets = {"SHA256SUMS", "install.sh", "hodeishield-1.0.0.msi", *self.SUMS}
+        self.assertEqual(ri.must_be_signed(assets, self.SUMS), {"SHA256SUMS", "install.sh", "hodeishield-1.0.0.msi", *self.SUMS})
+
+    def test_negative_a_deleted_bundle_does_not_shrink_the_required_set(self):
+        assets = {"SHA256SUMS", "SHA256SUMS.sigstore.json", *self.SUMS}
+        self.assertEqual(ri.must_be_signed(assets, self.SUMS), {"SHA256SUMS", *self.SUMS})
+
+    def test_a_file_in_sha256sums_is_required_even_if_its_name_matches_no_pattern(self):
+        self.assertIn("other.bin", ri.must_be_signed({"SHA256SUMS"}, {"other.bin": "c" * 64}))
+
+    def test_bundles_and_provenance_are_not_required_to_have_bundles(self):
+        names = {"x.tar.gz.sigstore.json", "multiple.intoto.jsonl"}
+        self.assertEqual(ri.must_be_signed(names, {}), {"SHA256SUMS"})
+
+
 class Parsing(unittest.TestCase):
     def test_sha256sums_in_text_and_binary_mode(self):
         text = "a" * 64 + "  one.tar.gz\n" + "b" * 64 + " *two.zip\n\n"

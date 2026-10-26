@@ -7,9 +7,12 @@ name: Repository freshness
 # files only, uses no secret and no environment, and writes nothing but an issue labelled
 # `repo-freshness`: opened (or commented on) while the check fails, and closed when it passes again.
 #
-# Until packaging/gpg.key is committed (the repositories are not live before that) it does nothing.
-# From then on it fails closed: a download that fails, an unreadable release or a signature that does
-# not verify is a failure, never a pass.
+# It does nothing only while the domain serves no APT or DNF index (every entry point answers a clean
+# 404) and the latest release is not newer than the last one published without the repositories, or is
+# still inside the grace period (packaging/repo/live.sh): a 404 after that is a failure. Once any index is served, packaging/gpg.key must be present
+# or the run fails, so removing the key cannot silence the monitor. From then on it fails closed: a
+# download that fails, an unreadable release or a signature that does not verify is a failure, never
+# a pass (packaging/repo/live.sh decides which of the two applies).
 on:
   schedule:
     - cron: "43 6 * * 1" # Mondays, 06:43 UTC
@@ -46,14 +49,44 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Check the repositories are live
+      # Inert only while no index is served, and only while that is acceptable: a clean 404 is fine
+      # before the first release that publishes the repositories, and during the grace period after a
+      # later one (LAST_RELEASE_WITHOUT_REPOSITORY in packaging/repo/live.sh decides). Any other answer
+      # than a clean 404 (a network error, a 403, a 5xx, a redirect), a 404 that is no longer
+      # acceptable, a latest release that cannot be read or a served index without packaging/gpg.key
+      # fails the run, and the report step below opens or reuses the issue.
+      - name: Check whether the repositories are live
         id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GRACE_HOURS: ${{ inputs.grace_hours || '48' }}
         run: |
-          if [ ! -s packaging/gpg.key ]; then
-            echo "::notice::packaging/gpg.key is not committed yet, so the repositories are not live; nothing to check."
-            exit 0
-          fi
-          echo "active=true" >> "$GITHUB_OUTPUT"
+          rc=0
+          # This subshell is the left side of ||, so set -e does not apply inside it: every command
+          # that can fail says so with its own || exit 1.
+          (
+            sh packaging/repo/keycheck.sh packaging/gpg.key || exit 1
+            [[ "$GRACE_HOURS" =~ ^[0-9]+$ ]] || { echo "live.sh: the grace period is not a number of hours."; exit 1; }
+            release=$(gh release view -R "$GITHUB_REPOSITORY" --json tagName,isDraft,isPrerelease,publishedAt) ||
+              { echo "live.sh: the latest release cannot be read."; exit 1; }
+            tag=$(jq -r .tagName <<< "$release") || { echo "live.sh: the tag of the latest release cannot be read."; exit 1; }
+            [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "live.sh: the tag of the latest release is not a stable version."; exit 1; }
+            published=$(date -d "$(jq -r .publishedAt <<< "$release")" +%s) ||
+              { echo "live.sh: the publication time of the latest release cannot be read."; exit 1; }
+            export FRESHNESS_LATEST_RELEASE=${tag#v}
+            export FRESHNESS_RELEASE_AGE_HOURS=$(( ($(date +%s) - published) / 3600 ))
+            export FRESHNESS_GRACE_HOURS=$GRACE_HOURS
+            sh packaging/repo/live.sh "$BASE_URL" packaging/gpg.key || exit $?
+          ) > "$RUNNER_TEMP/report.txt" 2>&1 || rc=$?
+          cat "$RUNNER_TEMP/report.txt"
+          case $rc in
+            0) echo "active=true" >> "$GITHUB_OUTPUT" ;;
+            10) echo "::notice::The repositories are not live yet and that is still acceptable; nothing to check." ;;
+            *)
+              echo "active=true" >> "$GITHUB_OUTPUT"
+              echo "result=fail" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
 
       # GitHub disables scheduled workflows of a repository without activity for 60 days. A long gap
       # since the previous run is reported with the result, because a monitor that did not run
@@ -89,7 +122,7 @@ jobs:
       # The latest published release (not a draft, not a prerelease) decides what must be served.
       # Anything that cannot be read is a failure. The report is what the issue shows.
       - name: Check the repositories serve the latest release
-        if: steps.gate.outputs.active == 'true'
+        if: steps.gate.outputs.active == 'true' && steps.gate.outputs.result != 'fail'
         id: check
         env:
           GH_TOKEN: ${{ github.token }}
@@ -132,6 +165,10 @@ jobs:
               result=grace
               echo "::warning::The latest release is less than $GRACE_HOURS hours old and the repositories do not serve it yet; not treated as a failure."
               ;;
+            5)
+              result=warn
+              echo "::warning::The repository key, or its signing subkey, expires within 60 days; renew it (CONTRIBUTING.md)."
+              ;;
             *) result=fail ;;
           esac
           echo "result=$result" >> "$GITHUB_OUTPUT"
@@ -140,7 +177,7 @@ jobs:
         if: "!cancelled() && steps.gate.outputs.active == 'true'"
         env:
           GH_TOKEN: ${{ github.token }}
-          RESULT: ${{ steps.check.outputs.result }}
+          RESULT: ${{ steps.gate.outputs.result || steps.check.outputs.result }}
           EXPECTED: ${{ steps.check.outputs.expected }}
           GAP: ${{ steps.gap.outputs.note }}
         run: |
@@ -166,6 +203,29 @@ jobs:
 
           issue=$(gh issue list -R "$GITHUB_REPOSITORY" --label "$LABEL" --state open --json number --jq '.[0].number // empty')
           case ${RESULT:-fail} in
+            warn)
+              {
+                echo "The APT and DNF repositories at $BASE_URL are current, but the repository key or its signing subkey expires within 60 days."
+                echo
+                echo "Renew it before then and publish a release: see \"The repository signing key\" in CONTRIBUTING.md. Clients that still hold the old copy reject signatures made after the expiry."
+                echo
+                echo '```'
+                print_report
+                echo '```'
+                echo
+                echo "Run: $run_url"
+              } > "$RUNNER_TEMP/issue.md"
+              if [ -n "$issue" ]; then
+                gh issue comment "$issue" -R "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/issue.md"
+              else
+                gh label list -R "$GITHUB_REPOSITORY" --search "$LABEL" --json name --jq '.[].name' | grep -qx "$LABEL" ||
+                  gh label create "$LABEL" -R "$GITHUB_REPOSITORY" --color D93F0B \
+                    --description "The APT or DNF repository is not serving the latest release"
+                gh issue create -R "$GITHUB_REPOSITORY" --label "$LABEL" \
+                  --title "The repository signing key expires within 60 days" \
+                  --body-file "$RUNNER_TEMP/issue.md"
+              fi
+              ;;
             pass)
               if [ -n "$issue" ]; then
                 gh issue close "$issue" -R "$GITHUB_REPOSITORY" --reason completed \
@@ -176,7 +236,7 @@ jobs:
               {
                 echo "The APT and DNF repositories at $BASE_URL did not pass the weekly freshness check."
                 echo
-                echo "Expected version: ${EXPECTED:-unknown (the latest release could not be read)}"
+                echo "Expected version: ${EXPECTED:-not determined (the check stopped before reading the latest release)}"
                 echo
                 echo '```'
                 print_report
@@ -199,7 +259,7 @@ jobs:
           esac
 
       - name: Fail if the check failed
-        if: "!cancelled() && steps.gate.outputs.active == 'true' && steps.check.outputs.result != 'pass' && steps.check.outputs.result != 'grace'"
+        if: "!cancelled() && steps.gate.outputs.active == 'true' && steps.check.outputs.result != 'pass' && steps.check.outputs.result != 'grace' && steps.check.outputs.result != 'warn'"
         run: |
           echo "::error::The APT and DNF repositories did not pass the freshness check; see the issue labelled repo-freshness."
           exit 1

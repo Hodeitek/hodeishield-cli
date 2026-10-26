@@ -244,12 +244,14 @@ dnfq="dnf -y --disablerepo=* --enablerepo=hodeishield"
 repo=/etc/yum.repos.d/hodeishield.repo
 key=/etc/pki/rpm-gpg/RPM-GPG-KEY-hodeishield
 # As the README sets DNF up: the key is downloaded to a local file (the user checks its fingerprint
-# against the README) and the .repo file is written by hand, never fetched from the repository.
+# against the README) and the .repo file is the README's, written by hand, never fetched from the
+# repository. /b/hodeishield.repo is that block of the README, taken from it by the harness.
 setup() {
   mkdir -p /etc/pki/rpm-gpg
   curl -fsS "$1/gpg.key" -o "$key" || { echo "SETUP: cannot fetch the key"; exit 90; }
-  printf '%s\n' '[hodeishield]' 'name=HodeiShield CLI' "baseurl=$1/rpm/\$basearch" 'enabled=1' 'gpgcheck=1' \
-    'repo_gpgcheck=1' "gpgkey=file://$key" > "$repo"
+  sed "s#https://packages.hodeishield.com#$1#g" /b/hodeishield.repo > "$repo"
+  grep -qx "gpgkey=file://$key" "$repo" || { echo "SETUP: the README's .repo does not read the local key"; exit 90; }
+  grep -qx 'gpgcheck=1' "$repo" && grep -qx 'repo_gpgcheck=1' "$repo" || { echo "SETUP: signature checks are off"; exit 90; }
 }
 mode=$1
 shift
@@ -291,6 +293,13 @@ refuse)
   ;;
 esac
 EOF
+
+# The DNF configuration as the README states it: the lines between `<< 'REPO'` and `REPO`.
+sed -n "/<< 'REPO'\$/,/^REPO\$/p" "$root/README.md" | sed '1d;$d' > "$work/bin/hodeishield.repo"
+grep -qx '\[hodeishield\]' "$work/bin/hodeishield.repo" || {
+  echo "repo-test.sh: no DNF repository block in README.md" >&2
+  exit 2
+}
 
 # --- Keys ------------------------------------------------------------------------------------------------
 group "Throwaway keys"
@@ -487,15 +496,15 @@ fi
 
 # Another copy of the same key in the bucket (here its binary form; a renewal changes the copy too):
 # publishing goes on and leaves the committed copy there.
-clone rt-v2 rt-p4
+clone rt-v2 rt-p7
 tool sh -c 'gpg --batch --dearmor < /w/pub.asc > /w/pub.gpg'
-put rt-p4 gpg.key "$work/pub.gpg"
-must_publish P4 "another copy of the same key in the bucket" rt-p4 "$pk/v2"
-get rt-p4 gpg.key "$work/t/gpg.key.p4"
-if cmp -s "$work/t/gpg.key.p4" "$work/pub.asc"; then
-  record "P4 the bucket holds the committed key" "committed copy" "committed copy" PASS
+put rt-p7 gpg.key "$work/pub.gpg"
+must_publish P7 "another copy of the same key in the bucket" rt-p7 "$pk/v2"
+get rt-p7 gpg.key "$work/t/gpg.key.p7"
+if cmp -s "$work/t/gpg.key.p7" "$work/pub.asc"; then
+  record "P7 the bucket holds the committed key" "committed copy" "committed copy" PASS
 else
-  record "P4 the bucket holds the committed key" "committed copy" "OTHER CONTENT" FAIL
+  record "P7 the bucket holds the committed key" "committed copy" "OTHER CONTENT" FAIL
 fi
 
 clone rt-v2 rt-ctl

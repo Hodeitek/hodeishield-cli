@@ -19,9 +19,10 @@ use crate::output::{
 use hodeishield_api::Client;
 use hodeishield_api::portfolio::Tenant;
 use hodeishield_api::v1::{
-    Alert, ComplianceControl, DownloadReportParams, Endpoint, Evidence, Format, ListAlertsParams,
-    ListComplianceControlsParams, ListEndpointsParams, ListEvidenceParams, ListReportsParams,
-    ListRisksParams, ListVendorsParams, Pagination, Report, Risk, Vendor, operations,
+    Alert, AlertsPagination, ComplianceControl, DownloadReportParams, Endpoint, Evidence, Format,
+    ListAlertsParams, ListComplianceControlsParams, ListEndpointsParams, ListEvidenceParams,
+    ListReportsParams, ListRisksParams, ListVendorsParams, Pagination, Report, Risk, Vendor,
+    operations,
 };
 use hodeishield_api::{ApiResponse, Error};
 use serde::Serialize;
@@ -44,6 +45,58 @@ const MAX_PAGES: i64 = 1_000;
 /// hundred MiB at most.
 const MAX_ITEMS: usize = 100_000;
 
+/// What the CLI needs from a list's `pagination`. Alerts may omit the page counts (`page`, `total`,
+/// `total_pages`) and report `next_cursor` instead; every other list always sends the counts.
+pub(super) struct PageInfo {
+    pub page: Option<i64>,
+    pub per_page: i64,
+    pub total: Option<i64>,
+    pub total_pages: Option<i64>,
+    pub next_cursor: Option<String>,
+}
+
+impl From<Pagination> for PageInfo {
+    fn from(p: Pagination) -> Self {
+        Self {
+            page: Some(p.page),
+            per_page: p.per_page,
+            total: Some(p.total),
+            total_pages: Some(p.total_pages),
+            next_cursor: None,
+        }
+    }
+}
+
+impl From<AlertsPagination> for PageInfo {
+    fn from(p: AlertsPagination) -> Self {
+        Self {
+            page: p.page,
+            per_page: p.per_page,
+            total: p.total,
+            total_pages: p.total_pages,
+            next_cursor: p.next_cursor,
+        }
+    }
+}
+
+impl PageInfo {
+    /// True when `batch_len` items asked for as page `page` were the last ones. Uses the counts when
+    /// the server sent them; without them, a short page or a null `next_cursor` ends the walk.
+    fn is_last(&self, page: i64, batch_len: usize) -> bool {
+        match (self.total_pages, self.total) {
+            (Some(total_pages), Some(total)) => {
+                page >= total_pages
+                    || self.page != Some(page)
+                    || page.saturating_mul(self.per_page.max(1)) >= total
+            }
+            _ => {
+                self.next_cursor.is_none()
+                    || i64::try_from(batch_len).is_ok_and(|n| n < self.per_page)
+            }
+        }
+    }
+}
+
 /// Prints a list for the selected client, or for every client with `--all-tenants`.
 #[allow(clippy::too_many_arguments)]
 fn list<R, T>(
@@ -54,7 +107,7 @@ fn list<R, T>(
     api: ApiContext<'_>,
     targets: &[Target],
     fetch: &mut FetchFrom<'_, R>,
-    split: fn(R) -> (Vec<T>, Pagination),
+    split: fn(R) -> (Vec<T>, PageInfo),
     render: fn(&[T]) -> Rows,
 ) -> Result<()> {
     if matches!(ctx.selection, Selection::All) {
@@ -82,7 +135,7 @@ pub(super) fn list_one<R, T>(
     noun: &str,
     api: ApiContext<'_>,
     fetch: &mut Fetch<'_, R>,
-    split: fn(R) -> (Vec<T>, Pagination),
+    split: fn(R) -> (Vec<T>, PageInfo),
     render: fn(&[T]) -> Rows,
 ) -> Result<()> {
     if !paging.all {
@@ -101,16 +154,17 @@ pub(super) fn list_one<R, T>(
         } else {
             print_table(out, &render(&items).into_table())?;
         }
-        if pagination.total_pages > 1 {
-            let next = if pagination.page < pagination.total_pages {
-                format!(" Next: --page {}, or --all.", pagination.page + 1)
+        // Without the page counts there is no footer to print: only `--all` knows where it ends.
+        if let (Some(page), Some(total_pages), Some(total)) =
+            (pagination.page, pagination.total_pages, pagination.total)
+            && total_pages > 1
+        {
+            let next = if page < total_pages {
+                format!(" Next: --page {}, or --all.", page + 1)
             } else {
                 String::new()
             };
-            eprintln!(
-                "Page {} of {} ({} {noun}).{next}",
-                pagination.page, pagination.total_pages, pagination.total
-            );
+            eprintln!("Page {page} of {total_pages} ({total} {noun}).{next}");
         }
         return Ok(());
     }
@@ -149,7 +203,7 @@ fn list_across<R, T>(
     api: ApiContext<'_>,
     targets: &[Target],
     fetch: &mut FetchFrom<'_, R>,
-    split: fn(R) -> (Vec<T>, Pagination),
+    split: fn(R) -> (Vec<T>, PageInfo),
     render: fn(&[T]) -> Rows,
 ) -> Result<()> {
     let per_page = paging.per_page.or(Some(200));
@@ -275,7 +329,7 @@ pub(super) fn collect_pages<R, T>(
     per_page: Option<i64>,
     max_items: usize,
     fetch: &mut Fetch<'_, R>,
-    split: fn(R) -> (Vec<T>, Pagination),
+    split: fn(R) -> (Vec<T>, PageInfo),
 ) -> Result<(Vec<Value>, Vec<T>)> {
     let mut raw_items = Vec::new();
     let mut items = Vec::new();
@@ -287,10 +341,7 @@ pub(super) fn collect_pages<R, T>(
         }
         let (mut batch, pagination) = split(response.data);
         // Stop on whichever says "last page" first, and never trust the server to end the walk.
-        let done = batch.is_empty()
-            || page >= pagination.total_pages
-            || pagination.page != page
-            || page.saturating_mul(pagination.per_page.max(1)) >= pagination.total;
+        let done = batch.is_empty() || pagination.is_last(page, batch.len());
         items.append(&mut batch);
         if items.len() > max_items {
             return Err(crate::failure::Failure::general(format!(
@@ -363,7 +414,7 @@ pub fn vendors(ctx: &Context, command: VendorsCommand, out: &mut dyn Write) -> R
                         ..base.clone()
                     })
                 },
-                |r| (r.data, r.pagination),
+                |r| (r.data, r.pagination.into()),
                 vendor_table,
             )
         }
@@ -427,7 +478,7 @@ pub fn alerts(ctx: &Context, command: AlertsCommand, out: &mut dyn Write) -> Res
                         ..base.clone()
                     })
                 },
-                |r| (r.data, r.pagination),
+                |r| (r.data, r.pagination.into()),
                 alert_table,
             )
         }
@@ -494,7 +545,7 @@ pub fn risks(ctx: &Context, command: RisksCommand, out: &mut dyn Write) -> Resul
                         ..base.clone()
                     })
                 },
-                |r| (r.data, r.pagination),
+                |r| (r.data, r.pagination.into()),
                 risk_table,
             )
         }
@@ -555,7 +606,7 @@ pub fn compliance(ctx: &Context, command: ComplianceCommand, out: &mut dyn Write
                         ..base.clone()
                     })
                 },
-                |r| (r.data, r.pagination),
+                |r| (r.data, r.pagination.into()),
                 control_table,
             )
         }
@@ -636,7 +687,7 @@ pub fn evidence(ctx: &Context, command: EvidenceCommand, out: &mut dyn Write) ->
                         ..base.clone()
                     })
                 },
-                |r| (r.data, r.pagination),
+                |r| (r.data, r.pagination.into()),
                 evidence_table,
             )
         }
@@ -697,7 +748,7 @@ pub fn endpoints(ctx: &Context, command: EndpointsCommand, out: &mut dyn Write) 
                         ..base.clone()
                     })
                 },
-                |r| (r.data, r.pagination),
+                |r| (r.data, r.pagination.into()),
                 endpoint_table,
             )
         }
@@ -764,7 +815,7 @@ pub fn reports(ctx: &Context, command: ReportsCommand, out: &mut dyn Write) -> R
                         ..base.clone()
                     })
                 },
-                |r| (r.data, r.pagination),
+                |r| (r.data, r.pagination.into()),
                 report_table,
             )
         }
@@ -910,18 +961,33 @@ mod tests {
                     raw: serde_json::json!({ "data": batch }),
                     data: (
                         batch,
-                        Pagination {
-                            page,
+                        PageInfo {
+                            page: Some(page),
                             per_page,
-                            total,
-                            total_pages,
+                            total: Some(total),
+                            total_pages: Some(total_pages),
+                            next_cursor: None,
                         },
                     ),
                     meta: Default::default(),
                 })
             },
-            |r: (Vec<i64>, Pagination)| r,
+            |r: (Vec<i64>, PageInfo)| r,
         )
+    }
+
+    #[test]
+    fn without_page_counts_a_short_page_or_a_null_cursor_ends_the_walk() {
+        let info = |per_page, next_cursor: Option<&str>| PageInfo {
+            page: None,
+            per_page,
+            total: None,
+            total_pages: None,
+            next_cursor: next_cursor.map(str::to_owned),
+        };
+        assert!(!info(2, Some("c")).is_last(1, 2));
+        assert!(info(2, Some("c")).is_last(1, 1));
+        assert!(info(2, None).is_last(1, 2));
     }
 
     #[test]

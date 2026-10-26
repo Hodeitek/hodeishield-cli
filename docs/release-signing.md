@@ -80,7 +80,7 @@ an RFC 3161 timestamp from `http://timestamp.acs.microsoft.com`.
 - **Switch.** The repository variable `WINDOWS_SIGNING_ENABLED` turns the signing on, and only for a
   run started by a pushed `v*` tag.
 
-The signatures of every signed release so far (0.2.0 to 0.5.1) carry:
+The signatures of every signed release so far (0.2.0 to 0.6.0) carry:
 
 | Field | Value |
 |---|---|
@@ -100,6 +100,12 @@ checks the binary's notarization online on first run. See
 - **Identities.** A Developer ID Application certificate for the binary and a Developer ID Installer
   certificate for the package, both issued to Hodeitek S.L. by Apple's Developer ID certification
   authority. The signature carries the Apple Developer Team ID of the account.
+- **Expected Team ID.** The Team ID is public and is kept in the repository, not in a secret: the
+  `MACOS_TEAM_ID` constant at the top of `release.yml` and `macos-signing-check.yml` (change both
+  in one reviewed pull request). The signing steps compare it exactly with the `TeamIdentifier`
+  of the binary's signature and with the Team ID of the installer certificate, and fail if either
+  differs or if the constant is empty or not ten characters of `A-Z0-9`. Valid Apple credentials of
+  another team therefore cannot pass, whatever the environment holds.
 - **Notarization.** `notarytool` authenticates with an App Store Connect API key (a `.p8` private
   key, its key ID and the issuer ID).
 - **Where they are kept.** Only as secrets of the `release-signing` environment; none is in the
@@ -124,15 +130,19 @@ checks the binary's notarization online on first run. See
 - **Checking the secrets without a release (optional).** The **macOS signing check** workflow
   (`macos-signing-check.yml`, started by hand) signs and notarizes a throwaway test executable and
   package with the stored secrets, verifies them like a release does, and uploads nothing. It fails,
-  listing the names, if a secret is missing. It is bound to the same environment, so it needs the
+  listing the names, if a secret is missing, and if the certificates are not those of
+  `MACOS_TEAM_ID`. It is bound to the same environment, so it needs the
   same approval, and it has two preconditions: the workflow must be on the default branch to be
   dispatched, and the environment accepts deployments from `v*` tags only, so a repository
   administrator adds `main` to its allowed branches for the check and removes it afterwards.
 
 To enable it, a maintainer with the right to change the environment:
 
-1. stores the nine secrets in the `release-signing` environment;
-2. sets the repository variable `MACOS_SIGNING_ENABLED` to `true`.
+1. sets `MACOS_TEAM_ID` in `release.yml` and `macos-signing-check.yml` to the Team ID of the
+   Hodeitek S.L. Apple Developer account, through a reviewed pull request merged to `main`
+   (while it is empty, the signing job fails at its first step);
+2. stores the nine secrets in the `release-signing` environment;
+3. sets the repository variable `MACOS_SIGNING_ENABLED` to `true`.
 
 The next release signs and notarizes the macOS binaries, and its draft is published only after the
 macOS job and its checks pass. If signing or notarization fails, the release run fails and nothing

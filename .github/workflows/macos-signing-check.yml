@@ -16,6 +16,12 @@ on:
 
 permissions: {}
 
+# The Apple Team ID the Developer ID certificates must belong to: repository policy, changed only
+# through a reviewed pull request. Empty until a maintainer sets it, so signing fails closed. The
+# same value is in release.yml; keep the two in step.
+env:
+  MACOS_TEAM_ID: ""
+
 concurrency:
   group: macos-signing-check
   cancel-in-progress: false
@@ -42,6 +48,12 @@ jobs:
           APPLE_NOTARIZATION_ISSUER_ID: ${{ secrets.APPLE_NOTARIZATION_ISSUER_ID }}
         run: |
           set -euo pipefail
+          # The expected Apple Team ID is repository policy (MACOS_TEAM_ID above), not a secret: the
+          # certificates in the environment must belong to it. Empty or malformed fails closed.
+          if ! [[ "$MACOS_TEAM_ID" =~ ^[A-Z0-9]{10}$ ]]; then
+            echo "::error::MACOS_TEAM_ID is not set to a 10-character Apple Team ID in this workflow."
+            exit 1
+          fi
           missing=""
           for name in MACOS_CERTIFICATE MACOS_CERTIFICATE_PASSWORD MACOS_SIGNING_IDENTITY \
                       MACOS_INSTALLER_CERTIFICATE MACOS_INSTALLER_CERTIFICATE_PASSWORD \
@@ -116,8 +128,8 @@ jobs:
               exit 1
             fi
           done
-          if [ -z "$team" ] || [ "$team" = "not set" ]; then
-            echo "::error::The signature carries no TeamIdentifier."
+          if [ "$team" != "$MACOS_TEAM_ID" ]; then
+            echo "::error::The signature's TeamIdentifier is not the expected MACOS_TEAM_ID."
             exit 1
           fi
 
@@ -171,8 +183,8 @@ jobs:
           bin="$RUNNER_TEMP/check/signing-check"
           pkg="$RUNNER_TEMP/signing-check.pkg"
           team="$(codesign --display -vv "$bin" 2>&1 | sed -n 's/^TeamIdentifier=//p')"
-          if [ -z "$team" ] || [ "$team" = "not set" ]; then
-            echo "::error::The signature carries no TeamIdentifier."
+          if [ "$team" != "$MACOS_TEAM_ID" ]; then
+            echo "::error::The signature's TeamIdentifier is not the expected MACOS_TEAM_ID."
             exit 1
           fi
           accepted=false
@@ -190,6 +202,12 @@ jobs:
           echo "$sig"
           if ! grep -q 'Developer ID Installer: ' <<< "$sig"; then
             echo "::error::The package is not signed with a Developer ID Installer certificate."
+            exit 1
+          fi
+          # The installer certificate's Team ID is the last parenthesis of its name.
+          pkg_team="$(sed -n 's/^ *[0-9]*\. Developer ID Installer: .* (\([A-Z0-9]\{10\}\))$/\1/p' <<< "$sig")"
+          if [ "$pkg_team" != "$MACOS_TEAM_ID" ]; then
+            echo "::error::The installer certificate's Team ID is not the expected MACOS_TEAM_ID."
             exit 1
           fi
           xcrun stapler validate "$pkg"

@@ -14,6 +14,12 @@
 //! On every read and write the CLI refuses, and never repairs, a file or directory that is a
 //! symbolic link, that belongs to another user, or that is open to group or others. Windows has no
 //! mode bits to check and is not supported yet.
+//!
+//! On macOS the mode bits do not cover extended (NFSv4-style) ACLs, which a folder can pass on to
+//! what is created in it. There the directory and the file are stripped of any ACL when the CLI
+//! creates them, and one that has an ACL is refused like one open to others. On Linux a POSIX ACL
+//! cannot widen access: `chmod 600` sets the ACL mask to no access, which limits every named
+//! entry.
 
 use super::store::{Payload, StoredToken, TokenStore};
 use crate::failure::{Failure, Result};
@@ -193,6 +199,71 @@ mod unix {
         std::io::Error::from(errno)
     }
 
+    /// Whether `ls -le` output lists ACL entries, which it prints as ` 0: user:name allow read`
+    /// lines after the entry. (The `+` in the mode column is hidden by `@` when there are extended
+    /// attributes, so it is not used.)
+    #[cfg(any(test, target_os = "macos"))]
+    pub(super) fn lists_acl_entries(output: &str) -> bool {
+        output.lines().any(|line| {
+            let line = line.trim_start();
+            let digits = line.bytes().take_while(u8::is_ascii_digit).count();
+            digits > 0 && line[digits..].starts_with(": ")
+        })
+    }
+
+    /// macOS: refuses a path that carries an extended ACL. Fails closed when `ls` cannot say.
+    #[cfg(target_os = "macos")]
+    fn refuse_acl(path: &Path) -> Result<()> {
+        let output = std::process::Command::new("/bin/ls")
+            .args(["-lde"])
+            .arg(path)
+            .output()
+            .map_err(|e| io_failure("Cannot look at the ACL of", path, &e))?;
+        if !output.status.success() {
+            return Err(refused(
+                path,
+                "has an access control list that cannot be read",
+                None,
+            ));
+        }
+        if lists_acl_entries(&String::from_utf8_lossy(&output.stdout)) {
+            return Err(refused(
+                path,
+                "has an access control list (ACL), which can give other accounts access",
+                Some("If nobody else read it, `chmod -N` removes the ACL; a token that may have been read should be revoked from the app.".into()),
+            ));
+        }
+        Ok(())
+    }
+
+    /// macOS: removes any ACL, inherited or not, from something this process just created.
+    #[cfg(target_os = "macos")]
+    fn strip_acl(path: &Path) -> Result<()> {
+        let status = std::process::Command::new("/bin/chmod")
+            .arg("-N")
+            .arg(path)
+            .status()
+            .map_err(|e| io_failure("Cannot remove the ACL of", path, &e))?;
+        if !status.success() {
+            return Err(refused(
+                path,
+                "has an access control list that cannot be removed",
+                None,
+            ));
+        }
+        refuse_acl(path)
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn refuse_acl(_: &Path) -> Result<()> {
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn strip_acl(_: &Path) -> Result<()> {
+        Ok(())
+    }
+
     /// What is wrong with a file or directory, judged from its own `stat` (never a followed
     /// link): `None` when it can be trusted. The second string says how to fix a mode.
     pub(super) fn problem(stat: &Stat, want_dir: bool, euid: u32) -> Option<(String, String)> {
@@ -239,7 +310,8 @@ mod unix {
         match problem(stat, want_dir, euid()) {
             None => Ok(()),
             Some((reason, fix)) => Err(refused(path, &reason, Some(fix).filter(|f| !f.is_empty()))),
-        }
+        }?;
+        refuse_acl(path)
     }
 
     /// The sessions directory as an open handle, checked with `fstat` on the handle itself. Every
@@ -262,6 +334,8 @@ mod unix {
                         .mode(0o700)
                         .create(&store.dir)
                         .map_err(|e| io_failure("Cannot create", &store.dir, &e))?;
+                    // A folder's inheritable ACL may have been passed on to the new directory.
+                    strip_acl(&store.dir)?;
                     created = true;
                 }
                 Err(Errno::NOENT) => return Ok(None),
@@ -417,9 +491,12 @@ mod unix {
     fn create_new(dir: &OwnedFd, name: &str, path: &Path) -> Result<File> {
         let flags =
             OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC;
-        rustix::fs::openat(dir, name, flags, Mode::RUSR | Mode::WUSR)
+        let file = rustix::fs::openat(dir, name, flags, Mode::RUSR | Mode::WUSR)
             .map(File::from)
-            .map_err(|e| io_failure("Cannot create", path, &io_error(e)))
+            .map_err(|e| io_failure("Cannot create", path, &io_error(e)))?;
+        // Before anything is written to it, so a token never sits under an inherited ACL.
+        strip_acl(path)?;
+        Ok(file)
     }
 
     /// Writes `bytes` to a new 0600 file in the directory and renames it over `name`.
@@ -849,6 +926,18 @@ mod tests {
         let (_tmp, store) = store();
         assert!(store.load("p").expect("load").is_none());
         assert!(!store.dir.exists());
+    }
+
+    #[test]
+    fn ls_output_with_acl_entries_is_recognised() {
+        let with =
+            "drwx------+ 2 me staff 64 Oct 21 10:00 sessions\n 0: user:other allow list,search\n";
+        let without = "drwx------@ 2 me staff 64 Oct 21 10:00 sessions\n";
+        assert!(unix::lists_acl_entries(with));
+        assert!(!unix::lists_acl_entries(without));
+        assert!(!unix::lists_acl_entries(
+            "-rw------- 1 me staff 9 Oct 21 10:00 a: 1 file\n"
+        ));
     }
 
     #[test]
