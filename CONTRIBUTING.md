@@ -214,9 +214,13 @@ ASCII-armored secret signing subkey only), and the matching public key committed
 
 The APT and DNF indexes carry no `Valid-Until`, so an older index that was once validly signed and is
 served again from a compromised bucket would still verify: the weekly `repo-freshness` workflow detects
-this (once `packaging/gpg.key` is committed), it does not prevent it. It checks that both repositories
+this, it does not prevent it. It checks that both repositories
 are signed by that key and that the newest `hodeishield` version in each index is the latest published
 release's (`packaging/repo/freshness.sh`, with `packaging/repo/freshness-test.sh` as its control in CI).
+The monitor is inert only while the domain serves no APT or DNF index, that is, while `InRelease` and each
+`repomd.xml` answer a clean 404 (`packaging/repo/live.sh`). Any other answer (a network or TLS error, 403,
+5xx, a redirect), or a served index while `packaging/gpg.key` is missing or unreadable, fails the run, so
+removing the key cannot silence it.
 A failure opens an issue labelled `repo-freshness` with what was expected, what is served and the run,
 and it is closed when the check passes again; a release less than 48 hours old that is not served yet
 only raises a warning, since the `repos` job waits for an approval. On such an issue, first check who
@@ -243,6 +247,23 @@ submission to another project:
 3. Open a pull request with that title and fill in its template; validate with
    `winget validate --manifest <dir>` where a Windows machine is available.
 4. Answer the reviewers there. No long-lived token is stored for this.
+
+### The repository signing key
+
+The APT and DNF repositories are signed with an RSA 4096 OpenPGP key: a certify-only primary key, kept offline by the maintainers and protected by a passphrase, and a sign-only subkey, the only part CI holds (`PACKAGES_GPG_SIGNING_KEY`: the subkey without a passphrase, the primary key as a stub). Both expire two years after creation; `gpg --show-keys packaging/gpg.key` shows the date. Any work with the primary key happens in a throwaway `GNUPGHOME` on a RAM-backed filesystem (`/dev/shm`) with no disk swap active, and ends with `gpgconf --homedir <dir> --kill all` and removing the directory.
+
+**Renewal**, at least 60 days before the expiry. The fingerprint does not change.
+
+1. Import the primary key and the subkey from the offline copy.
+2. Extend both: `gpg --quick-set-expire <primary> 2y`, then `gpg --quick-set-expire <primary> 2y <subkey>`. The form `gpg --quick-set-expire <primary> 2y '*'` extends only the subkeys, not the primary, and skips a subkey that has already expired.
+3. Export the public key to `packaging/gpg.key` (`gpg --armor --export <primary>`).
+4. Export the subkey again without a passphrase (import `gpg --export-secret-subkeys '<subkey>!'` into a second throwaway `GNUPGHOME`, remove its passphrase with `gpg --change-passphrase <subkey>`, export `'<subkey>!'` again) and replace the `PACKAGES_GPG_SIGNING_KEY` secret with it. The copy in the secret carries the binding signature it was exported with, which is out of date after a renewal. The signing job imports `packaging/gpg.key` after the secret to replace it, so the new `packaging/gpg.key` must be committed before the release that signs; without it gpg refuses to sign once the old expiry date has passed ("Unusable secret key").
+5. Commit the new `packaging/gpg.key` and publish a release from that commit. Its `repos` job signs every index again and uploads the new `/gpg.key`; do not re-run `repos` for an older release afterwards, as it would upload that release's key. The new signatures are needed: gpg replaces the old self-signatures when it extends a key, and Sequoia-based verifiers (`sqv`, used by apt on Debian 13) reject a signature made before the new self-signature when they check it against the extended key. RPM package signatures made before the renewal still verify.
+6. Say in the release notes that users must refresh their copy of the key before the old expiry date (README, "When the repository key is renewed"). Clients that still hold the old copy reject the signatures made after that date.
+
+**If the signing subkey leaks** (for example the CI secret): delete the secret and stop publishing; with the primary key, add a new signing subkey (`gpg --quick-add-key <primary> rsa4096 sign 2y`) and revoke the old one (`gpg --edit-key <primary>`, `key <n>`, `revkey`, reason "Key has been compromised", `save`); export the new subkey without a passphrase as in renewal step 4, check that it holds exactly one signing subkey, and set the secret; commit the new `packaging/gpg.key`, publish a release, and tell users to refresh the key. A revoked subkey invalidates every signature it made, including those of the RPM packages already published, which the bucket never replaces: they must be signed again by a deliberate maintenance change before `repos` can publish. `rpm` on RHEL and Rocky Linux 8 and 9 does not import a key that carries a revoked subkey, so the published key may need to leave it out (`gpg --export-filter drop-subkey='fpr = <old subkey>' --armor --export <primary>`).
+
+**If the primary key is stolen**: publish its revocation certificate (kept with the offline copy) by importing it with the public key into a throwaway `GNUPGHOME` and exporting the result as `/gpg.key` and `packaging/gpg.key`. A revocation only reaches users who refresh their key, so also announce it (README, release notes, a security advisory) and tell users to remove the key and the repository file. Then create a new key with a new fingerprint, set the secret, update the fingerprint in the README (the only place that states it; the landing page points there), sign the RPM packages again, and publish a release. Users must check the new fingerprint against the README on GitHub, not against `packages.hodeishield.com` alone. **If the primary key is lost**, it can be neither renewed nor revoked: create a new key well before the expiry and move users to it the same way.
 
 ## Closing issues
 

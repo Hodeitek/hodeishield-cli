@@ -6,6 +6,14 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ## [Unreleased]
 
+### Added
+
+- Signed APT and DNF repositories at `packages.hodeishield.com` for x86_64 and arm64, so `apt` and
+  `dnf` install and upgrade the CLI. The README has the setup steps for Debian and Ubuntu, and for
+  Fedora, RHEL, Rocky Linux and AlmaLinux, with the signing key's fingerprint. It is the only place
+  that states the fingerprint and the repository configuration: check the key against it.
+  ([#161](https://github.com/Hodeitek/hodeishield-cli/issues/161))
+
 ### Security
 
 - ctutils is updated from 0.4.3 to 0.4.4 and tokio from 1.53.2 to 1.53.3. They fix RUSTSEC-2026-0385

@@ -2,12 +2,18 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 Hodeitek S.L.
 #
-# Proves that freshness.sh goes red: builds small APT and DNF repositories with a throwaway key made
+# Proves that freshness.sh goes red, and that live.sh (which decides whether there is anything to
+# check) is inert only when the domain serves nothing: builds small APT and DNF repositories with a throwaway key made
 # here (nothing secret, nothing real), serves them from localhost and runs freshness.sh against them.
 # A repository that is up to date must pass, and every case in which it is stale, altered, unsigned,
 # missing or unreachable must fail, with the status expected for it (3 for stale, 1 for the rest).
+# For live.sh: no index at all (every entry point a clean 404) is inert (10); a fetch error that is not
+# a 404 (500, a redirect, a refused connection) and a served index without the key are red (1).
 #
 #   freshness-test.sh
+#
+# The signature cases use throwaway keys made with gpg's faked system time: one whose signing subkey
+# has expired, one whose signing subkey is revoked, and two that expire within 60 days (a warning, 5).
 #
 # Needs curl, gpg, gpgv, gzip, python3 and the tools freshness.sh needs. The indexes are written by
 # hand in the structure that apt-ftparchive and createrepo_c produce (the repository builder's own
@@ -23,9 +29,11 @@ mkdir -m 700 "$GNUPGHOME"
 www=$work/www
 mkdir "$www"
 server=
+servers=
 
 cleanup() {
   [ -z "$server" ] || kill "$server" 2> /dev/null || true
+  for pid in $servers; do kill "$pid" 2> /dev/null || true; done
   gpgconf --homedir "$GNUPGHOME" --kill all 2> /dev/null || true
   # The throwaway secret keys are overwritten before they are removed.
   find "$GNUPGHOME" -type f -exec shred -u {} + 2> /dev/null || true
@@ -48,6 +56,45 @@ gpg --batch --quiet --passphrase '' --quick-generate-key 'Other test <other@exam
 other_fpr=$(gpg --batch --with-colons --list-keys other@example.invalid | awk -F: '$1 == "fpr" { print $10; exit }')
 gpg --batch --quiet --armor --export "$other_fpr" > "$work/other.asc"
 signer=$repo_sub
+
+# gpg with a faked clock when $faked is set (a time as YYYYMMDDTHHMMSS), for keys that have to be
+# expired now but valid when they signed.
+faked=
+gpgt() {
+  if [ -n "$faked" ]; then gpg --faked-system-time "$faked" "$@"; else gpg "$@"; fi
+}
+# newkey <email> <time> <primary expiry> <subkey expiry>: a key made at <time> ("" for now).
+newkey() {
+  faked=$2
+  gpgt --batch --quiet --passphrase '' --quick-generate-key "Test <$1>" ed25519 cert "$3"
+  fpr=$(gpg --batch --with-colons --list-keys "$1" | awk -F: '$1 == "fpr" { print $10; exit }')
+  gpgt --batch --quiet --passphrase '' --quick-add-key "$fpr" ed25519 sign "$4"
+  sub=$(gpg --batch --with-colons --list-keys "$fpr" | awk -F: '$1 == "sub" { s = 1 } $1 == "fpr" && s { print $10; exit }')
+  faked=
+}
+# The signing subkey expired at the beginning of 2021; the signatures were made in 2020.
+newkey expired@example.invalid 20200101T000000 never 1y
+expired_fpr=$fpr
+expired_sub=$sub
+gpg --batch --quiet --armor --export "$expired_fpr" > "$work/expired.asc"
+# The signing subkey is revoked after the signatures were made.
+newkey revoked@example.invalid "" never never
+revoked_fpr=$fpr
+revoked_sub=$sub
+# Expire within 60 days: the signing subkey, and the primary key.
+newkey soon-sub@example.invalid "" 2y 30d
+soon_sub_fpr=$fpr
+soon_sub_sub=$sub
+gpg --batch --quiet --armor --export "$soon_sub_fpr" > "$work/soon-sub.asc"
+newkey soon-primary@example.invalid "" 30d 2y
+soon_primary_fpr=$fpr
+soon_primary_sub=$sub
+gpg --batch --quiet --armor --export "$soon_primary_fpr" > "$work/soon-primary.asc"
+# Expires in more than 60 days: no warning.
+newkey later@example.invalid "" 2y 2y
+later_fpr=$fpr
+later_sub=$sub
+gpg --batch --quiet --armor --export "$later_fpr" > "$work/later.asc"
 
 # --- Fixtures ----------------------------------------------------------------------------------------
 # mk <dir> <APT versions> <DNF versions>: both repositories, each listing those versions of the
@@ -81,7 +128,7 @@ mk() {
       done
     done
   } > "$dir/apt/dists/stable/Release"
-  gpg --batch --yes --local-user "$signer!" --digest-algo SHA512 --clearsign \
+  gpgt --batch --yes --local-user "$signer!" --digest-algo SHA512 --clearsign \
     --output "$dir/apt/dists/stable/InRelease" "$dir/apt/dists/stable/Release"
 
   for arch in x86_64 aarch64; do
@@ -118,7 +165,7 @@ mk() {
       printf '  <data type="filelists">\n    <checksum type="sha256">%s</checksum>\n' "$(printf filelists | sha256sum | cut -d' ' -f1)"
       printf '    <location href="repodata/%s-filelists.xml.gz"/>\n  </data>\n</repomd>\n' "$(printf filelists | sha256sum | cut -d' ' -f1)"
     } > "$d/repomd.xml"
-    gpg --batch --yes --local-user "$signer!" --digest-algo SHA512 --armor --detach-sign \
+    gpgt --batch --yes --local-user "$signer!" --digest-algo SHA512 --armor --detach-sign \
       --output "$d/repomd.xml.asc" "$d/repomd.xml"
   done
 }
@@ -141,6 +188,40 @@ mk "$www/no-package" "" "0.9.0 0.10.0"
 signer=$other_fpr
 mk "$www/other-key" "0.9.0 0.10.0" "0.9.0 0.10.0"
 signer=$repo_sub
+
+signer=$expired_sub
+faked=20200601T120000
+mk "$www/expired-key" "0.9.0 0.10.0" "0.9.0 0.10.0"
+faked=
+signer=$revoked_sub
+mk "$www/revoked-key" "0.9.0 0.10.0" "0.9.0 0.10.0"
+# The revocation of the subkey (reason 0, no text), after it signed.
+printf 'key 1\nrevkey\ny\n0\n\ny\nsave\n' |
+  gpg --batch --yes --command-fd 0 --status-fd 2 --edit-key "$revoked_fpr" 2> "$work/revoke.log" ||
+  die "cannot revoke the test subkey"
+gpg --batch --quiet --armor --export "$revoked_fpr" > "$work/revoked.asc"
+signer=$soon_sub_sub
+mk "$www/soon-sub" "0.9.0 0.10.0" "0.9.0 0.10.0"
+signer=$soon_primary_sub
+mk "$www/soon-primary" "0.9.0 0.10.0" "0.9.0 0.10.0"
+signer=$later_sub
+mk "$www/later" "0.9.0 0.10.0" "0.9.0 0.10.0"
+signer=$repo_sub
+
+# Every repository serves the public key at /gpg.key: the repository key, except where the fixture has its own.
+for d in "$www"/*; do cp "$work/repo.asc" "$d/gpg.key"; done
+cp "$work/expired.asc" "$www/expired-key/gpg.key"
+cp "$work/revoked.asc" "$www/revoked-key/gpg.key"
+cp "$work/soon-sub.asc" "$www/soon-sub/gpg.key"
+cp "$work/soon-primary.asc" "$www/soon-primary/gpg.key"
+cp "$work/later.asc" "$www/later/gpg.key"
+# The key served is another one, or the repository key and another one, or missing.
+cp -R "$www/fresh" "$www/served-other-key"
+cp "$work/other.asc" "$www/served-other-key/gpg.key"
+cp -R "$www/fresh" "$www/served-extra-key"
+cat "$work/repo.asc" "$work/other.asc" > "$www/served-extra-key/gpg.key"
+cp -R "$www/fresh" "$www/served-no-key"
+rm "$www/served-no-key/gpg.key"
 
 cp -R "$www/fresh" "$www/tampered-inrelease"
 sed -i 's/^Suite: stable$/Suite: stablf/' "$www/tampered-inrelease/apt/dists/stable/InRelease"
@@ -182,6 +263,47 @@ done
 [ -n "$port" ] || die "the test server did not start"
 url=http://127.0.0.1:$port
 
+# A server that answers every request with the status <code> (and a redirect to nowhere for 301).
+# start_status <code> sets $status_url.
+start_status() {
+  : > "$work/status.log"
+  python3 -I -u -c '
+import http.server, sys
+code = int(sys.argv[1])
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(code)
+        if code == 301:
+            self.send_header("Location", "http://127.0.0.1:1/")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+    def log_message(self, *args):
+        pass
+s = http.server.HTTPServer(("127.0.0.1", 0), H)
+print(s.server_address[1], flush=True)
+s.serve_forever()' "$1" > "$work/status.log" &
+  servers="$servers $!"
+  sp=
+  i=0
+  while [ -z "$sp" ] && [ "$i" -lt 50 ]; do
+    sp=$(sed -n '1p' "$work/status.log")
+    i=$((i + 1))
+    [ -n "$sp" ] || sleep 0.1
+  done
+  [ -n "$sp" ] || die "the status server did not start"
+  status_url=http://127.0.0.1:$sp
+}
+start_status 500
+url500=$status_url
+start_status 403
+url403=$status_url
+start_status 301
+url301=$status_url
+
+# Only the APT repository is served: the DNF entry points answer 404.
+cp -R "$www/fresh" "$www/apt-only"
+rm -r "$www/apt-only/rpm"
+
 # --- The cases ---------------------------------------------------------------------------------------
 FRESHNESS_ALLOW_HTTP=1
 FRESHNESS_RETRIES=0
@@ -204,11 +326,34 @@ check 'stale DNF' 3 "$url/stale-dnf" 0.10.0 "$work/repo.asc"
 check 'a release not served yet' 3 "$url/fresh" 0.11.0 "$work/repo.asc"
 check 'newer than the release' 1 "$url/fresh" 0.9.0 "$work/repo.asc"
 check 'no hodeishield in APT' 1 "$url/no-package" 0.10.0 "$work/repo.asc"
+check 'served gpg.key is another key' 1 "$url/served-other-key" 0.10.0 "$work/repo.asc"
+check 'served gpg.key holds an extra key' 1 "$url/served-extra-key" 0.10.0 "$work/repo.asc"
+check 'no gpg.key served' 1 "$url/served-no-key" 0.10.0 "$work/repo.asc"
 check 'tampered InRelease' 1 "$url/tampered-inrelease" 0.10.0 "$work/repo.asc"
 check 'text after the signature' 1 "$url/text-after-signature" 0.10.0 "$work/repo.asc"
 check 'two signed messages' 1 "$url/two-messages" 0.10.0 "$work/repo.asc"
 check 'signed by another key' 1 "$url/other-key" 0.10.0 "$work/repo.asc"
 check 'checked with another key' 1 "$url/fresh" 0.10.0 "$work/other.asc"
+check 'signed by an expired key' 1 "$url/expired-key" 0.10.0 "$work/expired.asc"
+check 'signed by a revoked subkey' 1 "$url/revoked-key" 0.10.0 "$work/revoked.asc"
+# These two are only a real test if gpgv itself accepts them (exit 0) and says why on the status fd.
+rawstatus() {
+  gpg --batch --yes --quiet --dearmor --output "$work/raw.gpg" "$2"
+  st=0
+  gpgv --keyring "$work/raw.gpg" --status-fd 1 "$www/$1/apt/dists/stable/InRelease" > "$work/raw.out" 2> /dev/null || st=$?
+  if [ "$st" = 0 ] && grep -q "^\[GNUPG:\] $3 " "$work/raw.out"; then
+    printf '%-34s gpgv exits 0 and reports %s\n' "  ($1)" "$3"
+  else
+    printf '%-34s WRONG: gpgv exit %s, no %s\n' "  ($1)" "$st" "$3"
+    bad=1
+  fi
+}
+rawstatus expired-key "$work/expired.asc" EXPKEYSIG
+rawstatus revoked-key "$work/revoked.asc" REVKEYSIG
+check 'subkey expires within 60 days' 5 "$url/soon-sub" 0.10.0 "$work/soon-sub.asc"
+check 'primary expires within 60 days' 5 "$url/soon-primary" 0.10.0 "$work/soon-primary.asc"
+check 'expiring key and a stale index' 3 "$url/soon-sub" 0.11.0 "$work/soon-sub.asc"
+check 'key expires in over 60 days' 0 "$url/later" 0.10.0 "$work/later.asc"
 check 'tampered repomd.xml' 1 "$url/tampered-repomd" 0.10.0 "$work/repo.asc"
 check 'bad repomd.xml.asc' 1 "$url/bad-asc" 0.10.0 "$work/repo.asc"
 check 'missing repomd.xml.asc' 1 "$url/no-asc" 0.10.0 "$work/repo.asc"
@@ -219,5 +364,46 @@ check 'server unreachable' 1 http://127.0.0.1:1 0.10.0 "$work/repo.asc"
 check 'no public key' 1 "$url/fresh" 0.10.0 "$work/missing.asc"
 FRESHNESS_ALLOW_HTTP=0
 check 'plain http not allowed' 1 "$url/fresh" 0.10.0 "$work/repo.asc"
+
+# checklive <name> <wanted status> <base URL> <public key> [<text the output must contain>]
+checklive() {
+  status=0
+  FRESHNESS_LATEST_RELEASE=${LIVE_RELEASE:-0.5.1} FRESHNESS_RELEASE_AGE_HOURS=${LIVE_AGE:-1000} \
+    sh "$here/live.sh" "$3" "$4" > "$work/out" 2>&1 || status=$?
+  if [ "$status" = "$2" ] && { [ -z "${5:-}" ] || grep -Fq -- "$5" "$work/out"; }; then result=ok; else result=WRONG; bad=1; fi
+  printf '%-34s %-6s %-6s %-6s %s\n' "$1" "$2" "$status" "$result" "$(sed -n 's/^live.sh: //p' "$work/out" | head -n 1)"
+  [ "$result" = ok ] || sed 's/^/    /' "$work/out"
+}
+
+FRESHNESS_ALLOW_HTTP=1
+printf '\n%-34s %-6s %-6s %-6s %s\n' 'LIVE CASE' WANT GOT RESULT WHY
+# Nothing served: inert, with or without a key.
+checklive 'domain serves nothing (all 404)' 10 "$url/nowhere" "$work/repo.asc"
+checklive 'serves nothing, no key' 10 "$url/nowhere" "$work/missing.asc"
+# A clean 404 is acceptable only before the first release that publishes the repositories (0.5.1 is the
+# last one without), or inside the grace period after a newer one.
+LIVE_RELEASE=0.5.1 LIVE_AGE=5000 checklive 'all 404, latest release 0.5.1' 10 "$url/nowhere" "$work/repo.asc"
+LIVE_RELEASE=0.5.2 LIVE_AGE=100 checklive 'all 404, newer, past the grace' 1 "$url/nowhere" "$work/repo.asc" 'newer than 0.5.1'
+LIVE_RELEASE=0.5.2 LIVE_AGE=5 checklive 'all 404, newer, inside the grace' 10 "$url/nowhere" "$work/repo.asc" 'only 5 hours old'
+LIVE_RELEASE=0.10.0 LIVE_AGE=48 checklive 'all 404, 0.10.0, exactly at the grace' 1 "$url/nowhere" "$work/repo.asc"
+LIVE_RELEASE=0.5.2 LIVE_AGE=100 checklive 'newer release, index served' 0 "$url/fresh" "$work/repo.asc"
+LIVE_RELEASE=v0.5.2 checklive 'latest release not a version' 1 "$url/nowhere" "$work/repo.asc" 'not a version'
+# An index is served.
+checklive 'live repo, key present' 0 "$url/fresh" "$work/repo.asc"
+checklive 'live repo, key missing' 1 "$url/fresh" "$work/missing.asc" 'the repositories are live but the public key'
+: > "$work/empty.asc"
+checklive 'live repo, key empty' 1 "$url/fresh" "$work/empty.asc" 'the repositories are live but the public key'
+mkdir "$work/keydir"
+checklive 'live repo, key is a directory' 1 "$url/fresh" "$work/keydir"
+checklive 'only APT served, key missing' 1 "$url/apt-only" "$work/missing.asc"
+checklive 'only APT served, key present' 0 "$url/apt-only" "$work/repo.asc"
+# Anything but a clean 404 is red, whether or not the key is there.
+checklive 'fetch error: HTTP 500' 1 "$url500" "$work/repo.asc" 'answered HTTP 500'
+checklive 'fetch error: HTTP 500, no key' 1 "$url500" "$work/missing.asc" 'answered HTTP 500'
+checklive 'fetch error: HTTP 403' 1 "$url403" "$work/missing.asc"
+checklive 'fetch error: redirect' 1 "$url301" "$work/missing.asc"
+checklive 'fetch error: refused' 1 http://127.0.0.1:1 "$work/missing.asc" 'cannot reach'
+FRESHNESS_ALLOW_HTTP=0
+checklive 'plain http not allowed' 1 "$url/nowhere" "$work/repo.asc"
 [ "$bad" = 0 ] || exit 1
 echo "All cases behave as expected."
