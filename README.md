@@ -25,6 +25,9 @@ hodeishield login            # sign in through the browser and pick a tenant
 hodeishield vendors list     # your third-party inventory
 ```
 
+On a server, in a container or in CI there is usually no keychain and `login` stops with an error: use a
+[tenant API key](#with-a-tenant-api-key-scripts-ci-servers) instead.
+
 Verify the download before you run it: see [Install](#install) and [Verify a download](#verify-a-download).
 
 Read your third-party inventory, supply-chain alerts, risk register, compliance posture, evidence and
@@ -32,8 +35,8 @@ endpoint agents from a terminal or a script.
 
 - **Read-only.** Every command is a `GET` against the public `/v1` API. Nothing here can change data in
   your organisation.
-- **Safe with credentials.** Sign-in tokens live in the system keychain, never in a file; nothing is
-  ever printed or logged; credentials only travel over HTTPS and are never replayed to a redirect.
+- **Safe with credentials.** Sign-in tokens live in the system keychain unless you opt in to a
+  plain-text file for machines that have none; nothing is ever printed or logged; credentials only travel over HTTPS and are never replayed to a redirect.
 - **Built for scripts.** `--json` prints the API's own JSON, exit codes say what went wrong, and
   `HODEISHIELD_API_KEY` works without any interactive step.
 - **Verifiable.** Every release is signed with Sigstore (keyless, from GitHub Actions) and carries
@@ -46,7 +49,9 @@ endpoint agents from a terminal or a script.
 
 Download the archive for your platform from the
 [latest release](https://github.com/Hodeitek/hodeishield-cli/releases/latest), **verify it** (next
-section), and put `hodeishield` (`hodeishield.exe` on Windows) somewhere on your `PATH`.
+section), and put `hodeishield` (`hodeishield.exe` on Windows) somewhere on your `PATH`. If macOS or
+Windows blocks the downloaded binary, see
+[If macOS or Windows blocks the binary](#if-macos-or-windows-blocks-the-binary).
 
 | Platform | Archive |
 |---|---|
@@ -56,20 +61,28 @@ section), and put `hodeishield` (`hodeishield.exe` on Windows) somewhere on your
 | Windows x86_64 | `hodeishield-<version>-x86_64-pc-windows-msvc.zip` |
 | Windows arm64 | `hodeishield-<version>-aarch64-pc-windows-msvc.zip` (from 0.4.0) |
 
-`<version>` has no leading `v`: release `v0.4.2` ships `hodeishield-0.4.2-…`. The Linux binaries are
+`<version>` has no leading `v`: release `v0.5.1` ships `hodeishield-0.5.1-…`. The Linux binaries are
 statically linked and run on any distribution. Homebrew and Scoop packages (next section) and a
 [container image](#container-image) are also available.
+
+On Linux you need `curl` (or another way to download), `tar`, `gzip` and a CA certificate bundle
+(the `ca-certificates` package). Minimal Debian, Ubuntu and Alpine images do not include `curl` or
+the bundle: install them first, for example `apt-get install curl ca-certificates` or
+`apk add curl ca-certificates`. Verifying a download also needs
+[`cosign`](https://docs.sigstore.dev/cosign/system_config/installation/) v3 (or v2.4 or newer) and,
+for the provenance check, [`slsa-verifier`](https://github.com/slsa-framework/slsa-verifier#installation);
+neither is part of a distribution's default install.
 
 From source, with the Rust toolchain installed (pin the release tag you want):
 
 ```sh
-cargo install --locked --git https://github.com/Hodeitek/hodeishield-cli --tag v0.4.2 hodeishield-cli
+cargo install --locked --git https://github.com/Hodeitek/hodeishield-cli --tag v0.5.1 hodeishield-cli
 ```
 
 ### Homebrew and Scoop
 
 ```sh
-brew tap hodeitek/hodeishield && brew install hodeishield      # macOS and Linux
+brew install hodeitek/hodeishield/hodeishield                  # macOS and Linux
 ```
 
 ```powershell
@@ -77,9 +90,16 @@ scoop bucket add hodeishield https://github.com/Hodeitek/scoop-hodeishield
 scoop install hodeishield                                       # Windows, per user
 ```
 
-`scoop bucket add` needs Git: on a fresh Scoop, run `scoop install git` first. Scoop's own installer
+Scoop itself must be installed first (see [scoop.sh](https://scoop.sh)); on a clean Windows machine
+`scoop` is not a known command. `scoop bucket add` needs Git: on a fresh Scoop, run `scoop install git` first. Scoop's own installer
 refuses an elevated (administrator) shell unless it is run with `-RunAsAdmin`; installing per user,
 from a normal shell, is the recommended way and needs no administrator rights.
+
+Homebrew asks you to trust a formula from a tap other than its own before it loads it
+([Tap Trust](https://docs.brew.sh/Tap-Trust)). The full name above adds the tap and trusts only
+this formula. If you added the tap before and see "Refusing to load formula … from untrusted
+tap", run `brew trust --formula hodeitek/hodeishield/hodeishield` once. There is no need to trust
+the whole tap or to turn tap trust off.
 
 The [Homebrew tap](https://github.com/Hodeitek/homebrew-hodeishield) and the
 [Scoop bucket](https://github.com/Hodeitek/scoop-hodeishield) are updated from each release's own
@@ -181,6 +201,35 @@ sudo dnf install ./hodeishield-<version>-1.x86_64.rpm     # Fedora, RHEL (arm64:
 
 Upgrading is the same command with the newer package.
 
+### Uninstall an archive or install.sh install
+
+Nothing else is installed on the machine, so remove the files you copied. `install.sh` puts the
+binary in `/usr/local/bin` or `~/.local/bin` (or the `--dir` you gave) and the man pages in
+`share/man/man1` next to it:
+
+```sh
+hodeishield logout                      # revokes the sign-in and removes the stored token
+rm -f "$(hodeishield config path)"      # optional: the settings
+rm "$(command -v hodeishield)"          # the binary
+rm -f /usr/local/share/man/man1/hodeishield*.1     # man pages (~/.local/share/man/man1 for ~/.local/bin)
+```
+
+Run `hodeishield logout` and `config path` first; with the binary gone neither can run. If you
+installed completions from `hodeishield completions`, remove the file where you saved it, usually
+`~/.local/share/bash-completion/completions/hodeishield` (bash), `_hodeishield` in a directory of
+your `fpath` (zsh) or `~/.config/fish/completions/hodeishield.fish` (fish).
+
+On Windows, `hodeishield logout` first removes the sign-in from Credential Manager, then:
+
+- **Zip:** delete the folder you unpacked it into, and remove it from your `PATH` if you added it
+  (the zip never changes `PATH`).
+- **MSI:** uninstall from **Settings → Apps** or with `msiexec /x`. This removes the program folder,
+  the `PATH` entry and the Apps entry.
+- **Scoop:** `scoop uninstall hodeishield`, which removes the program and its shim.
+
+None of these remove the per-user settings in `%APPDATA%\Hodeitek\HodeiShield\config`, one folder
+in each user profile that ran `config set`; delete it if you want them gone.
+
 ### Windows installer (MSI)
 
 From 0.3.0, each release also publishes
@@ -250,20 +299,21 @@ exact version, or better its digest. The image carries no documentation: the
 0.4.2, as `USER-INFORMATION.md` in its archives.
 
 ```sh
-v=0.4.2   # the version you want
+v=0.5.1   # the version you want
 docker pull ghcr.io/hodeitek/hodeishield-cli:$v
 docker run --rm -e HODEISHIELD_API_KEY ghcr.io/hodeitek/hodeishield-cli:$v vendors list
 ```
 
 `HODEISHIELD_API_KEY` is passed through from your environment (`-e NAME` without a value) so the key
 never appears on the command line. `hodeishield login` does not work in a container (there is no
-browser and no system keychain): use a tenant API key, see [Authenticate](#authenticate).
+browser and no system keychain): use a tenant API key, see
+[Servers, containers and remote sessions](#servers-containers-and-remote-sessions).
 
 The image is signed by digest with cosign (keyless) and carries the release's CycloneDX SBOM as a
 signed attestation. Verify both before you rely on the image:
 
 ```sh
-v=0.4.2
+v=0.5.1
 image=ghcr.io/hodeitek/hodeishield-cli:$v
 cosign verify $image \
   --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/container-image.yml@refs/tags/v$v \
@@ -299,12 +349,28 @@ Each release has a `SHA256SUMS` file, a Sigstore bundle (`*.sigstore.json`) for 
 `SHA256SUMS`, and SLSA provenance (`hodeishield.intoto.jsonl`). In short:
 
 ```sh
-sha256sum --ignore-missing -c SHA256SUMS
+grep hodeishield-0.5.1-x86_64-unknown-linux-musl.tar.gz SHA256SUMS | sha256sum -c -
 
-cosign verify-blob hodeishield-0.4.2-x86_64-unknown-linux-musl.tar.gz \
-  --bundle hodeishield-0.4.2-x86_64-unknown-linux-musl.tar.gz.sigstore.json \
-  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.4.2 \
+cosign verify-blob hodeishield-0.5.1-x86_64-unknown-linux-musl.tar.gz \
+  --bundle hodeishield-0.5.1-x86_64-unknown-linux-musl.tar.gz.sigstore.json \
+  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.5.1 \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-github-workflow-trigger push
+```
+
+On Windows, PowerShell has no `sha256sum`: compare the hash of the zip or MSI with its line in
+`SHA256SUMS`. `cosign` for Windows is a `cosign-windows-amd64.exe` download on its
+[release page](https://github.com/sigstore/cosign/releases) (`winget install sigstore.cosign` may
+fail with a missing-source error), and the same `verify-blob` command works with Windows paths:
+
+```powershell
+(Get-FileHash .\hodeishield-0.5.1-x86_64-pc-windows-msvc.zip -Algorithm SHA256).Hash.ToLower()
+Select-String hodeishield-0.5.1-x86_64-pc-windows-msvc.zip SHA256SUMS      # the two hashes must match
+# the same two lines with .msi for the MSI
+cosign verify-blob .\hodeishield-0.5.1-x86_64-pc-windows-msvc.zip `
+  --bundle .\hodeishield-0.5.1-x86_64-pc-windows-msvc.zip.sigstore.json `
+  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.5.1 `
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com `
   --certificate-github-workflow-trigger push
 ```
 
@@ -322,32 +388,39 @@ before 0.2.0, a copy downloaded with a browser can be blocked or flagged. The co
 the proof that the file is genuine; once it passes, unblock the binary as follows.
 
 **macOS.** Gatekeeper may refuse to open `hodeishield` ("Apple could not verify… is free of
-malware"). Remove the quarantine attribute from the unpacked binary:
+malware"). Verify the download first, then allow the binary in System Settings: after the first
+blocked attempt, open **System Settings → Privacy & Security**, scroll down to the message about
+`hodeishield`, click **Open Anyway**, confirm, and run the command again. The dialog's wording and
+button labels follow the system language, so they may differ from the English text quoted here.
+
+Or remove the quarantine attribute from the unpacked binary:
 
 ```sh
 xattr -d com.apple.quarantine ./hodeishield   # "No such xattr" means there was nothing to remove
 ```
 
-Or download with `curl`, which does not set that attribute in the first place:
+A browser download sets that attribute, and unpacking the archive with `tar` in Terminal keeps it
+on the binary, so the block still applies. A download with `curl` does not set it in the first
+place:
 
 ```sh
-curl -LO https://github.com/Hodeitek/hodeishield-cli/releases/download/v0.4.2/hodeishield-0.4.2-universal-apple-darwin.tar.gz
+curl -LO https://github.com/Hodeitek/hodeishield-cli/releases/download/v0.5.1/hodeishield-0.5.1-universal-apple-darwin.tar.gz
 ```
 
-**Windows, before 0.2.0.** Unblock the archive before unpacking it, so the executable does not
-inherit the download mark:
+**Windows.** SmartScreen can warn about a signed file that is still new to it, and versions before
+0.2.0 are not signed at all. To avoid the warning, unblock the archive before unpacking it, so the
+executable does not inherit the download mark:
 
 ```powershell
-Unblock-File .\hodeishield-0.1.1-x86_64-pc-windows-msvc.zip
-Expand-Archive .\hodeishield-0.1.1-x86_64-pc-windows-msvc.zip
+Unblock-File .\hodeishield-<version>-x86_64-pc-windows-msvc.zip
+Expand-Archive .\hodeishield-<version>-x86_64-pc-windows-msvc.zip
 ```
 
 If you already unpacked it, run `Unblock-File` on `hodeishield.exe` instead. Windows PowerShell
 5.1's `Expand-Archive` does not copy the download mark to the unpacked files, so unblocking matters
 when you unpack with File Explorer's "Extract All" or another tool that carries the mark over.
-SmartScreen can also warn about a signed file that is still new to it; in either case, if it shows
-"Windows protected your PC", choose **More info → Run anyway** («Más información → Ejecutar de todos
-modos» on a Spanish system).
+If SmartScreen still shows "Windows protected your PC", choose **More info → Run anyway** («Más
+información → Ejecutar de todos modos» on a Spanish system).
 
 ## Authenticate
 
@@ -364,11 +437,19 @@ hodeishield whoami
 When `HODEISHIELD_API_KEY` is set it is used for every call, whatever else is configured. Keep it in
 your CI's secret store; the CLI never prints it.
 
+`whoami` asks the API who the credential is and shows the tenant it reads (name and id), its
+organisation and, for a key, its scopes; for a sign-in, also the signed-in user when the service
+provides it; for a portfolio key, the MSSP and how many client tenants it
+can select. With `--json` these are the `tenant`, `organization`, `portfolio` and
+`credential_scopes` fields. If the API cannot be reached, `whoami` still shows the local settings,
+leaves those fields null and says why on standard error.
+
 ### By signing in (people)
 
 ```sh
 hodeishield login            # opens the browser; the app redirects back to 127.0.0.1
 hodeishield login --device   # no browser here: approve a short code from another device
+hodeishield login --no-browser   # print the sign-in URL instead of opening a browser
 hodeishield whoami
 hodeishield logout           # revokes the token at the app and removes it from the keychain
 ```
@@ -385,8 +466,13 @@ hodeishield login --profile client-b
 
 A profile that has not been defined is refused (`Profile ... is not defined`).
 
-`login` first checks that the system keychain is available and stops before opening the browser or
-showing a code if it is not; use a tenant API key on such a machine.
+Two profiles signed in as the same user, to the same tenant, with the same flow (browser or
+`--device`) share one sign-in at the app: logging out of either one signs out both. Profiles on
+different tenants, or one signed in with the browser and the other with `--device`, are independent.
+
+`login` first checks that the selected token store is available and stops before opening the browser
+or showing a code if it is not. On a machine without a keychain, see
+[Servers, containers and remote sessions](#servers-containers-and-remote-sessions).
 
 An MSSP reads its clients with one credential instead: see
 [Several tenants (MSSP)](#several-tenants-mssp).
@@ -395,21 +481,85 @@ With `--device`, open the address the CLI prints on any device and **type the co
 does not accept a link with the code filled in, on purpose.
 
 The CLI asks for the read scopes its commands need (vendors, alerts and risks; every compliance
-framework the app offers; evidence; endpoints) and for a refresh token. To ask for fewer, set them:
+framework the app offers; evidence; endpoints; reports) and for a refresh token. To ask for fewer, set them:
 `hodeishield config set oauth_scopes "supply_risk:read offline_access"`.
 
 The token is kept in the system keychain (macOS Keychain, Windows Credential Manager, or the Secret
 Service — GNOME Keyring, KWallet — on Linux) and refreshed automatically, also when the app ends an
-access token early. Without a keychain, signing in is refused rather than falling back to a file: use
-an API key there.
+access token early. Without a keychain, signing in is refused rather than falling back to a file;
+the file store below is an explicit choice, never a fallback.
 
 The keychain can also be out of reach in a session that has one on the machine, such as an SSH or
 other remote logon on Windows. With no API key set, commands then stop with exit code 3 and say that
 the system keychain is not available in this session; set `HODEISHIELD_API_KEY` in remote or
-automated sessions. With the key set, the keychain is not read at all.
+automated sessions. `login` and `logout` exit 1 in that case, not 3. With the key set, the keychain
+is not read at all.
 
 To cut the CLI's access from elsewhere, revoke it in [the app](https://app.hodeishield.com) under
-**Account → Application access**. Signing out of the web app does not cut it.
+**Account → Applications**. Signing out of the web app does not cut it.
+
+### Servers, containers and remote sessions
+
+Where there is no desktop session (an SSH server, a container, WSL without a desktop, a CI runner)
+there is usually no keychain either, and `hodeishield login` stops before it opens a browser or shows
+a code. You have two options, in this order of preference:
+
+1. **A tenant API key** (see [With a tenant API key](#with-a-tenant-api-key-scripts-ci-servers)).
+   It works everywhere, needs no storage on the machine, can be limited to the read scopes you need
+   and is the right choice for containers and CI. Do not sign in during `docker build`, and never
+   commit or publish a container in which someone has signed in.
+2. **A plain-text token file, if you want to sign in as yourself** on a machine you control, such as
+   a jump host. You opt in explicitly, and the trade-off is that the tokens are stored
+   **unencrypted** in a file that only your user can read. Anyone who can read your files, such as
+   `root`, a backup, a snapshot or a copy of your home directory, can use the refresh token:
+   - **How long.** At most 90 days from the sign-in, however often the session is refreshed, and
+     at most 30 days after the CLI last refreshed it. It ends earlier with `hodeishield logout`, when
+     you change or reset your password, when an administrator revokes it, when you are removed from
+     the tenant, or when you revoke the access in the app under **Account → Applications**.
+   - **Reuse is detected.** Each refresh replaces the refresh token. If someone refreshes with a
+     copy of your file, the next refresh by your own CLI is seen as a reuse of an old token and
+     ends the session for both. An unexpected "sign in again" is a reason to revoke the access in
+     the app and check who could read the file.
+
+   ```sh
+   export HODEISHIELD_TOKEN_STORE=plaintext-file   # or: hodeishield config set token_store plaintext-file
+   hodeishield login --device
+   hodeishield whoami
+   hodeishield logout                              # revokes the tokens, then deletes the file
+   ```
+
+   - **Where.** One file per profile in the sessions directory of your state directory:
+     `$XDG_STATE_HOME/hodeishield/sessions/` (by default `~/.local/state/hodeishield/sessions/`) on
+     Linux, and `~/Library/Application Support/com.Hodeitek.HodeiShield.sessions/` on macOS (next to,
+     not inside, the folder that holds the configuration file). The configuration file never holds
+     a token, and the file names are a hash of the profile name, not the name itself (a hash of a
+     guessable name can be reversed, so do not treat it as hiding the profile). The parents of that
+     directory, such as your state directory, must not be writable by other users.
+   - **Checks.** The directory is created with mode 700 and the files with mode 600, written by
+     replacing the file atomically. On every read and write the CLI refuses, and does not repair, a
+     file or directory that is a symbolic link, belongs to another user, or is open to group or
+     others. Commands that need a credential then stop with exit code 3 (`login` and `logout`: 1) and
+     tell you what is wrong; fix it yourself (`chmod`), and revoke the tokens in the app if someone
+     else could have read them. Temporary files left by a write that was interrupted are removed
+     the next time that profile is saved or signed out.
+   - **Do not run it as `root` or with `sudo` for your user.** A run as `root` that uses your home
+     directory can create root-owned directories there, which your own runs then refuse (and
+     `root` refuses yours, since they belong to another user). Sign in with the user that will run
+     the commands.
+   - **No fallback.** The setting must be the same on every command, and the CLI never switches
+     between the keychain and the file on its own. Tokens are not moved when you change it: sign out,
+     change the setting, sign in again. The values are `plaintext-file` and `keychain` (the default);
+     anything else is an error.
+   - **Network home directories.** Do not keep the state directory on NFS or another shared file
+     system: the file would be readable by the server's administrators and by `root` on other
+     machines that mount it, and its permissions are not enforced the same way. On Linux the CLI
+     warns on `login` when the directory is on NFS or SMB; it does not stop you. Point
+     `XDG_STATE_HOME` at a local directory instead.
+   - **Deleting is not revoking.** `logout` revokes the tokens at the app and then deletes the file,
+     but removing the file by hand, or restoring it from a backup, does not end the session. Only
+     revoking does.
+   - **Not on Windows yet.** Windows has no permission bits to check, so selecting the file store
+     there is refused with exit code 1, before anything is asked of the app.
 
 ## Use
 
@@ -422,6 +572,7 @@ hodeishield compliance posture nis2
 hodeishield compliance controls --framework nis2 --status failing
 hodeishield evidence list --expiring-before 2026-12-31T00:00:00Z
 hodeishield endpoints list --status active
+hodeishield reports list --type monthly --status completed
 ```
 
 ```console
@@ -435,6 +586,43 @@ Lists show one page (50 items by default); `--page`, `--per-page` (up to 200) an
 rest. `--all` stops with an error past 100,000 items (or 1,000 pages); narrow the list with filters
 or walk it with `--page`. Every list takes `--sort` and `--order`; `--help` on any command lists
 what it accepts.
+
+### Reports
+
+`reports list` and `reports get` show the reports generated for the tenant; `reports download`
+saves a completed report's file:
+
+```console
+$ hodeishield reports list --status completed
+ID                                    TYPE     TITLE              PERIOD                    STATUS     CREATED
+7d3e1f2a-4b5c-4d6e-8f70-81a2b3c4d5e6  monthly  September summary  2026-09-01 to 2026-09-30  completed  2026-10-01 06:00Z
+$ hodeishield reports get 7d3e1f2a-4b5c-4d6e-8f70-81a2b3c4d5e6     # includes download_formats
+$ hodeishield reports download 7d3e1f2a-4b5c-4d6e-8f70-81a2b3c4d5e6 --format xlsx --locale es
+Saved monthly-2026-09.xlsx (48213 bytes).
+```
+
+- `--type` (also `--report-type`) and `--status` list the values the API publishes in `--help`; like
+  the other listed filters, a value that is not listed gets a warning and is still sent as typed.
+- `--format` is `pdf` (the default) or `xlsx`, and `--locale` one of `es`, `en` (the default), `de`,
+  `fr`, `it` and `eu`. `reports get` lists the formats a report can be downloaded in.
+- Without `--output`, the file is saved in the current directory under the name the API suggests,
+  reduced to a plain stem: only its last part is kept, every character other than a letter, a
+  digit, `.`, `_` and `-` becomes `_`, leading dots are dropped and everything from the first `.`
+  on is cut. The extension is always that of the format (`.pdf` or `.xlsx`), never the one the API
+  suggested, so `conftest.py` is saved as `conftest.pdf`. When nothing usable is left, the name is
+  `report-<id>.<format>`. The name is never used as a path.
+- `--output <PATH>` saves it there instead; a directory saves it there under the suggested name.
+  `--output -` writes the file to standard output, and is refused (exit code 2) when standard
+  output is a terminal.
+- An existing file is never replaced unless `--force` is given. The file is written next to its
+  destination and then put in place, so the path never holds part of a file. On Unix, the saved
+  file is readable only by you (mode 0600); `--force` keeps the permissions of the file it replaces.
+  The directory is checked before the download starts.
+- The note `Saved <path> (<size>).` goes to standard error. With `--json`, standard output holds
+  `{"path": ..., "bytes": ..., "content_type": ...}` instead, and there is no note.
+- A report that is still being generated, that failed, that has no file in that format, or whose file
+  is larger than the API serves (20 MiB) fails with exit code 1 and says which. Each download is
+  recorded in the tenant's audit trail.
 
 ### Several tenants (MSSP)
 
@@ -484,7 +672,8 @@ hodeishield --tenant acme vendors list            # one client, by slug or id
 hodeishield --all-tenants alerts list --status open
 ```
 
-- `--tenant <slug|id>` works on every read command (`list`, `get`, `compliance posture`). The CLI
+- `--tenant <slug|id>` works on every read command (`list`, `get`, `compliance posture`,
+  `reports download`). The CLI
   prints `Client tenant: acme (<id>)` on standard error, so a log shows which client was read;
   standard output is exactly what it is without a selection.
 - `--all-tenants` works on `list` commands and `compliance controls`. It fetches every page of each
@@ -568,7 +757,7 @@ hodeishield vendors list --all --csv > vendors.csv
 | 0 | Success |
 | 1 | Error (invalid input, configuration, unexpected answer) |
 | 2 | Invalid command line |
-| 3 | Not authenticated: no credential (also when the system keychain cannot be reached in this session), or the API rejected it |
+| 3 | Not authenticated: no credential (also when the system keychain cannot be reached in this session, or the opt-in token file is refused as unsafe; `login` and `logout` exit 1 for that), or the API rejected it |
 | 4 | The credential lacks the scope the command needs |
 | 5 | Not found (or not in your organisation) |
 | 6 | Rate limit exhausted (the CLI already retried short waits) |
@@ -614,6 +803,7 @@ hodeishield config path                      # where the file is
 hodeishield --profile staging config set api_url https://api.example.test
 hodeishield config use staging               # make it the default profile
 hodeishield config set update_check false    # no new-version notice (global, not per profile)
+hodeishield config set token_store plaintext-file   # opt-in token file, see the section on servers
 hodeishield --profile default vendors list   # or pick one per command
 ```
 
@@ -624,9 +814,16 @@ hodeishield --profile default vendors list   # or pick one per command
 | `HODEISHIELD_API_URL` | API base URL |
 | `HODEISHIELD_APP_URL` | App base URL (sign-in) |
 | `HODEISHIELD_CONFIG` | Path of the configuration file |
+| `HODEISHIELD_TOKEN_STORE` | Where sign-in tokens are kept: `keychain` (the default) or `plaintext-file`, an [opt-in](#servers-containers-and-remote-sessions); takes precedence over `token_store` in the configuration file |
 | `HODEISHIELD_NO_UPDATE_CHECK` | Any non-empty value turns off the [new-version notice](#new-version-notice) |
 
-The configuration file holds URLs and sign-in settings only, never a credential. URLs must use HTTPS;
+`config set` and `config unset` take `api_url`, `app_url`, `oauth_client_id` and `oauth_scopes`
+(per profile), and `update_check` (`true` or `false`) and `token_store` (`keychain` or
+`plaintext-file`), which are global.
+
+The configuration file holds URLs and sign-in settings only, never a credential. `update_check` and
+`token_store` are global settings, not per profile. An older CLI refuses a configuration file that
+contains `token_store`; use the environment variable there. URLs must use HTTPS;
 plain HTTP is accepted only for `localhost`.
 
 ## New-version notice
@@ -700,8 +897,8 @@ message that starts with `Could not reach the API:` (or `Could not reach the app
 followed by the cause. A certificate error there usually means the proxy's CA is missing from the
 store described above.
 
-This behaviour comes from the CLI's HTTP library. It is verified on Linux in CI against a
-TLS-inspecting proxy; macOS and Windows have not been verified yet.
+This behaviour comes from the CLI's HTTP library. It is verified in CI on Linux, macOS and Windows
+against a TLS-inspecting proxy whose CA is installed in the system store.
 
 ## Repository layout
 
@@ -724,6 +921,8 @@ into the latest 0.x release ([Supported versions](SECURITY.md#supported-versions
 [docs/user-information.md](docs/user-information.md) gathers the manufacturer's contact details, the
 support period, secure use, how to update and remove the CLI, and where the SBOM is published.
 Releases from 0.4.2 ship a copy as `USER-INFORMATION.md` in their archives and packages.
+[docs/technical-documentation.md](docs/technical-documentation.md) is the index of the technical
+documentation required by the Cyber Resilience Act.
 
 ## License
 

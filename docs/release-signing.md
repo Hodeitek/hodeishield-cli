@@ -80,19 +80,78 @@ an RFC 3161 timestamp from `http://timestamp.acs.microsoft.com`.
 - **Switch.** The repository variable `WINDOWS_SIGNING_ENABLED` turns the signing on, and only for a
   run started by a pushed `v*` tag.
 
-The signatures of every signed release so far (0.2.0 to 0.4.2) carry:
+The signatures of every signed release so far (0.2.0 to 0.5.1) carry:
 
 | Field | Value |
 |---|---|
 | Subject | `CN=Hodeitek S.L., O=Hodeitek S.L., L=Aretxabaleta, S=Gipuzkoa, C=ES` |
 | Certificate profile EKU | `1.3.6.1.4.1.311.97.449523565.535854065.272767902.439799148` |
 
-### macOS
+### Developer ID (macOS)
 
-macOS signing is not active ([#50](https://github.com/Hodeitek/hodeishield-cli/issues/50)):
-`MACOS_SIGNING_ENABLED` is not set, and no Apple certificate or notarization key is stored. The
-workflow's macOS steps would use Developer ID certificates and an App Store Connect key kept as
-`release-signing` environment secrets. This document must cover them before they are used.
+The `sign-macos` job of `release.yml` signs the universal `hodeishield` binary with an Apple
+Developer ID Application certificate, with the hardened runtime and a secure timestamp. It builds
+`hodeishield-<version>-universal-apple-darwin.pkg`, which installs `/usr/local/bin/hodeishield`, and
+signs it with a Developer ID Installer certificate. Both the binary and the package are notarized
+by Apple, and the package is stapled. A bare executable cannot carry a stapled ticket, so Gatekeeper
+checks the binary's notarization online on first run. See
+[#50](https://github.com/Hodeitek/hodeishield-cli/issues/50).
+
+- **Identities.** A Developer ID Application certificate for the binary and a Developer ID Installer
+  certificate for the package, both issued to Hodeitek S.L. by Apple's Developer ID certification
+  authority. The signature carries the Apple Developer Team ID of the account.
+- **Expected Team ID.** The Team ID is public and is kept in the repository, not in a secret: the
+  `MACOS_TEAM_ID` constant at the top of `release.yml` and `macos-signing-check.yml` (change both
+  in one reviewed pull request). The signing steps compare it exactly with the `TeamIdentifier`
+  of the binary's signature and with the Team ID of the installer certificate, and fail if either
+  differs or if the constant is empty or not ten characters of `A-Z0-9`. Valid Apple credentials of
+  another team therefore cannot pass, whatever the environment holds.
+- **Notarization.** `notarytool` authenticates with an App Store Connect API key (a `.p8` private
+  key, its key ID and the issuer ID).
+- **Where they are kept.** Only as secrets of the `release-signing` environment; none is in the
+  repository or in a variable. The job imports the certificates into a temporary keychain that is
+  deleted at the end of the job, and writes the API key to a temporary file that is deleted too.
+
+  | Secret | Content |
+  |---|---|
+  | `MACOS_CERTIFICATE`, `MACOS_CERTIFICATE_PASSWORD` | Developer ID Application certificate and key (`.p12`, base64) and its password |
+  | `MACOS_SIGNING_IDENTITY` | Name of that certificate, as `codesign` takes it |
+  | `MACOS_INSTALLER_CERTIFICATE`, `MACOS_INSTALLER_CERTIFICATE_PASSWORD` | Developer ID Installer certificate and key (`.p12`, base64) and its password |
+  | `MACOS_INSTALLER_IDENTITY` | Name of that certificate, as `productsign` takes it |
+  | `APPLE_NOTARIZATION_KEY` | App Store Connect API private key (`.p8`, base64) |
+  | `APPLE_NOTARIZATION_KEY_ID`, `APPLE_NOTARIZATION_ISSUER_ID` | Key ID and issuer ID of that key |
+
+- **Switch.** The repository variable `MACOS_SIGNING_ENABLED` turns the signing on, and only for a
+  run started by a pushed `v*` tag. The environment's secrets are visible only to a job bound to
+  the environment, so the workflow cannot tell in advance whether they exist: when the variable is
+  `true` and a secret is missing, the job fails and names it. When the variable is not `true`, the
+  release still builds and publishes, the macOS binary is not signed or notarized, and the run
+  summary says so.
+- **Checking the secrets without a release (optional).** The **macOS signing check** workflow
+  (`macos-signing-check.yml`, started by hand) signs and notarizes a throwaway test executable and
+  package with the stored secrets, verifies them like a release does, and uploads nothing. It fails,
+  listing the names, if a secret is missing, and if the certificates are not those of
+  `MACOS_TEAM_ID`. It is bound to the same environment, so it needs the
+  same approval, and it has two preconditions: the workflow must be on the default branch to be
+  dispatched, and the environment accepts deployments from `v*` tags only, so a repository
+  administrator adds `main` to its allowed branches for the check and removes it afterwards.
+
+To enable it, a maintainer with the right to change the environment:
+
+1. sets `MACOS_TEAM_ID` in `release.yml` and `macos-signing-check.yml` to the Team ID of the
+   Hodeitek S.L. Apple Developer account, through a reviewed pull request merged to `main`
+   (while it is empty, the signing job fails at its first step);
+2. stores the nine secrets in the `release-signing` environment;
+3. sets the repository variable `MACOS_SIGNING_ENABLED` to `true`.
+
+The next release signs and notarizes the macOS binaries, and its draft is published only after the
+macOS job and its checks pass. If signing or notarization fails, the release run fails and nothing
+is published, so the first signed release is itself the test. To check the secrets before that
+release, run the optional **macOS signing check** workflow as described above.
+
+The first release signed this way is the first one whose run summary says
+"macOS signing: signed and notarized". Releases before it are not signed with a Developer ID. To
+check a download, see [verifying-releases.md](verifying-releases.md#5-platform-signatures-windows-macos).
 
 ### Package repository key
 
@@ -111,11 +170,16 @@ separately in [#114](https://github.com/Hodeitek/hodeishield-cli/issues/114).
   runs after the Windows signing jobs, which wait for an approval, but needs no approval of its own:
   a `release.yml` changed at a tag could sign without one.
 - **The `release-signing` environment.** Every job that uses it waits for a required reviewer, and
-  only a `v*` tag can deploy to it. It holds the Azure identifiers and the signing account names.
+  only a `v*` tag can deploy to it. It holds the Azure identifiers and the signing account names,
+  and the Apple certificates and notarization key.
 - **The `packaging` environment.** The same protections. It gates the package managers and the
   container image.
 - **Repository settings.** Repository administrators manage the repository variables, the
   environments with their reviewers, secrets and variables, and the ruleset.
+- **Apple Developer account.** The Developer ID certificates are issued, and revoked, in the Apple
+  Developer account of the organisation, and the notarization key in App Store Connect. Only the
+  account's Account Holder can create or revoke Developer ID certificates. Storing or replacing the
+  secrets needs administrator rights on the repository.
 - **Azure.** The signing account, its identity validations and certificate profiles are managed in
   the Azure subscription of the account. One account holds the Owner role on that subscription.
   Revoking a certificate needs that role and is done in the Azure portal. The app registration has
@@ -231,9 +295,32 @@ the profile that the release workflow did not sign.
    document and in [verifying-releases.md](verifying-releases.md#6-releases-after-a-signing-change).
 
 Windows users check the new signature as described in
-[verifying-releases.md](verifying-releases.md#5-platform-signatures-windows-macos-in-a-later-release):
+[verifying-releases.md](verifying-releases.md#5-platform-signatures-windows-macos):
 `Status` is `Valid`, the subject names Hodeitek S.L., a timestamp is present, and the profile EKU is
 the new one given in the advisory.
+
+## If the macOS Developer ID signing is compromised
+
+This applies when a Developer ID certificate or its private key, the notarization key or the
+`release-signing` environment is compromised, or when a file is found signed with the certificate
+that the release workflow did not sign.
+
+1. **Stop signing.** Set the repository variable `MACOS_SIGNING_ENABLED` to `false`, reject any
+   pending deployment to `release-signing` and cancel running Release workflow runs. A release
+   built meanwhile has an unsigned macOS binary and no `.pkg`: do not publish one before step 3.
+2. **Revoke.** In the Apple Developer account, revoke the affected Developer ID certificate or
+   certificates. In App Store Connect, revoke the notarization API key. Apple stops trusting new
+   signatures made with a revoked certificate. Binaries notarized earlier stay valid unless Apple
+   revokes their notarization tickets, which the maintainers can ask Apple to do for files known to
+   be malicious.
+3. **Replace.** Create new certificates and a new API key, store them as the secrets listed under
+   [Developer ID (macOS)](#developer-id-macos), optionally run the **macOS signing check**
+   workflow, and set `MACOS_SIGNING_ENABLED` back to `true`. Then publish a new patch release of
+   each [supported version](../SECURITY.md#supported-versions) through the normal release process:
+   a published file cannot be signed again in place.
+4. **Tell users** as in the Windows section above (security advisory, notice in the README, release
+   notes), naming the affected versions and the Team ID, and update this document and
+   [verifying-releases.md](verifying-releases.md#6-releases-after-a-signing-change).
 
 ## If the release workflow identity is compromised
 

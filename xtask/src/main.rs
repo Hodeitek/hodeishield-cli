@@ -32,12 +32,21 @@ use std::process::{Command, ExitCode, Stdio};
 const SPEC: &str = "openapi/v1.json";
 const OUT: &str = "crates/hodeishield-api/src/generated.rs";
 /// SHA-256 of `openapi/v1.json`. Updating the document means updating this and `openapi/README.md`.
-const EXPECTED_SHA256: &str = "1321a417aba28e7b60dbc28a35ce2dc3711d8973b985107f7701d70ff3be6b0d";
+const EXPECTED_SHA256: &str = "26e5a79d4669eaa3394c9917e66d56af546fc861d6576af1d6caada37c9c3458";
 
 /// Type names that the default naming rules would get wrong, keyed by the schema's location.
 const RENAMES: &[(&str, &str)] = &[
     ("#/components/schemas/Error", "ErrorEnvelope"),
     ("#/components/schemas/Error/properties/error", "ErrorBody"),
+    (
+        "whoAmI/responses/200/properties/data/properties/organization",
+        "WhoAmIOrganization",
+    ),
+    ("getReport/responses/200/properties/data", "ReportDetail"),
+    (
+        "listAlerts/responses/200/properties/pagination",
+        "AlertsPagination",
+    ),
 ];
 
 type Result<T> = std::result::Result<T, String>;
@@ -184,6 +193,14 @@ struct Param {
     doc: Option<String>,
 }
 
+/// What a successful answer carries.
+enum Response {
+    /// JSON, decoded into this generated type.
+    Json(String),
+    /// A file: the `Accept` value to send (the declared media types, then JSON for the errors).
+    Binary(String),
+}
+
 struct OperationDef {
     id: String,
     path: String,
@@ -192,7 +209,7 @@ struct OperationDef {
     scopes: Vec<String>,
     path_params: Vec<Param>,
     query_params: Vec<Param>,
-    response: String,
+    response: Response,
     /// Whether the operation takes the `X-HS-Tenant` header that selects a client tenant.
     tenant_scoped: bool,
 }
@@ -379,6 +396,9 @@ impl<'a> Generator<'a> {
                 .collect::<std::result::Result<Vec<_>, _>>()?
         } else if let Some(template) = scope.get("template").and_then(Value::as_str) {
             vec![template.to_owned()]
+        } else if scope.get("none").and_then(Value::as_bool) == Some(true) {
+            // Any valid credential may call it (`GET /v1/me`).
+            Vec::new()
         } else {
             return Err(format!("{id}: x-hs-scope has neither scopes nor template"));
         };
@@ -446,15 +466,19 @@ impl<'a> Generator<'a> {
             }
         }
 
-        let schema = operation
-            .pointer("/responses/200/content/application~1json/schema")
-            .ok_or_else(|| format!("{id}: no JSON 200 response"))?;
-        let response_name = format!("{}Response", pascal(&id));
-        let (response, nullable) =
-            self.rust_type(schema, &response_name, &format!("{id}/responses/200"))?;
-        if nullable {
-            return Err(format!("{id}: a nullable 200 body is not supported"));
-        }
+        let response = if let Some(schema) =
+            operation.pointer("/responses/200/content/application~1json/schema")
+        {
+            let response_name = format!("{}Response", pascal(&id));
+            let (response, nullable) =
+                self.rust_type(schema, &response_name, &format!("{id}/responses/200"))?;
+            if nullable {
+                return Err(format!("{id}: a nullable 200 body is not supported"));
+            }
+            Response::Json(response)
+        } else {
+            Response::Binary(binary_accept(&id, operation)?)
+        };
         self.operations.push(OperationDef {
             id,
             path: path.to_owned(),
@@ -849,18 +873,54 @@ impl<'a> Generator<'a> {
             } else {
                 "params.query_pairs()"
             };
-            let _ = writeln!(
-                out,
-                "    pub fn {}({}) -> Result<crate::ApiResponse<{}>, crate::Error> {{\n        self.get(&operations::{}, {path_value}, {query})\n    }}\n",
-                snake(&op.id),
-                args.join(", "),
-                op.response,
-                screaming(&op.id),
-            );
+            match &op.response {
+                Response::Json(ty) => {
+                    let _ = writeln!(
+                        out,
+                        "    pub fn {}({}) -> Result<crate::ApiResponse<{ty}>, crate::Error> {{\n        self.get(&operations::{}, {path_value}, {query})\n    }}\n",
+                        snake(&op.id),
+                        args.join(", "),
+                        screaming(&op.id),
+                    );
+                }
+                Response::Binary(accept) => {
+                    let _ = writeln!(
+                        out,
+                        "    pub fn {}({}) -> Result<crate::Download, crate::Error> {{\n        self.get_binary(&operations::{}, {path_value}, {query}, {accept:?})\n    }}\n",
+                        snake(&op.id),
+                        args.join(", "),
+                        screaming(&op.id),
+                    );
+                }
+            }
         }
         out.push_str("}\n");
         out
     }
+}
+
+/// The `Accept` value of an operation whose 200 answer is a file: every media type it declares, each
+/// with a `format: binary` string schema, then `application/json` for the error bodies.
+fn binary_accept(id: &str, operation: &Value) -> Result<String> {
+    let content = operation
+        .pointer("/responses/200/content")
+        .and_then(Value::as_object)
+        .filter(|content| !content.is_empty())
+        .ok_or_else(|| format!("{id}: no 200 response content"))?;
+    let mut types = Vec::new();
+    for (media_type, body) in content {
+        let schema = body.get("schema");
+        let is_file = schema.and_then(|s| s.get("type")).and_then(Value::as_str) == Some("string")
+            && schema.and_then(|s| s.get("format")).and_then(Value::as_str) == Some("binary");
+        if !is_file {
+            return Err(format!(
+                "{id}: 200 `{media_type}` is neither JSON nor a binary string"
+            ));
+        }
+        types.push(media_type.as_str());
+    }
+    types.push("application/json");
+    Ok(types.join(", "))
 }
 
 fn render_doc(out: &mut String, doc: Option<&str>, indent: &str) {
@@ -1324,6 +1384,39 @@ mod tests {
         assert_eq!(
             generate_from(&spec).expect_err("unsupported"),
             "listThings.X-Other: parameters in `header` are not supported"
+        );
+    }
+
+    #[test]
+    fn an_operation_that_needs_no_scope_lists_none() {
+        let mut spec = document(None);
+        spec["paths"]["/v1/things"]["get"]["x-hs-scope"] = serde_json::json!({"none": true});
+        let out = generate_from(&spec).expect("generate");
+        assert!(out.contains("scopes: &[],"), "{out}");
+        spec["paths"]["/v1/things"]["get"]["x-hs-scope"] = serde_json::json!({"none": false});
+        assert_eq!(
+            generate_from(&spec).expect_err("not none"),
+            "listThings: x-hs-scope has neither scopes nor template"
+        );
+    }
+
+    #[test]
+    fn a_file_answer_is_a_download_with_its_media_types_then_json() {
+        let mut spec = document(None);
+        spec["paths"]["/v1/things"]["get"]["responses"]["200"]["content"] = serde_json::json!({
+            "application/pdf": {"schema": {"type": "string", "format": "binary"}},
+            "text/csv": {"schema": {"type": "string", "format": "binary"}}
+        });
+        let out = generate_from(&spec).expect("generate");
+        assert!(
+            out.contains("-> Result<crate::Download, crate::Error> { self.get_binary(&operations::LIST_THINGS, \"/v1/things\".to_owned(), params.query_pairs(), \"application/pdf, text/csv, application/json\") }"),
+            "{out}"
+        );
+        spec["paths"]["/v1/things"]["get"]["responses"]["200"]["content"] =
+            serde_json::json!({"text/plain": {"schema": {"type": "string"}}});
+        assert_eq!(
+            generate_from(&spec).expect_err("not a file"),
+            "listThings: 200 `text/plain` is neither JSON nor a binary string"
         );
     }
 }

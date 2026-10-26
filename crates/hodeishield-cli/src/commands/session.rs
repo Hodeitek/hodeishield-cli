@@ -9,6 +9,7 @@ use crate::auth::{self, StoredToken, loopback::Loopback};
 use crate::cli::LoginArgs;
 use crate::failure::{CredentialSource, Failure, Result};
 use crate::output::{clean, print_json, unix_to_rfc3339};
+use hodeishield_api::v1::WhoAmI;
 use serde_json::{Map, Value, json};
 use std::io::Write;
 use std::time::{Duration, Instant};
@@ -130,6 +131,13 @@ fn login_with(
         .ok()
         .flatten()
         .and_then(|info| user_label(&info));
+    if let Some(path) = store.location(&settings.profile) {
+        eprintln!(
+            "The sign-in is stored unencrypted in {}, protected only by its permissions. \
+             `hodeishield logout` revokes it and deletes the file.",
+            path.display()
+        );
+    }
     eprintln!(
         "Signed in to {}{} (profile {}).",
         settings.app_url.host_str().unwrap_or("the app"),
@@ -154,7 +162,7 @@ fn unstored_notice(revoked: &Result<()>) -> String {
         Err(revocation) => format!(
             "The session could not be stored on this machine, and the app did not confirm \
              revoking the tokens issued for it ({}). Revoke the CLI's access in the app under \
-             \"Application access\".",
+             Account → Applications.",
             clean(&revocation.message)
         ),
     }
@@ -212,22 +220,105 @@ fn note_api_key() {
 
 pub fn whoami(ctx: &Context, out: &mut dyn Write) -> Result<()> {
     let settings = ctx.settings()?;
+    // `GET /v1/me` describes the credential itself: it takes no tenant selection.
+    let me = || -> std::result::Result<Me, String> {
+        let (client, source) = ctx.api(&settings, None).map_err(|f| f.message)?;
+        client
+            .who_am_i()
+            .map(|answer| Me::from_answer(answer.data.data, &answer.raw))
+            .map_err(|e| {
+                let mut call = ctx.call(source, None);
+                call.tenant_selected = false;
+                crate::failure::from_api(e, &call).message
+            })
+    };
     whoami_with(
         &settings,
         auth::api_key_from_env().is_some(),
         ctx.store.as_ref(),
         ctx.json,
+        &me,
+        &userinfo_label,
         out,
     )
 }
 
-/// `whoami` with the settings and whether an API key is set given, so it can be tested without the
-/// process environment. With a key, the store is not read.
+/// What `GET /v1/me` says about the credential: the generated type, and the signed-in user, read
+/// again from the body as received so that a user with missing fields still shows what it has.
+struct Me {
+    who: WhoAmI,
+    user: Option<MeUser>,
+}
+
+impl Me {
+    fn from_answer(who: WhoAmI, raw: &Value) -> Self {
+        Self {
+            who,
+            user: MeUser::from_raw(&raw["data"]["user"]),
+        }
+    }
+}
+
+/// The user of a sign-in, as `GET /v1/me` gives it. Read leniently: anything that is not an object
+/// with at least one text field is no user, never an error.
+struct MeUser {
+    id: Option<String>,
+    name: Option<String>,
+    email: Option<String>,
+}
+
+impl MeUser {
+    fn from_raw(raw: &Value) -> Option<Self> {
+        let object = raw.as_object()?;
+        let text = |key: &str| object.get(key).and_then(Value::as_str).map(str::to_owned);
+        let user = Self {
+            id: text("id"),
+            name: text("name"),
+            email: text("email"),
+        };
+        (user.id.is_some() || user.name.is_some() || user.email.is_some()).then_some(user)
+    }
+
+    /// Labelled like the user of the userinfo endpoint: `Name <email>`, whichever of them there is,
+    /// or the id.
+    fn label(&self) -> Option<String> {
+        let mut info = Map::new();
+        for (key, value) in [
+            ("name", &self.name),
+            ("email", &self.email),
+            ("sub", &self.id),
+        ] {
+            if let Some(value) = value {
+                info.insert(key.into(), json!(value));
+            }
+        }
+        user_label(&info)
+    }
+}
+
+/// The user from the authorization server's userinfo endpoint: the fallback for an API that does
+/// not say who the user is. Nothing when the app has no such endpoint or cannot be reached.
+fn userinfo_label(token: &StoredToken) -> Option<String> {
+    let issuer = auth::issuer_url(token).ok()?;
+    let http = oauth::http_client(&issuer).ok()?;
+    let metadata = oauth::discover(&http, &issuer).ok()?;
+    let info = oauth::userinfo(&http, &metadata, &token.access_token)
+        .ok()
+        .flatten()?;
+    user_label(&info)
+}
+
+/// `whoami` with the settings, whether an API key is set, the call to `GET /v1/me` and the userinfo
+/// fallback given, so it can be tested without the process environment. With a key, the store is not read. The call is
+/// made only when there is a credential; when it fails, the local lines are still printed, the
+/// API's lines are left out (null in `--json`) and a warning says why.
 fn whoami_with(
     settings: &crate::config::Settings,
     has_api_key: bool,
     store: &dyn auth::TokenStore,
     json: bool,
+    me: &dyn Fn() -> std::result::Result<Me, String>,
+    userinfo: &dyn Fn(&StoredToken) -> Option<String>,
     out: &mut dyn Write,
 ) -> Result<()> {
     let mut info = Map::new();
@@ -235,6 +326,7 @@ fn whoami_with(
     info.insert("api_url".into(), json!(settings.api_url.as_str()));
     info.insert("app_url".into(), json!(settings.app_url.as_str()));
 
+    let mut signed_in_token = None;
     let source = if has_api_key {
         Some(CredentialSource::ApiKey)
     } else {
@@ -249,16 +341,9 @@ fn whoami_with(
                         .map_or(Value::Null, |t| json!(unix_to_rfc3339(t))),
                 );
                 info.insert("scope".into(), json!(token.scope));
-                let user = auth::issuer_url(&token)
-                    .and_then(|issuer| {
-                        let http = oauth::http_client(&issuer)?;
-                        let metadata = oauth::discover(&http, &issuer)?;
-                        oauth::userinfo(&http, &metadata, &token.access_token)
-                    })
-                    .ok()
-                    .flatten()
-                    .and_then(|u| user_label(&u));
-                info.insert("user".into(), json!(user));
+                // Filled in below, once the API has been asked who the user is.
+                info.insert("user".into(), Value::Null);
+                signed_in_token = Some(token);
                 Some(CredentialSource::OAuth)
             }
             None => None,
@@ -270,6 +355,42 @@ fn whoami_with(
             CredentialSource::ApiKey => "api_key",
             CredentialSource::OAuth => "oauth",
         })),
+    );
+    let me = match source.map(|_| me()) {
+        Some(Ok(me)) => Some(me),
+        Some(Err(reason)) => {
+            // The reason can carry the API's own message: untrusted text.
+            eprintln!(
+                "warning: could not read from the API who this credential is: {}",
+                clean(&reason)
+            );
+            None
+        }
+        None => None,
+    };
+    if let Some(token) = &signed_in_token {
+        // The API first; the userinfo endpoint only when it gives no user. A key has no user,
+        // whatever the API sends.
+        let user = me
+            .as_ref()
+            .and_then(|me| me.user.as_ref())
+            .and_then(MeUser::label)
+            .or_else(|| userinfo(token));
+        info.insert("user".into(), json!(user));
+    }
+    let who = me.as_ref().map(|me| &me.who);
+    info.insert(
+        "tenant".into(),
+        json!(who.and_then(|me| me.tenant.as_ref())),
+    );
+    info.insert("organization".into(), json!(who.map(|me| &me.organization)));
+    info.insert(
+        "portfolio".into(),
+        json!(who.and_then(|me| me.portfolio.as_ref())),
+    );
+    info.insert(
+        "credential_scopes".into(),
+        json!(who.map(|me| &me.credential.scopes)),
     );
 
     if json {
@@ -283,7 +404,7 @@ fn whoami_with(
                 "Credential",
                 source.map_or_else(
                     || "none".to_owned(),
-                    |s| auth::describe_source(s).to_owned(),
+                    |s| auth::describe_source(s, store.location(&settings.profile).as_deref()),
                 ),
             ),
         ];
@@ -297,6 +418,9 @@ fn whoami_with(
                 rows.push((label, clean(value)));
             }
         }
+        if let Some(me) = who {
+            rows.extend(me_rows(me, source == Some(CredentialSource::ApiKey)));
+        }
         for (label, value) in rows {
             writeln!(out, "{label:<11} {value}")?;
         }
@@ -305,6 +429,44 @@ fn whoami_with(
         Some(_) => Ok(()),
         None => Err(auth::not_signed_in(settings)),
     }
+}
+
+/// The table lines `GET /v1/me` adds: the tenant (tenant key or sign-in), the organisation, the
+/// number of client tenants (portfolio key) and, for a key, its scopes (a sign-in already shows
+/// the token's). Names come from the API and are cleaned before they are printed.
+fn me_rows(me: &WhoAmI, is_key: bool) -> Vec<(&'static str, String)> {
+    let mut rows = Vec::new();
+    if let Some(tenant) = &me.tenant {
+        rows.push((
+            "Tenant",
+            format!("{} ({})", clean(&tenant.name), clean(&tenant.id)),
+        ));
+    }
+    let organization = &me.organization;
+    rows.push((
+        "Org",
+        format!(
+            "{} ({})",
+            organization
+                .name
+                .as_deref()
+                .map_or_else(|| "-".to_owned(), clean),
+            clean(&organization.r#type)
+        ),
+    ));
+    if let Some(portfolio) = &me.portfolio {
+        rows.push((
+            "Tenants",
+            format!(
+                "{} client tenants (hodeishield tenants list)",
+                portfolio.tenant_count
+            ),
+        ));
+    }
+    if is_key {
+        rows.push(("Scopes", clean(&me.credential.scopes.join(" "))));
+    }
+    rows
 }
 
 /// Revokes a stored sign-in at the app that issued it, never at whatever the profile points to
@@ -692,8 +854,16 @@ mod tests {
         let (api, app) = (mockito::Server::new(), mockito::Server::new());
         let settings = settings_for(&api, &app);
         let mut out = Vec::new();
-        let err = whoami_with(&settings, false, &UnreachableStore, false, &mut out)
-            .expect_err("no credential");
+        let err = whoami_with(
+            &settings,
+            false,
+            &UnreachableStore,
+            false,
+            &no_call,
+            &no_userinfo,
+            &mut out,
+        )
+        .expect_err("no credential");
         assert_eq!(err.kind, crate::failure::Kind::NotAuthenticated);
         assert!(
             err.message
@@ -716,8 +886,279 @@ mod tests {
         let (api, app) = (mockito::Server::new(), mockito::Server::new());
         let settings = settings_for(&api, &app);
         let mut out = Vec::new();
-        whoami_with(&settings, true, &UnreachableStore, true, &mut out).expect("key set");
-        assert!(String::from_utf8(out).expect("utf8").contains("api_key"));
+        let me = || Err("offline".to_owned());
+        whoami_with(
+            &settings,
+            true,
+            &UnreachableStore,
+            true,
+            &me,
+            &no_userinfo,
+            &mut out,
+        )
+        .expect("key set");
+        let printed: Value = serde_json::from_slice(&out).expect("json");
+        assert_eq!(printed["credential"], "api_key");
+        // The API could not be read: its fields are there, null.
+        for key in ["tenant", "organization", "portfolio", "credential_scopes"] {
+            assert_eq!(printed[key], Value::Null, "{key}");
+        }
+    }
+
+    fn no_call() -> std::result::Result<Me, String> {
+        panic!("GET /v1/me is not called without a credential")
+    }
+
+    fn no_userinfo(_: &StoredToken) -> Option<String> {
+        panic!("the userinfo endpoint is not asked here")
+    }
+
+    /// The `data` of a `GET /v1/me` answer, read the way the client reads it.
+    fn who(json: &str) -> Me {
+        let data: Value = serde_json::from_str(json).expect("json");
+        let typed = serde_json::from_value(data.clone()).expect("WhoAmI");
+        Me::from_answer(typed, &json!({ "data": data }))
+    }
+
+    /// A `data` for a sign-in, with `user` spliced in as written (nothing when `None`).
+    fn sign_in_me(user: Option<&str>) -> Me {
+        let user = user.map_or_else(String::new, |u| format!(r#","user":{u}"#));
+        who(&format!(
+            r#"{{"credential":{{"type":"oauth","prefix":null,"scopes":["supply_risk:read"]}},
+                "tenant":{{"id":"6f1c2d3e-4b5a-4c6d-8e7f-0a1b2c3d4e5f","name":"Acme S.L.","type":"direct"}},
+                "organization":{{"id":"7a1c2d3e-4b5a-4c6d-8e7f-0a1b2c3d4e5f","name":"Acme Group","type":"direct"}},
+                "portfolio":null{user}}}"#
+        ))
+    }
+
+    /// `whoami` of a sign-in whose `GET /v1/me` answers with `user` (as JSON text), and the
+    /// userinfo fallback gives `fallback`; the table and the JSON are returned.
+    fn whoami_of_a_sign_in(user: Option<&str>, fallback: Option<&str>) -> (String, Value) {
+        let (api, app) = (mockito::Server::new(), mockito::Server::new());
+        let settings = settings_for(&api, &app);
+        let store = MemoryStore::default();
+        store.save("default", &signed_in(&app, None)).expect("save");
+        let me = || Ok(sign_in_me(user));
+        let userinfo = |_: &StoredToken| fallback.map(str::to_owned);
+        let mut table = Vec::new();
+        whoami_with(&settings, false, &store, false, &me, &userinfo, &mut table)
+            .expect("signed in");
+        let mut json = Vec::new();
+        whoami_with(&settings, false, &store, true, &me, &userinfo, &mut json).expect("signed in");
+        (
+            String::from_utf8(table).expect("utf8"),
+            serde_json::from_slice(&json).expect("json"),
+        )
+    }
+
+    #[test]
+    fn whoami_shows_the_user_that_the_api_gives_for_a_sign_in() {
+        let (text, printed) = whoami_of_a_sign_in(
+            Some(r#"{"id":"u-1","name":"Ana\u001b[31m Ruiz","email":"ana@acme.example"}"#),
+            None,
+        );
+        assert!(
+            text.contains("User        Ana\u{fffd}[31m Ruiz <ana@acme.example>\n"),
+            "{text}"
+        );
+        assert!(!text.contains('\u{1b}'), "the name is cleaned: {text:?}");
+        // The same text and type as before: a string.
+        assert_eq!(printed["user"], "Ana\u{fffd}[31m Ruiz <ana@acme.example>");
+        assert!(!printed["user"].as_str().expect("string").contains('\u{1b}'));
+        let keys: Vec<&String> = printed.as_object().expect("object").keys().collect();
+        let position = |k: &str| keys.iter().position(|key| *key == k).expect(k);
+        assert!(position("scope") < position("user") && position("user") < position("credential"));
+    }
+
+    #[test]
+    fn whoami_prefers_the_api_over_the_userinfo_endpoint() {
+        let (text, printed) = whoami_of_a_sign_in(
+            Some(r#"{"id":"u-1","name":"Ana","email":"ana@acme.example"}"#),
+            Some("Someone Else"),
+        );
+        assert!(
+            text.contains("User        Ana <ana@acme.example>\n"),
+            "{text}"
+        );
+        assert_eq!(printed["user"], "Ana <ana@acme.example>");
+    }
+
+    #[test]
+    fn whoami_without_a_user_from_the_api_falls_back_to_userinfo() {
+        // An answer with no `user` field, and `user: null` (what an API key gets).
+        for user in [None, Some("null")] {
+            let (text, printed) = whoami_of_a_sign_in(user, Some("Old Way <old@acme.example>"));
+            assert!(
+                text.contains("User        Old Way <old@acme.example>\n"),
+                "{user:?}: {text}"
+            );
+            assert_eq!(printed["user"], "Old Way <old@acme.example>", "{user:?}");
+        }
+    }
+
+    #[test]
+    fn whoami_without_any_user_has_no_user_line_and_does_not_fail() {
+        for user in [None, Some("null")] {
+            let (text, printed) = whoami_of_a_sign_in(user, None);
+            assert!(!text.contains("User"), "{user:?}: {text}");
+            assert_eq!(printed["user"], Value::Null, "{user:?}");
+            // The rest of the answer is still shown.
+            assert!(text.contains("Org         Acme Group (direct)\n"), "{text}");
+            assert_eq!(printed["organization"]["name"], "Acme Group");
+        }
+    }
+
+    #[test]
+    fn whoami_shows_the_email_when_the_api_gives_no_name() {
+        let (text, printed) = whoami_of_a_sign_in(
+            Some(r#"{"id":"u-1","name":null,"email":"ana@acme.example"}"#),
+            None,
+        );
+        assert!(text.contains("User        ana@acme.example\n"), "{text}");
+        assert_eq!(printed["user"], "ana@acme.example");
+    }
+
+    #[test]
+    fn whoami_uses_the_id_when_the_api_gives_no_name_or_email() {
+        // Off the contract (`email` is required), so it is read from the raw body, not the typed one.
+        let user = MeUser::from_raw(&json!({"id": "u-1", "name": null})).expect("a user");
+        assert_eq!(user.label().as_deref(), Some("u-1"));
+    }
+
+    #[test]
+    fn a_user_that_is_not_an_object_with_a_field_is_no_user() {
+        for raw in [json!("x"), json!([]), json!(42), json!({}), Value::Null] {
+            assert!(MeUser::from_raw(&raw).is_none(), "{raw}");
+        }
+    }
+
+    #[test]
+    fn whoami_ignores_the_user_the_api_sends_for_a_key() {
+        let (api, app) = (mockito::Server::new(), mockito::Server::new());
+        let settings = settings_for(&api, &app);
+        let me = || {
+            Ok(sign_in_me(Some(
+                r#"{"id":"u-1","name":"Ana","email":"a@b.example"}"#,
+            )))
+        };
+        let mut out = Vec::new();
+        whoami_with(
+            &settings,
+            true,
+            &UnreachableStore,
+            false,
+            &me,
+            &no_userinfo,
+            &mut out,
+        )
+        .expect("key set");
+        let text = String::from_utf8(out).expect("utf8");
+        assert!(!text.contains("User") && !text.contains("Ana"), "{text}");
+        let mut out = Vec::new();
+        whoami_with(
+            &settings,
+            true,
+            &UnreachableStore,
+            true,
+            &me,
+            &no_userinfo,
+            &mut out,
+        )
+        .expect("key set");
+        let printed: Value = serde_json::from_slice(&out).expect("json");
+        assert!(printed.get("user").is_none(), "{printed}");
+    }
+
+    #[test]
+    fn whoami_shows_the_tenant_and_organisation_of_a_tenant_key() {
+        let (api, app) = (mockito::Server::new(), mockito::Server::new());
+        let settings = settings_for(&api, &app);
+        let me = || {
+            Ok(who(
+                r#"{"credential":{"type":"tenant","prefix":null,"scopes":["supply_risk:read","evidence:read"]},
+                    "tenant":{"id":"6f1c2d3e-4b5a-4c6d-8e7f-0a1b2c3d4e5f","name":"Acme\u001b[31m S.L.","type":"direct"},
+                    "organization":{"id":"7a1c2d3e-4b5a-4c6d-8e7f-0a1b2c3d4e5f","name":"Acme Group","type":"direct"},
+                    "portfolio":null}"#,
+            ))
+        };
+        let mut out = Vec::new();
+        whoami_with(
+            &settings,
+            true,
+            &UnreachableStore,
+            false,
+            &me,
+            &no_userinfo,
+            &mut out,
+        )
+        .expect("key set");
+        let text = String::from_utf8(out).expect("utf8");
+        assert!(
+            text.contains(
+                "Tenant      Acme\u{fffd}[31m S.L. (6f1c2d3e-4b5a-4c6d-8e7f-0a1b2c3d4e5f)\n"
+            ),
+            "{text}"
+        );
+        assert!(!text.contains('\u{1b}'), "the name is cleaned: {text:?}");
+        assert!(text.contains("Org         Acme Group (direct)\n"), "{text}");
+        assert!(
+            text.contains("Scopes      supply_risk:read evidence:read\n"),
+            "{text}"
+        );
+        assert!(!text.contains("Tenants"), "{text}");
+
+        let mut out = Vec::new();
+        whoami_with(
+            &settings,
+            true,
+            &UnreachableStore,
+            true,
+            &me,
+            &no_userinfo,
+            &mut out,
+        )
+        .expect("key set");
+        let printed: Value = serde_json::from_slice(&out).expect("json");
+        assert_eq!(
+            printed["tenant"]["id"],
+            "6f1c2d3e-4b5a-4c6d-8e7f-0a1b2c3d4e5f"
+        );
+        assert_eq!(printed["tenant"]["type"], "direct");
+        assert_eq!(printed["organization"]["name"], "Acme Group");
+        assert_eq!(printed["portfolio"], Value::Null);
+        assert_eq!(printed["credential_scopes"][1], "evidence:read");
+    }
+
+    #[test]
+    fn whoami_shows_the_mssp_and_the_tenant_count_of_a_portfolio_key() {
+        let (api, app) = (mockito::Server::new(), mockito::Server::new());
+        let settings = settings_for(&api, &app);
+        let me = || {
+            Ok(who(
+                r#"{"credential":{"type":"portfolio","prefix":"hsp_3f2a9c0d1b4e","scopes":["portfolio:read","supply_risk:read"]},
+                    "tenant":null,
+                    "organization":{"id":"7a1c2d3e-4b5a-4c6d-8e7f-0a1b2c3d4e5f","name":null,"type":"mssp"},
+                    "portfolio":{"tenant_count":12,"tenants_path":"/v1/portfolio/tenants"}}"#,
+            ))
+        };
+        let mut out = Vec::new();
+        whoami_with(
+            &settings,
+            true,
+            &UnreachableStore,
+            false,
+            &me,
+            &no_userinfo,
+            &mut out,
+        )
+        .expect("key set");
+        let text = String::from_utf8(out).expect("utf8");
+        assert!(!text.contains("Tenant  "), "{text}");
+        assert!(text.contains("Org         - (mssp)\n"), "{text}");
+        assert!(
+            text.contains("Tenants     12 client tenants (hodeishield tenants list)\n"),
+            "{text}"
+        );
     }
 
     const DEVICE: LoginArgs = LoginArgs {
@@ -888,7 +1329,7 @@ mod tests {
     fn the_notice_for_unrevoked_tokens_points_to_the_app() {
         let notice = unstored_notice(&Err(Failure::general("the app refused to revoke")));
         assert!(
-            notice.contains("did not confirm") && notice.contains("Application access"),
+            notice.contains("did not confirm") && notice.contains("Account → Applications"),
             "{notice}"
         );
     }

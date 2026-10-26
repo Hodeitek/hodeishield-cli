@@ -10,9 +10,16 @@ no-default-features = false
 feature-depth = 1
 
 # https://embarkstudios.github.io/cargo-deny/checks/advisories/cfg.html
+# An advisory is accepted only with a reason that says why it does not make the CLI exploitable,
+# ending with "Review by YYYY-MM-DD." (CONTRIBUTING.md, "Known vulnerabilities at release"):
+#     { id = "RUSTSEC-0000-0000", reason = "<why it is not exploitable here>. Review by 2027-01-31." },
+# CI and the release workflow refuse a bare id, a missing reason or a review date that has passed
+# (.github/scripts/advisory-exceptions.py), and cargo audit ignores exactly the same list.
 [advisories]
 ignore = [
-    #"RUSTSEC-0000-0000",
+    { id = "RUSTSEC-2026-0370", reason = "Unmaintained notice, not a vulnerability: the code of zvariant 5.15.0 was merged into zbus 6.0.0. Reached only through zbus 5 <- secret-service 5.2.0 <- zbus-secret-service-keyring-store 1.0.1, the Linux Secret Service keychain backend. The latest release of both secret-service and the keyring store still depend on zbus 5, so there is no upgrade yet. Review by 2027-01-31." },
+    { id = "RUSTSEC-2026-0371", reason = "Unmaintained notice, not a vulnerability: the code of zbus_names 4.3.4 was merged into zbus 6.0.0. Reached only through zbus 5 <- secret-service 5.2.0 <- zbus-secret-service-keyring-store 1.0.1, the Linux Secret Service keychain backend. The latest release of both secret-service and the keyring store still depend on zbus 5, so there is no upgrade yet. Review by 2027-01-31." },
+    { id = "RUSTSEC-2026-0372", reason = "Unmaintained notice, not a vulnerability: the code of zvariant_derive 5.15.0 was merged into zbus 6.0.0. Reached only through zbus 5 <- secret-service 5.2.0 <- zbus-secret-service-keyring-store 1.0.1, the Linux Secret Service keychain backend. The latest release of both secret-service and the keyring store still depend on zbus 5, so there is no upgrade yet. Review by 2027-01-31." },
 ]
 
 # https://embarkstudios.github.io/cargo-deny/checks/licenses/cfg.html

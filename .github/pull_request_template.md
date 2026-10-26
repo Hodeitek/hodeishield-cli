@@ -4,3 +4,4 @@
 
 - [ ] `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`
 - [ ] No credential, real hostname or organisation data in code, tests or this description
+- [ ] A new dependency, action or tool: this description answers the criteria in `docs/third-party-components.md`

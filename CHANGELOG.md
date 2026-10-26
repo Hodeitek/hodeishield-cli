@@ -14,6 +14,179 @@ commands, `--json` output and exit codes. Each release's notes start with its se
   that states the fingerprint and the repository configuration: check the key against it.
   ([#161](https://github.com/Hodeitek/hodeishield-cli/issues/161))
 
+### Changed
+
+- The generated `/v1` client follows version 2026-10-25 of the API document. `alerts list` now
+  prints each alert's `updated_at` in `--json` and `--csv` output (the table is unchanged), and
+  `--sort` accepts `updated_at`. The `/v1/me` answer now also carries `beta` and `user`; a `null`
+  user (an API key) is still no user.
+  ([#210](https://github.com/Hodeitek/hodeishield-cli/issues/210))
+
+### Fixed
+
+- `alerts list` no longer depends on `page`, `total` and `total_pages` in the answer, which the API
+  now treats as optional. When they are missing, `--all` stops at a page with a null `next_cursor`
+  or fewer alerts than the page size, and the `Page N of M` line is not printed.
+  ([#210](https://github.com/Hodeitek/hodeishield-cli/issues/210))
+
+## [0.5.1] - 2026-10-18
+
+### Changed
+
+- When the system has no CA certificates, the error for a request that cannot start or reach the API
+  now suggests installing the system CA certificates package (for example `ca-certificates`). The
+  HTTP client reports that case only as "No CA certificates were loaded from the system".
+  ([#196](https://github.com/Hodeitek/hodeishield-cli/issues/196))
+- `--help` no longer prints the values of `HODEISHIELD_API_URL` and `HODEISHIELD_PROFILE` when they
+  are set in the environment.
+- The `login` help, the session notice and the README name the screen where an app's access is
+  revoked "Account → Applications", as the web app does, and the README and `config set --help`
+  match the code on `login --no-browser` and the configuration keys.
+  ([#199](https://github.com/Hodeitek/hodeishield-cli/issues/199))
+- CI now runs the proxy and TLS inspection test on macOS and Windows as well as Linux.
+
+### Fixed
+
+- Usage errors no longer list `--api-url` or `--profile` in the `Usage:` line when only
+  `HODEISHIELD_API_URL` or `HODEISHIELD_PROFILE` sets them. The variables still work the same and
+  `--help` still names them.
+  ([#201](https://github.com/Hodeitek/hodeishield-cli/issues/201))
+
+### Documentation
+
+- The README lists the Linux prerequisites to install and to verify a download, gives a checksum
+  command that BusyBox also runs, and has Windows steps to check a download and to get Scoop and
+  cosign.
+  ([#195](https://github.com/Hodeitek/hodeishield-cli/issues/195))
+- The README says how to uninstall the archive and `install.sh` installs, in which order (remove the
+  settings before the binary), what an uninstall leaves behind on Windows, how to remove the zip
+  and how to check the MSI.
+  ([#197](https://github.com/Hodeitek/hodeishield-cli/issues/197))
+- The Quick start points servers and CI from the interactive sign-in to the tenant API key.
+  ([#198](https://github.com/Hodeitek/hodeishield-cli/issues/198))
+- The README says that `login` and `logout` exit with code 1 when the system keychain cannot be
+  reached.
+  ([#200](https://github.com/Hodeitek/hodeishield-cli/issues/200))
+- The Install section links to the steps for a binary that macOS or Windows blocks, and the Windows
+  steps (`Unblock-File`, SmartScreen's "More info → Run anyway") apply to every version.
+  ([#16](https://github.com/Hodeitek/hodeishield-cli/issues/16))
+- The README says that two profiles signed in as the same user, to the same tenant, with the same
+  flow share one sign-in, so logging out of either one signs out both.
+
+## [0.5.0] - 2026-10-15
+
+### Added
+
+- An opt-in plain-text token store, for machines that have no system keychain (an SSH or jump host,
+  WSL without a desktop). Set `HODEISHIELD_TOKEN_STORE=plaintext-file`, or the global setting
+  `hodeishield config set token_store plaintext-file`, and `login --device` keeps the session in a
+  file only your user can read, one per profile, in the platform's state directory
+  (`$XDG_STATE_HOME/hodeishield/sessions/` on Linux). The keychain stays the default, nothing ever
+  falls back from one store to the other, and the file store is not available on Windows yet. Every
+  read and write refuses a file or directory that is a symbolic link, belongs to another user or is
+  open to group or others (exit code 3 for commands that need a credential, 1 for `login` and
+  `logout`); files are replaced atomically with mode 600. `logout` revokes the tokens
+  and deletes the file. The README has a new section, "Servers, containers and remote sessions",
+  with the trade-off and the advice for containers and CI (a tenant API key); ADR 0001 records the
+  decision. A copy of the file stays usable at most 90 days from the sign-in, the limit the
+  service sets. A configuration file that contains `token_store` is refused by older CLIs.
+  ([#39](https://github.com/Hodeitek/hodeishield-cli/issues/39))
+- `reports list`, `reports get` and `reports download`: the reports generated for the tenant, and
+  their files. `reports list` filters by `--type`, `--status` and `--since` and takes the usual
+  paging, `--json` and `--csv`; `reports get` shows the formats a report can be downloaded in.
+  `reports download` saves a completed report as PDF or XLSX (`--format`, `--locale`) in the current
+  directory under the name the API suggests, reduced to a plain stem with the extension of the
+  format, or at `--output <PATH>`;
+  `--output -` writes it to standard output when that is not a terminal. An existing file is only
+  replaced with `--force`, a file is never left half written, and on Unix it is readable only by you. A report that is still being
+  generated, failed, has no file in that format or is too large fails with a message that says so.
+  ([#55](https://github.com/Hodeitek/hodeishield-cli/issues/55))
+- A `security.txt` (RFC 9116) for this repository, at `.well-known/security.txt` on `main`, with the
+  private reporting link, the security address, the preferred languages and the link to
+  `SECURITY.md`; `SECURITY.md` points to it. A weekly check validates the file and opens an issue
+  when it is invalid or has less than 60 days left before its expiry date.
+  ([#125](https://github.com/Hodeitek/hodeishield-cli/issues/125))
+- The release workflow can sign and notarize the macOS binaries with a Developer ID: the universal
+  binary is signed with the hardened runtime and notarized, and a `.pkg` installer is signed,
+  notarized and stapled. A new on-demand workflow, "macOS signing check", tests the stored signing
+  secrets without a release. Until the signing identity is stored, releases say in their run summary
+  that macOS signing was skipped.
+  ([#50](https://github.com/Hodeitek/hodeishield-cli/issues/50))
+
+### Changed
+
+- `risks list --domain` and `--status` and `compliance controls --status` now list the values the
+  API publishes for them in `--help`. A value that is not listed gets a warning on standard error
+  (with a suggestion when only the case differs) and is still sent exactly as typed. The vendors
+  `--category` filter stays free text: the API keeps no list of categories.
+  ([#145](https://github.com/Hodeitek/hodeishield-cli/issues/145))
+- The generated `/v1` client follows version 2026-10-19 of the API document, which adds `GET /v1/me`
+  and the reports operations, including the download of a report file. `hodeishield login` now also
+  asks for `reports:read` when the app offers it.
+- `whoami` shows the tenant the credential reads (name and id), its organisation and, for a key, its
+  scopes; for a portfolio key, the MSSP and the number of client tenants. It reads them from the
+  new `GET /v1/me`, so it now makes one API call. `--json` gains the `tenant`, `organization`,
+  `portfolio` and `credential_scopes` fields, null when the API cannot be read; the exit code does
+  not depend on that call.
+  ([#48](https://github.com/Hodeitek/hodeishield-cli/issues/48))
+- `whoami` shows the signed-in user (`Name <email>`, in the `User` line and the `--json` `user`
+  string) from `GET /v1/me` when the API provides it for a sign-in, with no extra call. The
+  authorization server's userinfo endpoint stays as the fallback; a key still shows no user, and
+  nothing changes while the API does not send one.
+  ([#182](https://github.com/Hodeitek/hodeishield-cli/issues/182))
+
+### Fixed
+
+- The README installs with Homebrew by the full name, `brew install hodeitek/hodeishield/hodeishield`,
+  which adds the tap and trusts only this formula. Homebrew now refuses a formula from a tap that is
+  not trusted, so the earlier `brew tap` then `brew install hodeishield` failed. The README also says
+  how to trust the formula when the tap was added before.
+  ([#179](https://github.com/Hodeitek/hodeishield-cli/issues/179))
+- The README explains the System Settings route to open a blocked macOS binary, that unpacking with
+  `tar` in Terminal keeps the block, and that the dialog follows the system language.
+  ([#16](https://github.com/Hodeitek/hodeishield-cli/issues/16))
+
+## [0.4.4] - 2026-10-15
+
+### Security
+
+- rustls, the TLS library behind every connection the CLI makes, is updated from 0.23.45 to
+  0.23.46. It fixes RUSTSEC-2026-0346 (`Debug` output of client session values exposed TLS
+  secrets), RUSTSEC-2026-0347 (buffered data sent to the outer server after an ECH rejection),
+  RUSTSEC-2026-0348 (Brotli certificate decompression could allocate up to 1 GiB before
+  authentication) and RUSTSEC-2026-0349 (an unauthenticated ServerHello could downgrade later
+  connections to classical key exchange). Releases up to 0.4.3 include the affected version.
+
+## [0.4.3] - 2026-10-14
+
+### Added
+
+- `docs/technical-documentation.md`: the index of the technical documentation of the Cyber
+  Resilience Act (Annex VII), with the product category, the conformity route, who signs the
+  declaration, how the CE marking is shown for software and how the documentation is kept; and
+  `docs/declaration-of-conformity.md`, the template of the EU declaration of conformity. The
+  user information now gives the address of the declaration.
+  ([#129](https://github.com/Hodeitek/hodeishield-cli/issues/129))
+- `docs/third-party-components.md`: the criteria for adding a dependency and who reviews it, how
+  the dependency checks fit together, what is done when a dependency has a vulnerability, and how
+  it is reported to the component's maintainers with any fix. SECURITY.md, CONTRIBUTING.md and the
+  pull request template point to it.
+  ([#130](https://github.com/Hodeitek/hodeishield-cli/issues/130))
+- The Linux binaries can be rebuilt from the release tag with the same bytes:
+  `packaging/build/build.sh` builds them in a container image pinned by digest, with Debian packages
+  from a fixed snapshot, and the release builds them the same way. `docs/verifying-releases.md`
+  describes the rebuild, and a workflow repeats it for every published release.
+  ([#43](https://github.com/Hodeitek/hodeishield-cli/issues/43))
+
+### Changed
+
+- A release is no longer signed or published while a security advisory is open for its tagged
+  commit: the release workflow checks it with `cargo deny` and `cargo audit` against the RustSec
+  advisory database, and the release notes end with the result. An advisory can only be accepted
+  in `deny.toml` with a written reason and a review date, which CI checks; `CONTRIBUTING.md`
+  ("Known vulnerabilities at release") has the rule.
+  ([#121](https://github.com/Hodeitek/hodeishield-cli/issues/121))
+
 ## [0.4.2] - 2026-10-12
 
 ### Added
@@ -275,7 +448,11 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 - Profiles (`config`), shell completions, and release archives for Linux, macOS and Windows signed
   with Sigstore and with SLSA provenance.
 
-[Unreleased]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.5.0...v0.5.1
+[0.5.0]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.4.4...v0.5.0
+[0.4.4]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.4.3...v0.4.4
+[0.4.3]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.3.1...v0.4.0

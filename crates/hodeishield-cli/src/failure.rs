@@ -244,6 +244,7 @@ pub fn from_api(error: hodeishield_api::Error, context: &ApiContext<'_>) -> Fail
                         _ => failure,
                     }
                 }
+                409 => conflict(&api, server_message.as_deref()),
                 status if status >= 500 => Failure::new(
                     Kind::Unavailable,
                     format!(
@@ -259,7 +260,10 @@ pub fn from_api(error: hodeishield_api::Error, context: &ApiContext<'_>) -> Fail
             failure.request_id = request_id;
             failure
         }
-        Error::Transport(e) => Failure::new(Kind::Unavailable, format!("Could not reach the API: {}.", error_chain(&e))),
+        Error::Transport(e) => {
+            let chain = error_chain(&e);
+            ca_hint(Failure::new(Kind::Unavailable, format!("Could not reach the API: {chain}.")), &chain)
+        }
         Error::Decode { operation, source } => Failure::general(format!(
             "The answer to {operation} does not match the API description this CLI was built from: {source}."
         ))
@@ -279,6 +283,65 @@ pub fn from_api(error: hodeishield_api::Error, context: &ApiContext<'_>) -> Fail
                  the API URL and try again; if it persists, contact support.",
             ),
         other => Failure::general(other.to_string()),
+    }
+}
+
+/// Why a file cannot be served as asked (409), from `error.details.code`. Only the documented
+/// codes get their own wording; the values shown are short tokens, anything else is left out.
+fn conflict(api: &hodeishield_api::ApiError, server_message: Option<&str>) -> Failure {
+    let token = |s: &str| {
+        !s.is_empty()
+            && s.len() <= 16
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    };
+    let details = api.body.as_ref().and_then(|b| b.details.as_ref());
+    match detail(api, "code") {
+        Some("REPORT_NOT_READY") if detail(api, "status") == Some("failed") => {
+            Failure::general("The report failed to generate, so it has no file.")
+                .hint("Generate it again in the app.")
+        }
+        Some("REPORT_NOT_READY") => {
+            Failure::general("The report is still being generated, so it has no file yet.")
+                .hint("Try again later; `hodeishield reports get <id>` shows its status.")
+        }
+        Some("FORMAT_UNSUPPORTED") => {
+            let formats: Vec<&str> = details
+                .and_then(|d| d.get("formats"))
+                .and_then(serde_json::Value::as_array)
+                .map(|f| {
+                    f.iter()
+                        .filter_map(|v| v.as_str())
+                        .filter(|s| token(s))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let failure = Failure::general("The report cannot be downloaded in that format.");
+            if formats.is_empty() {
+                failure.hint(
+                    "It has no format the API can render; `hodeishield reports get <id>` lists \
+                     the formats it can be downloaded in.",
+                )
+            } else {
+                failure.hint(format!(
+                    "Choose one of its formats with --format: {}.",
+                    formats.join(", ")
+                ))
+            }
+        }
+        Some("FILE_TOO_LARGE") => {
+            let limit = details
+                .and_then(|d| d.get("limit_bytes"))
+                .and_then(serde_json::Value::as_u64)
+                .map_or_else(String::new, |b| format!(" ({b} bytes)"));
+            Failure::general(format!(
+                "The report's file is larger than the API serves{limit}, so it was not sent."
+            ))
+        }
+        _ => Failure::general(format!(
+            "The API refused the request: {}.",
+            server_message.map_or("conflict", sentence_body)
+        )),
     }
 }
 
@@ -311,6 +374,16 @@ pub fn error_chain(error: &dyn std::error::Error) -> String {
         source = cause.source();
     }
     text
+}
+
+/// Adds the hint for a machine with no CA certificates, which the HTTP client reports only as
+/// "No CA certificates were loaded from the system".
+pub fn ca_hint(failure: Failure, chain: &str) -> Failure {
+    if chain.contains("No CA certificates were loaded") {
+        failure.hint("Install the system CA certificates package (for example `ca-certificates`).")
+    } else {
+        failure
+    }
 }
 
 /// Where the credential of a call came from, for the hint on a 401.
@@ -363,6 +436,20 @@ mod tests {
         assert_eq!(sentence_body("Bad value!  "), "Bad value");
         assert_eq!(sentence_body("send X-HS-Tenant.."), "send X-HS-Tenant");
         assert_eq!(sentence_body("version 1.2 is old"), "version 1.2 is old");
+    }
+
+    #[test]
+    fn a_missing_ca_bundle_gets_a_hint_and_other_errors_do_not() {
+        let chain =
+            "builder error: unexpected error: No CA certificates were loaded from the system";
+        let hinted = ca_hint(Failure::general("x"), chain);
+        assert!(
+            hinted
+                .hint
+                .as_deref()
+                .is_some_and(|h| h.contains("ca-certificates"))
+        );
+        assert!(ca_hint(Failure::general("x"), "dns error").hint.is_none());
     }
 
     #[test]

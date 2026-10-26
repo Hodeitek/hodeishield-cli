@@ -3,7 +3,9 @@
 
 use crate::error::Error;
 use reqwest::StatusCode;
-use reqwest::header::{ACCEPT, AUTHORIZATION, HeaderMap, HeaderValue};
+use reqwest::header::{
+    ACCEPT, AUTHORIZATION, CONTENT_DISPOSITION, CONTENT_TYPE, HeaderMap, HeaderValue,
+};
 use secrecy::{ExposeSecret, SecretString};
 use serde::de::DeserializeOwned;
 use std::collections::hash_map::RandomState;
@@ -83,6 +85,21 @@ pub struct ApiResponse<T> {
     pub data: T,
     /// The body as received.
     pub raw: serde_json::Value,
+    /// Status, request id and rate-limit headers.
+    pub meta: ResponseMeta,
+}
+
+/// A successful answer of an operation whose body is a file (`format: binary`), such as a report
+/// download.
+#[derive(Debug, Clone)]
+pub struct Download {
+    /// The file, exactly as received.
+    pub bytes: Vec<u8>,
+    /// `Content-Type`, as sent.
+    pub content_type: Option<String>,
+    /// The `filename` of `Content-Disposition`, as sent. It comes from the server: a caller that
+    /// writes the file must reduce it to a plain file name of its own choosing.
+    pub file_name: Option<String>,
     /// Status, request id and rate-limit headers.
     pub meta: ResponseMeta,
 }
@@ -444,16 +461,68 @@ impl Client {
         std::thread::sleep(wait);
     }
 
-    /// A GET. The operation decides whether the client's tenant selection applies: scope headers
-    /// are sent and checked only when `operation.tenant_scoped`.
+    /// A GET whose answer is JSON, decoded into `T`.
     pub(crate) fn get<T: DeserializeOwned>(
         &self,
         operation: &'static Operation,
         path: String,
         query: Vec<(&'static str, String)>,
     ) -> Result<ApiResponse<T>, Error> {
+        let (meta, _, body) = self.fetch(operation, &path, &query, None, MAX_RESPONSE_BYTES)?;
+        let raw: serde_json::Value =
+            serde_json::from_slice(&body).map_err(|source| Error::Decode {
+                operation: operation.id,
+                source,
+            })?;
+        let data = T::deserialize(&raw).map_err(|source| Error::Decode {
+            operation: operation.id,
+            source,
+        })?;
+        Ok(ApiResponse { data, raw, meta })
+    }
+
+    /// A GET whose answer is a file. `accept` lists the media types the document declares (an
+    /// error still comes back as JSON).
+    pub(crate) fn get_binary(
+        &self,
+        operation: &'static Operation,
+        path: String,
+        query: Vec<(&'static str, String)>,
+        accept: &'static str,
+    ) -> Result<Download, Error> {
+        let (meta, headers, bytes) =
+            self.fetch(operation, &path, &query, Some(accept), MAX_DOWNLOAD_BYTES)?;
+        let text = |name| {
+            headers
+                .get(name)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_owned)
+        };
+        Ok(Download {
+            bytes,
+            content_type: text(CONTENT_TYPE),
+            file_name: text(CONTENT_DISPOSITION)
+                .as_deref()
+                .and_then(content_disposition_file_name),
+            meta,
+        })
+    }
+
+    /// Sends a GET, with the retries, the credential renewal and the tenant check, and returns a
+    /// successful answer's metadata, headers and body (at most `limit` bytes; the body of an error is
+    /// read up to [`MAX_RESPONSE_BYTES`] whatever `limit` is). The operation decides
+    /// whether the client's tenant selection applies: scope headers are sent and checked only when
+    /// `operation.tenant_scoped`.
+    fn fetch(
+        &self,
+        operation: &'static Operation,
+        path: &str,
+        query: &[(&'static str, String)],
+        accept: Option<&'static str>,
+        limit: u64,
+    ) -> Result<(ResponseMeta, HeaderMap, Vec<u8>), Error> {
         let scoped = operation.tenant_scoped;
-        let url = self.url(&path, &query);
+        let url = self.url(path, query);
         let mut rate_limit_retries = 0;
         let mut transient_retries = 0;
         let mut renewed = false;
@@ -465,6 +534,9 @@ impl Client {
                 .header(AUTHORIZATION, self.authorization()?);
             if scoped {
                 request = request.headers(self.scope.headers.clone());
+            }
+            if let Some(accept) = accept {
+                request = request.header(ACCEPT, accept);
             }
             let response = match request.send() {
                 Ok(response) => response,
@@ -500,19 +572,16 @@ impl Client {
                 (Some(check), true, true) => check(response.headers()),
                 _ => Ok(()),
             };
-            let body = read_body(response, MAX_RESPONSE_BYTES).map_err(Error::Body)?;
+            let headers = response.headers().clone();
+            let limit = if status.is_success() {
+                limit
+            } else {
+                MAX_RESPONSE_BYTES
+            };
+            let body = read_body(response, limit).map_err(Error::Body)?;
             if status.is_success() {
                 verdict?;
-                let raw: serde_json::Value =
-                    serde_json::from_slice(&body).map_err(|source| Error::Decode {
-                        operation: operation.id,
-                        source,
-                    })?;
-                let data = T::deserialize(&raw).map_err(|source| Error::Decode {
-                    operation: operation.id,
-                    source,
-                })?;
-                return Ok(ApiResponse { data, raw, meta });
+                return Ok((meta, headers, body));
             }
 
             if status == StatusCode::TOO_MANY_REQUESTS
@@ -588,6 +657,27 @@ fn backoff(base: Duration, retry: u32) -> Duration {
 /// Largest answer body this client reads: far above any `/v1` page, well below what would strain
 /// memory.
 pub const MAX_RESPONSE_BYTES: u64 = 8 * 1024 * 1024;
+
+/// Largest file this client downloads: the limit the document sets for a report file (20 MiB; a
+/// larger one is refused by the server with `FILE_TOO_LARGE`).
+pub const MAX_DOWNLOAD_BYTES: u64 = 20 * 1024 * 1024;
+
+/// The `filename` parameter of a `Content-Disposition` value (`attachment; filename="a.pdf"`),
+/// quoted or not, or `None` when there is none or it is empty.
+fn content_disposition_file_name(value: &str) -> Option<String> {
+    value.split(';').skip(1).find_map(|part| {
+        let (key, raw) = part.split_once('=')?;
+        if !key.trim().eq_ignore_ascii_case("filename") {
+            return None;
+        }
+        let raw = raw.trim();
+        let name = raw
+            .strip_prefix('"')
+            .and_then(|r| r.strip_suffix('"'))
+            .unwrap_or(raw);
+        (!name.is_empty()).then(|| name.to_owned())
+    })
+}
 
 /// Reads the body of `response`, failing once it is larger than `limit` bytes instead of buffering
 /// the rest.

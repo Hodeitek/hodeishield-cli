@@ -10,14 +10,17 @@ use hodeishield_api::ParseEnumError;
 use hodeishield_api::v1::operations;
 use hodeishield_api::v1::{
     AlertSort, AlertStatus, BusinessCriticality, ComplianceControlSort, EndpointSort,
-    EndpointStatus, EvidenceSort, Order, RiskSort, VendorSort,
+    EndpointStatus, EvidenceSort, Format, Locale, Order, ReportSort, RiskSort, VendorSort,
 };
+use std::io::IsTerminal;
+use std::path::PathBuf;
 use std::str::FromStr;
 
 const AFTER_HELP: &str = "\
 Credentials:
   HODEISHIELD_API_KEY   A tenant API key, or an MSSP portfolio key (hsp_…). When set, it is used for every API call.
-  hodeishield login     Otherwise, sign in to the app; the token is kept in the system keychain.
+  hodeishield login     Otherwise, sign in to the app; the token is kept in the system keychain
+                        (or, only if you opt in, in a plain-text file).
 
 Several client tenants (portfolio credential):
   hodeishield tenants list                       The client tenants you may read.
@@ -34,22 +37,22 @@ Exit codes:
 #[derive(Debug, Parser)]
 #[command(name = "hodeishield", version, propagate_version = true, after_help = AFTER_HELP)]
 pub struct Cli {
-    /// Configuration profile to use.
+    /// Configuration profile to use. [env: HODEISHIELD_PROFILE]
+    // Read from the environment in `commands::run`, not by clap: clap would list the flag in every
+    // usage line while the variable is set.
     #[arg(
         long,
         global = true,
         help_heading = "Global options",
-        env = "HODEISHIELD_PROFILE",
         value_name = "NAME"
     )]
     pub profile: Option<String>,
 
-    /// Base URL of the API, overriding the profile.
+    /// Base URL of the API, overriding the profile. [env: HODEISHIELD_API_URL]
     #[arg(
         long,
         global = true,
         help_heading = "Global options",
-        env = "HODEISHIELD_API_URL",
         value_name = "URL"
     )]
     pub api_url: Option<String>,
@@ -108,6 +111,9 @@ pub enum Command {
     /// Enrolled endpoint agents.
     #[command(subcommand)]
     Endpoints(EndpointsCommand),
+    /// Reports generated for the tenant, and their files.
+    #[command(subcommand)]
+    Reports(ReportsCommand),
     /// Client tenants a portfolio (MSSP) credential may read.
     #[command(subcommand)]
     Tenants(TenantsCommand),
@@ -130,7 +136,10 @@ pub enum Command {
 
 const LOGIN_ABOUT: &str = "\
 Sign in to the HodeiShield app. The token is kept in the system keychain (macOS Keychain, Windows \
-Credential Manager, Secret Service on Linux), never in a file, and is refreshed when it expires.
+Credential Manager, Secret Service on Linux) and is refreshed when it expires. Only if you opt in \
+with HODEISHIELD_TOKEN_STORE=plaintext-file (Linux and macOS), it is kept instead in a file in your \
+state directory, unencrypted and readable only by you. The CLI never switches between the two on \
+its own.
 
 By default a browser window opens and the app redirects back to a one-shot listener on 127.0.0.1. \
 With --device, you get a short code to type in on any other device instead.
@@ -138,7 +147,7 @@ With --device, you get a short code to type in on any other device instead.
 On the consent screen you choose the one tenant the CLI may read; the token covers only that \
 tenant, and only reads. The scopes asked for are the ones the CLI's commands need (see \
 `config set oauth_scopes` to ask for fewer). Revoke the access with `hodeishield logout`, or in the \
-app under Account → Application access.";
+app under Account → Applications.";
 
 #[derive(Debug, Args)]
 pub struct LoginArgs {
@@ -166,6 +175,15 @@ impl Cli {
         if let Some(message) = cli.selection_error() {
             Self::command()
                 .error(clap::error::ErrorKind::ArgumentConflict, message)
+                .exit();
+        }
+        if cli.command.downloads_to_stdout() && std::io::stdout().is_terminal() {
+            Self::command()
+                .error(
+                    clap::error::ErrorKind::InvalidValue,
+                    "'--output -' writes the file to standard output, which is a terminal here; \
+                     redirect it to a file or a pipe, or give a path",
+                )
                 .exit();
         }
         cli
@@ -214,6 +232,7 @@ impl Cli {
         self.json
             || matches!(self.command, Command::Completions { .. })
             || self.command.paging().is_some_and(|paging| paging.csv)
+            || self.command.downloads_to_stdout()
     }
 }
 
@@ -228,7 +247,13 @@ impl Command {
                 | Self::Compliance(_)
                 | Self::Evidence(_)
                 | Self::Endpoints(_)
+                | Self::Reports(_)
         )
+    }
+
+    /// Whether this is a download whose file goes to standard output (`--output -`).
+    fn downloads_to_stdout(&self) -> bool {
+        matches!(self, Self::Reports(ReportsCommand::Download(download)) if download.to_stdout())
     }
 
     /// The paging options, for the commands that list.
@@ -240,6 +265,7 @@ impl Command {
             Self::Compliance(ComplianceCommand::Controls(list)) => Some(&list.paging),
             Self::Evidence(EvidenceCommand::List(list)) => Some(&list.paging),
             Self::Endpoints(EndpointsCommand::List(list)) => Some(&list.paging),
+            Self::Reports(ReportsCommand::List(list)) => Some(&list.paging),
             Self::Tenants(TenantsCommand::List(list)) => Some(&list.paging),
             _ => None,
         }
@@ -465,17 +491,88 @@ pub struct EndpointsList {
 }
 
 #[derive(Debug, Subcommand)]
+pub enum ReportsCommand {
+    /// List generated reports, newest first.
+    List(ReportsList),
+    /// Show one report, with the formats it can be downloaded in.
+    Get {
+        /// Report id.
+        id: String,
+    },
+    /// Download a report's file (PDF or XLSX).
+    #[command(long_about = DOWNLOAD_ABOUT)]
+    Download(ReportsDownload),
+}
+
+const DOWNLOAD_ABOUT: &str = "\
+Download a report's file (PDF or XLSX). Only a completed report has one; `reports get` lists the \
+formats it can be downloaded in.
+
+By default the file is saved in the current directory under the name the API suggests, reduced to \
+letters, digits, `.`, `_` and `-` (or report-<id>.<format> when nothing usable is left). An existing \
+file is never replaced without --force, and the file appears in full or not at all.";
+
+#[derive(Debug, Args)]
+pub struct ReportsList {
+    /// Exact report type.
+    #[arg(
+        long = "type",
+        visible_alias = "report-type",
+        value_name = "TYPE",
+        help = filters::help("Exact report type.", &operations::LIST_REPORTS, "report_type")
+    )]
+    pub report_type: Option<String>,
+    /// Exact status.
+    #[arg(long, help = filters::help("Exact status.", &operations::LIST_REPORTS, "status"))]
+    pub status: Option<String>,
+    /// Only reports created at or after this RFC 3339 instant, e.g. 2026-01-31T00:00:00Z.
+    #[arg(long, value_name = "INSTANT")]
+    pub since: Option<String>,
+    /// Field to order by.
+    #[arg(long, value_parser = choice::<ReportSort>(ReportSort::VALUES))]
+    pub sort: Option<ReportSort>,
+    #[command(flatten)]
+    pub paging: Paging,
+}
+
+#[derive(Debug, Args)]
+pub struct ReportsDownload {
+    /// Report id.
+    pub id: String,
+    /// File format; the API sends pdf when it is not given.
+    #[arg(long, value_parser = choice::<Format>(Format::VALUES))]
+    pub format: Option<Format>,
+    /// Language of the file; the API uses en when it is not given.
+    #[arg(long, value_parser = choice::<Locale>(Locale::VALUES))]
+    pub locale: Option<Locale>,
+    /// Where to save the file: a file path, a directory to save it in under the suggested name, or
+    /// `-` for standard output (not a terminal).
+    #[arg(long, short, value_name = "PATH")]
+    pub output: Option<PathBuf>,
+    /// Replace the file if it exists.
+    #[arg(long)]
+    pub force: bool,
+}
+
+impl ReportsDownload {
+    /// Whether the file goes to standard output (`--output -`).
+    pub fn to_stdout(&self) -> bool {
+        self.output.as_deref() == Some(std::path::Path::new("-"))
+    }
+}
+
+#[derive(Debug, Subcommand)]
 pub enum ConfigCommand {
     /// Print the path of the configuration file.
     Path,
     /// Show the settings in effect for the profile.
     Show,
-    /// Set a key of the profile: api_url, app_url, oauth_client_id, oauth_scopes.
+    /// Set a key: api_url, app_url, oauth_client_id, oauth_scopes (per profile), update_check, token_store (global).
     Set {
         /// The key to set.
         #[arg(value_parser = PossibleValuesParser::new(crate::config::KEYS))]
         key: String,
-        /// The value. For oauth_scopes, a space-separated list.
+        /// The value. For oauth_scopes, a space-separated list; update_check takes true or false; token_store takes keychain or plaintext-file.
         value: String,
     },
     /// Remove a key from the profile, going back to the default.

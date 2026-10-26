@@ -247,7 +247,7 @@ struct Resource {
     csv_header: &'static str,
 }
 
-const RESOURCES: [Resource; 5] = [
+const RESOURCES: [Resource; 6] = [
     Resource {
         command: &["vendors"],
         list_args: &[],
@@ -259,8 +259,8 @@ const RESOURCES: [Resource; 5] = [
         command: &["alerts"],
         list_args: &[],
         path: "/v1/alerts",
-        item: r#"{"id":"a1","vendor_id":"v1","type":"cve","severity":"high","title":"Example alert","description":null,"source_url":null,"economic_impact":null,"status":"open","acknowledged_at":null,"resolved_at":null,"resolution_reason":null,"created_at":"2026-01-01T00:00:00Z","added_later":"x"}"#,
-        csv_header: "id,vendor_id,type,severity,title,description,source_url,economic_impact,status,acknowledged_at,resolved_at,resolution_reason,created_at,added_later",
+        item: r#"{"id":"a1","vendor_id":"v1","type":"cve","severity":"high","title":"Example alert","description":null,"source_url":null,"economic_impact":null,"status":"open","acknowledged_at":null,"resolved_at":null,"resolution_reason":null,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-02T00:00:00Z","added_later":"x"}"#,
+        csv_header: "id,vendor_id,type,severity,title,description,source_url,economic_impact,status,acknowledged_at,resolved_at,resolution_reason,created_at,updated_at,added_later",
     },
     Resource {
         command: &["risks"],
@@ -275,6 +275,13 @@ const RESOURCES: [Resource; 5] = [
         path: "/v1/evidence",
         item: r#"{"id":"e1","evidence_type":"policy","source_type":"manual","source_id":"s1","title":"Example evidence","description":null,"vendor_id":null,"asset_id":null,"auto_generated":false,"valid_until":null,"created_at":"2026-01-01T00:00:00Z","added_later":7}"#,
         csv_header: "id,evidence_type,source_type,source_id,title,description,vendor_id,asset_id,auto_generated,valid_until,created_at,added_later",
+    },
+    Resource {
+        command: &["reports"],
+        list_args: &[],
+        path: "/v1/reports",
+        item: r#"{"id":"0b8f2a52-6a0e-4d5c-9d3e-1f2a3b4c5d6e","report_type":"monthly","title":"Example report","period_start":"2026-09-01","period_end":"2026-09-30","status":"completed","created_at":"2026-10-01T00:00:00Z","added_later":{"k":"v"}}"#,
+        csv_header: "id,report_type,title,period_start,period_end,status,created_at,added_later",
     },
     Resource {
         command: &["endpoints"],
@@ -394,11 +401,19 @@ fn json_all_is_an_array_of_the_items() {
 #[test]
 fn json_get_is_the_api_body_with_unknown_fields_passed_through() {
     let env = Env::new();
-    for resource in &RESOURCES[..4] {
+    for resource in &RESOURCES[..5] {
         let name = resource.command[0];
         let id = "x1";
         let path = format!("{}/{id}", resource.path);
-        let body = format!(r#"{{"data":{},"added_later_top":1}}"#, resource.item);
+        // A single report also says which formats it can be downloaded in.
+        let item = if name == "reports" {
+            resource
+                .item
+                .replacen('{', r#"{"download_formats":["pdf"],"#, 1)
+        } else {
+            resource.item.to_owned()
+        };
+        let body = format!(r#"{{"data":{item},"added_later_top":1}}"#);
         let mut server = mockito::Server::new();
         server.mock("GET", path.as_str()).with_body(&body).create();
         let output = env.api(&server.url(), &["--json", name, "get", id]);
@@ -412,6 +427,40 @@ fn json_get_is_the_api_body_with_unknown_fields_passed_through() {
         let top: Vec<&String> = printed.as_object().expect("object").keys().collect();
         assert_eq!(top, ["data", "added_later_top"], "{name}");
     }
+}
+
+/// `reports download --json` prints where the file went, its size and its type, and nothing else.
+#[test]
+fn json_report_download_fields() {
+    let env = Env::new();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut server = mockito::Server::new();
+    server
+        .mock("GET", "/v1/reports/r1/download")
+        .with_header("content-type", "application/pdf")
+        .with_header(
+            "content-disposition",
+            r#"attachment; filename="report.pdf""#,
+        )
+        .with_body("%PDF-")
+        .create();
+    let output = env
+        .cmd()
+        .env("HODEISHIELD_API_KEY", KEY)
+        .env("HODEISHIELD_API_URL", server.url())
+        .current_dir(dir.path())
+        .args(["--json", "reports", "download", "r1"])
+        .output()
+        .expect("run");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let printed: Value = serde_json::from_str(&out(&output)).expect("json");
+    assert_eq!(
+        printed,
+        json!({"path": "report.pdf", "bytes": 5, "content_type": "application/pdf"})
+    );
+    let keys: Vec<&String> = printed.as_object().expect("object").keys().collect();
+    assert_eq!(keys, ["path", "bytes", "content_type"]);
+    assert!(err(&output).is_empty(), "{}", err(&output));
 }
 
 /// `compliance posture` prints the API's body, `{"data": {...}}`.
@@ -433,18 +482,108 @@ fn json_posture_is_the_api_body_with_unknown_fields_passed_through() {
     );
 }
 
-/// `whoami --json` is an object with these fields, in this order (an API key has no more).
+/// `whoami --json` is an object with these fields, in this order (an API key has no more). The last
+/// four come from `GET /v1/me` as the API sends them.
 #[test]
 fn json_whoami_fields() {
     let env = Env::new();
-    let server = mockito::Server::new();
+    let mut server = mockito::Server::new();
+    let me = server
+        .mock("GET", "/v1/me")
+        .match_header("x-hs-tenant", mockito::Matcher::Missing)
+        .with_body(
+            r#"{"data":{"credential":{"type":"tenant","prefix":null,"scopes":["supply_risk:read"]},
+                "tenant":{"id":"6f1c2d3e-4b5a-4c6d-8e7f-0a1b2c3d4e5f","name":"Acme S.L.","type":"direct"},
+                "organization":{"id":"7a1c2d3e-4b5a-4c6d-8e7f-0a1b2c3d4e5f","name":"Acme Group","type":"direct"},
+                "portfolio":null}}"#,
+        )
+        .expect(1)
+        .create();
     let output = env.api(&server.url(), &["--json", "whoami"]);
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     let printed: Value = serde_json::from_str(&out(&output)).expect("json");
     let keys: Vec<&String> = printed.as_object().expect("object").keys().collect();
-    assert_eq!(keys, ["profile", "api_url", "app_url", "credential"]);
+    assert_eq!(
+        keys,
+        [
+            "profile",
+            "api_url",
+            "app_url",
+            "credential",
+            "tenant",
+            "organization",
+            "portfolio",
+            "credential_scopes"
+        ]
+    );
     assert_eq!(printed["credential"], json!("api_key"));
     assert_eq!(printed["api_url"], json!(format!("{}/", server.url())));
+    assert_eq!(
+        printed["tenant"],
+        json!({"id": "6f1c2d3e-4b5a-4c6d-8e7f-0a1b2c3d4e5f", "name": "Acme S.L.", "type": "direct"})
+    );
+    assert_eq!(printed["organization"]["name"], json!("Acme Group"));
+    assert_eq!(printed["portfolio"], Value::Null);
+    assert_eq!(printed["credential_scopes"], json!(["supply_risk:read"]));
+    me.assert();
+}
+
+/// A key has no user: whatever `user` the API sends in `GET /v1/me`, neither the table nor `--json`
+/// shows one, and the fields stay as they were.
+#[test]
+fn whoami_with_a_key_ignores_a_user_in_the_answer() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    server
+        .mock("GET", "/v1/me")
+        .with_body(
+            r#"{"data":{"credential":{"type":"tenant","prefix":null,"scopes":["supply_risk:read"]},
+                "tenant":{"id":"6f1c2d3e-4b5a-4c6d-8e7f-0a1b2c3d4e5f","name":"Acme S.L.","type":"direct"},
+                "organization":{"id":"7a1c2d3e-4b5a-4c6d-8e7f-0a1b2c3d4e5f","name":"Acme Group","type":"direct"},
+                "portfolio":null,
+                "user":{"id":"u-1","name":"Ana Ruiz","email":"ana@acme.example"}}}"#,
+        )
+        .expect(2)
+        .create();
+    let output = env.api(&server.url(), &["--json", "whoami"]);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let printed: Value = serde_json::from_str(&out(&output)).expect("json");
+    assert!(printed.get("user").is_none(), "{printed}");
+    assert!(!out(&output).contains("Ana Ruiz"));
+    let output = env.api(&server.url(), &["whoami"]);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(!out(&output).contains("User") && !out(&output).contains("Ana"));
+}
+
+/// When `GET /v1/me` fails, `whoami` still succeeds with the local fields; the API's are null and
+/// standard error says why.
+#[test]
+fn json_whoami_without_the_api() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    server
+        .mock("GET", "/v1/me")
+        .with_status(404)
+        .with_body(
+            r#"{"error":{"code":"NOT_FOUND","message":"Gone\u001b]0;pwned\u0007 away.","request_id":"req-1"}}"#,
+        )
+        .create();
+    let output = env.api(&server.url(), &["--json", "whoami"]);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let printed: Value = serde_json::from_str(&out(&output)).expect("json");
+    for key in ["tenant", "organization", "portfolio", "credential_scopes"] {
+        assert_eq!(printed[key], Value::Null, "{key}");
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("warning: could not read from the API who this credential is:"),
+        "{stderr}"
+    );
+    // The API's message is untrusted: no escape sequence reaches the terminal.
+    assert!(
+        !stderr.contains('\u{1b}') && !stderr.contains('\u{7}'),
+        "{stderr:?}"
+    );
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -495,8 +634,8 @@ fn csv_document_snapshot() {
         .match_query(mockito::Matcher::Any)
         .with_body(
             r#"{"data":[
-{"id":"a1","vendor_id":"v","type":"cve","severity":"+high","title":"=1+1","description":"-x","source_url":"@SUM(A1)","economic_impact":-5,"status":"open","acknowledged_at":null,"resolved_at":null,"resolution_reason":null,"created_at":"2026-01-01T00:00:00Z"},
-{"id":"a2","vendor_id":"v","type":"cve","severity":"say \"hi\"","title":"plain, with comma","description":"two\nlines","source_url":" padded ","economic_impact":2.5,"status":"a=b","acknowledged_at":null,"resolved_at":null,"resolution_reason":null,"created_at":"2026-01-01T00:00:00Z"}
+{"id":"a1","vendor_id":"v","type":"cve","severity":"+high","title":"=1+1","description":"-x","source_url":"@SUM(A1)","economic_impact":-5,"status":"open","acknowledged_at":null,"resolved_at":null,"resolution_reason":null,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-02T00:00:00Z"},
+{"id":"a2","vendor_id":"v","type":"cve","severity":"say \"hi\"","title":"plain, with comma","description":"two\nlines","source_url":" padded ","economic_impact":2.5,"status":"a=b","acknowledged_at":null,"resolved_at":null,"resolution_reason":null,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-02T00:00:00Z"}
 ],"pagination":{"page":1,"per_page":50,"total":2,"total_pages":1}}"#,
         )
         .create();
@@ -505,9 +644,9 @@ fn csv_document_snapshot() {
     assert_eq!(
         out(&output),
         "id,vendor_id,type,severity,title,description,source_url,economic_impact,status,\
-         acknowledged_at,resolved_at,resolution_reason,created_at\r\n\
-         a1,v,cve,'+high,'=1+1,'-x,'@SUM(A1),-5,open,,,,2026-01-01T00:00:00Z\r\n\
-         a2,v,cve,\"say \"\"hi\"\"\",\"plain, with comma\",\"two\nlines\",\" padded \",2.5,a=b,,,,2026-01-01T00:00:00Z\r\n"
+         acknowledged_at,resolved_at,resolution_reason,created_at,updated_at\r\n\
+         a1,v,cve,'+high,'=1+1,'-x,'@SUM(A1),-5,open,,,,2026-01-01T00:00:00Z,2026-01-02T00:00:00Z\r\n\
+         a2,v,cve,\"say \"\"hi\"\"\",\"plain, with comma\",\"two\nlines\",\" padded \",2.5,a=b,,,,2026-01-01T00:00:00Z,2026-01-02T00:00:00Z\r\n"
     );
 }
 

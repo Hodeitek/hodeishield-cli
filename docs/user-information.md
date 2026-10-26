@@ -23,6 +23,10 @@ this document existed; for them, the README and SECURITY.md in their tag apply.
   [releases page](https://github.com/Hodeitek/hodeishield-cli/releases), at
   `https://github.com/Hodeitek/hodeishield-cli/releases/tag/v<version>`. The notes of every
   release, with its date, are also in [CHANGELOG.md](../CHANGELOG.md).
+- **EU declaration of conformity:** a declaration is issued from 11 December 2027. The one for each
+  release is at
+  `https://github.com/Hodeitek/hodeishield-cli/blob/v<version>/docs/declaration-of-conformity.md`.
+  Until then that file is a template, not a declaration.
 
 ## Manufacturer and contact
 
@@ -53,8 +57,8 @@ advisories are under
 
 `hodeishield` is a read-only command-line client for the public `/v1` API of
 [HodeiShield](https://hodeishield.com). It reads one organisation's third-party inventory,
-supply-chain alerts, risk register, compliance posture, evidence and endpoint agents, from a
-terminal or a script. Every command reads: its requests to the API are `GET` only, and it cannot
+supply-chain alerts, risk register, compliance posture, evidence, endpoint agents and reports, from
+a terminal or a script. Every command reads: its requests to the API are `GET` only, and it cannot
 change data in your organisation. It needs a HodeiShield account to sign in with, or a tenant API
 key.
 
@@ -85,7 +89,7 @@ logged, HTTPS only, no redirects followed, signed releases) is in
   has no option to skip certificate verification: install your organisation's CA in that store
   ([Networking](../README.md#networking-proxies-and-tls-inspection)).
 - **Cut access you no longer need**: `hodeishield logout`, or revoke the CLI's access in the app
-  under **Account → Application access**; revoke an API key in the app as soon as it is not needed
+  under **Account → Applications**; revoke an API key in the app as soon as it is not needed
   or may have been exposed.
 
 Known limitations:
@@ -137,7 +141,7 @@ To stop using `hodeishield` on a machine and leave nothing behind:
 1. **Sign out of every profile you signed in to**: `hodeishield logout`, and
    `hodeishield logout --profile <name>` for each other profile. This revokes the token at the app
    and removes it from the system keychain. If the CLI warns that the app did not confirm the
-   revocation, revoke the CLI's access in the app under **Account → Application access**.
+   revocation, revoke the CLI's access in the app under **Account → Applications**.
 2. **Revoke the tenant API keys** the machine used, in the app, and remove them from the
    environment and secret stores that held them.
 3. **Delete the configuration file and the update-check record.** `hodeishield config path` prints
@@ -165,7 +169,7 @@ To stop using `hodeishield` on a machine and leave nothing behind:
    | `cargo install` | `cargo uninstall hodeishield-cli` |
 
 If the CLI is already gone and a sign-in was left in the keychain, revoke the access in the app
-(**Account → Application access**), then delete the entry, one per profile, whose service is
+(**Account → Applications**), then delete the entry, one per profile, whose service is
 `hodeishield-cli` and whose account is the profile name: on macOS with Keychain Access or
 `security delete-generic-password -s hodeishield-cli -a <profile>`, on Windows in Credential Manager
 (*Windows Credentials*, named `<profile>.hodeishield-cli`), and on Linux with

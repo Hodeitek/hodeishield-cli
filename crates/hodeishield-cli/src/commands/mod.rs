@@ -5,6 +5,7 @@
 
 mod config;
 mod resources;
+mod save;
 mod session;
 mod tenants;
 
@@ -111,11 +112,16 @@ impl Context {
     }
 }
 
+/// A flag's environment fallback; an empty or blank value counts as unset.
+fn env_value(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|v| !v.trim().is_empty())
+}
+
 pub fn run(cli: Cli, out: &mut dyn Write) -> Result<()> {
     let ctx = Context {
         overrides: Overrides {
-            profile: cli.profile,
-            api_url: cli.api_url,
+            profile: cli.profile.or_else(|| env_value("HODEISHIELD_PROFILE")),
+            api_url: cli.api_url.or_else(|| env_value("HODEISHIELD_API_URL")),
         },
         json: cli.json,
         verbose: cli.verbose,
@@ -124,7 +130,7 @@ pub fn run(cli: Cli, out: &mut dyn Write) -> Result<()> {
             (None, true) => Selection::All,
             (None, false) => Selection::Own,
         },
-        store: Arc::new(auth::store::Keychain),
+        store: Arc::new(auth::store::Configured::default()),
         is_portfolio_key: Cell::new(None),
     };
     match cli.command {
@@ -134,6 +140,7 @@ pub fn run(cli: Cli, out: &mut dyn Write) -> Result<()> {
         Command::Compliance(command) => resources::compliance(&ctx, command, out),
         Command::Evidence(command) => resources::evidence(&ctx, command, out),
         Command::Endpoints(command) => resources::endpoints(&ctx, command, out),
+        Command::Reports(command) => resources::reports(&ctx, command, out),
         Command::Tenants(command) => tenants::run(&ctx, command, out),
         Command::Login(args) => session::login(&ctx, &args),
         Command::Logout => session::logout(&ctx),

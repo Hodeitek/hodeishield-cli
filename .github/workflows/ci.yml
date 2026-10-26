@@ -188,6 +188,12 @@ jobs:
       - name: Install cargo-deny
         run: cargo install cargo-deny --locked --version 0.20.2
 
+      # Each accepted advisory needs a reason and a review date that has not passed.
+      - name: Accepted advisories
+        run: |
+          python3 -I .github/scripts/advisory-exceptions-test.py
+          python3 .github/scripts/advisory-exceptions.py check
+
       - name: cargo deny check
         run: cargo deny check
 
@@ -206,13 +212,17 @@ jobs:
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
-      # Pinned to the version validated locally. Bumped by hand in the periodic dependency review
-      # (CONTRIBUTING.md).
-      - name: Install cargo-audit
-        run: cargo install cargo-audit --locked --version 0.22.2
+      # Pinned to the versions validated locally, the same as in the deny job and in the advisories
+      # job of release.yml. Bumped by hand in the periodic dependency review (CONTRIBUTING.md).
+      - name: Install cargo-audit and cargo-deny
+        run: |
+          cargo install cargo-audit --locked --version 0.22.2
+          cargo install cargo-deny --locked --version 0.20.2
 
-      - name: cargo audit
-        run: cargo audit
+      # The check the release workflow runs on a tag: cargo audit and cargo deny, letting through
+      # only the advisories accepted in deny.toml.
+      - name: Advisory check
+        run: bash .github/scripts/advisory-gate.sh
 
   # The install script: lint it, then install the latest published release with it, signature
   # check included.
@@ -226,7 +236,7 @@ jobs:
           persist-credentials: false
 
       - name: shellcheck
-        run: shellcheck -s sh install.sh packaging/repo/*.sh
+        run: shellcheck -s sh install.sh packaging/repo/*.sh packaging/build/*.sh
 
       - name: Every curl call in install.sh is HTTPS-only
         run: |

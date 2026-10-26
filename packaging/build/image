@@ -1,0 +1,8 @@
+# The image packaging/build/build.sh builds the Linux binaries in, pinned by digest; the Debian
+# snapshot its packages come from (the date in the image's /etc/apt/sources.list.d/debian.sources);
+# and the exact packages it installs. The image's Rust version must be the channel in
+# rust-toolchain.toml: build.sh refuses anything else. Bumped by hand in the periodic dependency
+# review (CONTRIBUTING.md), and with every toolchain update.
+IMAGE=rust:1.99.0-slim-trixie@sha256:2752b332db73fdbb7dc576f06c82ed1f312005784ef913d7e04a28f5f55dc581
+SNAPSHOT=20261005T000000Z
+PACKAGES="musl-tools=1.2.5-3.1~deb13u1"
