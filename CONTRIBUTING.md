@@ -212,6 +212,14 @@ the `packaging` environment has no `PACKAGES_S3_ENDPOINT`. It needs the variable
 ASCII-armored secret signing subkey only), and the matching public key committed as
 `packaging/gpg.key`.
 
+To publish the APT and DNF repositories again, for example after the `repos` job of a release failed,
+run the **Package managers** workflow by hand from `main` (`gh workflow run package-managers.yml --ref
+main`). It takes no inputs: it always uses the repository's latest published release, and fails if
+that release is a draft or a prerelease or if the run was not started from `main`. Only the `repos` job
+runs, with the same verification of `SHA256SUMS` and the packages as on a release, using the
+`packaging/repo` scripts and image on `main`, and it waits for the `packaging` environment's reviewer
+like any other run. That environment must allow deployments from `main` as well as from the release tags.
+
 The APT and DNF indexes carry no `Valid-Until`, so an older index that was once validly signed and is
 served again from a compromised bucket would still verify: the weekly `repo-freshness` workflow detects
 this, it does not prevent it. It checks that both repositories
