@@ -40,6 +40,9 @@ allow = [
     # License Agreement; it is a non-code data license, OSI/FSF-listed as free,
     # and widely allowed alongside MIT/Apache-2.0 in the Rust TLS ecosystem.
     "CDLA-Permissive-2.0",
+    # foldhash (a dependency of serde_json from 1.0.154) is Zlib-licensed; Zlib is a
+    # permissive OSI-approved license compatible with Apache-2.0.
+    "Zlib",
 ]
 confidence-threshold = 0.8
 exceptions = []
