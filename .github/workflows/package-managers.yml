@@ -293,8 +293,10 @@ jobs:
           # The public key carries the current binding signatures: after a renewal it is newer than the
           # secret's copy, whose subkey gpg would refuse to sign with once the old expiry has passed.
           gpg --batch --quiet --import packaging/gpg.key
+          # Only a signing subkey that is usable and whose secret is present counts: not a stub without
+          # its secret (field 15 is #), nor a revoked, expired or invalid one (field 2 is r, e or i).
           fingerprints=$(gpg --batch --with-colons --list-secret-keys |
-            awk -F: '$1 == "ssb" { sign = ($12 ~ /s/) } $1 == "fpr" && sign { print $10; sign = 0 }')
+            awk -F: '$1 == "ssb" { sign = ($12 ~ /s/ && $15 !~ /#/ && $2 !~ /[rei]/) } $1 == "fpr" && sign { print $10; sign = 0 }')
           if [ "$(printf '%s\n' "$fingerprints" | grep -c .)" != 1 ]; then
             echo "::error::PACKAGES_GPG_SIGNING_KEY must hold exactly one signing subkey."
             exit 1
