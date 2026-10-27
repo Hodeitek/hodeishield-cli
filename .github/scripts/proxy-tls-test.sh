@@ -5,7 +5,8 @@
 # Proves the README's "Networking: proxies and TLS inspection" claims on Linux, macOS and Windows,
 # end to end, with a real TLS-inspecting proxy (mitmproxy) and a fake API, all on this machine:
 #
-#   1. HTTPS_PROXY set, proxy CA not trusted       -> exit 7, "error: Could not reach the API:", certificate
+#   1. HTTPS_PROXY set, proxy CA not trusted       -> exit 7, "error: Could not reach the API:", certificate,
+#                                                     exactly one TLS handshake (not retried)
 #   2. proxy CA in the system store                -> works, and the proxy saw the request
 #   3. proxy CA only in SSL_CERT_FILE              -> works on Linux; no effect on macOS and
 #                                                     Windows (same failure as case 1)
@@ -156,6 +157,10 @@ cli() {
 count() { grep -c -- "$2" "$1" || true; }
 proxy_seen() { count "$WORK/proxy.log" "$REQ_RE"; }
 api_seen() { count "$WORK/api.log" "GET /v1/vendors"; }
+# Handshakes the proxy logged as rejected by the client. A certificate the CLI does not trust must
+# cost exactly one: it is not retried.
+HS_FAIL_RE="Client TLS handshake failed"
+hs_failed() { count "$WORK/proxy.log" "$HS_FAIL_RE"; }
 
 # Waits (up to 5 s) for the proxy log to show more requests than $1.
 wait_proxy_above() {
@@ -178,31 +183,35 @@ works() { [ "$rc" -eq 0 ] && jq -e '.data[0].id == "v1"' "$WORK/out" > /dev/null
 PROXY=http://127.0.0.1:$PROXY_PORT
 
 # --- Case 1: the proxy's CA is not trusted ----------------------------------------------------
-p0=$(proxy_seen) a0=$(api_seen)
+p0=$(proxy_seen) a0=$(api_seen) h0=$(hs_failed)
 cli HTTPS_PROXY="$PROXY" -- vendors list --json
 sleep 1
+h1=$(( $(hs_failed) - h0 ))
+echo "case 1: handshakes rejected by the client during the call: $h1"
 if [ "$rc" -eq 7 ] && [[ "$(cat "$WORK/err")" == "error: Could not reach the API:"* ]] \
   && grep -qiE 'certificate|UnknownIssuer' "$WORK/err" \
-  && [ "$(proxy_seen)" -eq "$p0" ] && [ "$(api_seen)" -eq "$a0" ]; then
-  record 1 "HTTPS_PROXY, proxy CA not trusted: exit 7, certificate error, nothing delivered" PASS "exit $rc"
+  && [ "$(proxy_seen)" -eq "$p0" ] && [ "$(api_seen)" -eq "$a0" ] && [ "$h1" -eq 1 ]; then
+  record 1 "HTTPS_PROXY, proxy CA not trusted: exit 7, certificate error, one handshake, nothing delivered" PASS "exit $rc, $h1 handshake"
 else
-  record 1 "HTTPS_PROXY, proxy CA not trusted: exit 7, certificate error, nothing delivered" FAIL "exit $rc"
+  record 1 "HTTPS_PROXY, proxy CA not trusted: exit 7, certificate error, one handshake, nothing delivered" FAIL "exit $rc, $h1 handshakes"
   show_failure 1
 fi
 
 # --- Case 3: the proxy's CA only in SSL_CERT_FILE (run before it enters the system store) -----
 # Linux reads the variable; macOS and Windows use the system store only (README), so there it
 # must fail like case 1.
-p0=$(proxy_seen) a0=$(api_seen)
+p0=$(proxy_seen) a0=$(api_seen) h0=$(hs_failed)
 cli HTTPS_PROXY="$PROXY" SSL_CERT_FILE="$WORK/proxy-ca.crt" -- vendors list --json
 if [ "$OS" = linux ]; then
   desc="proxy CA only in SSL_CERT_FILE: works through the proxy"
   if works && wait_proxy_above "$p0"; then ok=1; else ok=0; fi
 else
-  desc="proxy CA only in SSL_CERT_FILE: no effect here, exit 7, certificate error"
+  desc="proxy CA only in SSL_CERT_FILE: no effect here, exit 7, certificate error, one handshake"
   sleep 1
+  h3=$(( $(hs_failed) - h0 ))
+  echo "case 3: handshakes rejected by the client during the call: $h3"
   if [ "$rc" -eq 7 ] && [[ "$(cat "$WORK/err")" == "error: Could not reach the API:"* ]] \
-    && [ "$(proxy_seen)" -eq "$p0" ] && [ "$(api_seen)" -eq "$a0" ]; then ok=1; else ok=0; fi
+    && [ "$(proxy_seen)" -eq "$p0" ] && [ "$(api_seen)" -eq "$a0" ] && [ "$h3" -eq 1 ]; then ok=1; else ok=0; fi
 fi
 if [ "$ok" -eq 1 ]; then record 3 "$desc" PASS "exit $rc"; else record 3 "$desc" FAIL "exit $rc"; show_failure 3; fi
 
