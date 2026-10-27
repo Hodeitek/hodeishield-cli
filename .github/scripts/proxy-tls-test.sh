@@ -6,7 +6,7 @@
 # end to end, with a real TLS-inspecting proxy (mitmproxy) and a fake API, all on this machine:
 #
 #   1. HTTPS_PROXY set, proxy CA not trusted       -> exit 7, "error: Could not reach the API:", certificate,
-#                                                     exactly one TLS handshake (not retried)
+#                                                     one rejected TLS handshake (not retried)
 #   2. proxy CA in the system store                -> works, and the proxy saw the request
 #   3. proxy CA only in SSL_CERT_FILE              -> works on Linux; no effect on macOS and
 #                                                     Windows (same failure as case 1)
@@ -157,18 +157,16 @@ cli() {
 count() { grep -c -- "$2" "$1" || true; }
 proxy_seen() { count "$WORK/proxy.log" "$REQ_RE"; }
 api_seen() { count "$WORK/api.log" "GET /v1/vendors"; }
-# Handshakes the proxy logged as rejected by the client. A certificate the CLI does not trust must
-# cost exactly one: it is not retried.
+
+# A certificate the CLI does not trust must cost exactly one TLS handshake: it is not retried. The
+# proxy logs each one it sees rejected. Its log can lag behind the call (on macOS by many seconds),
+# so the lines are counted at the end by their time stamp, [HH:MM:SS.mmm], inside the window of
+# the call (local time of this machine, both for the proxy and for date).
 HS_FAIL_RE="Client TLS handshake failed"
-hs_failed() { count "$WORK/proxy.log" "$HS_FAIL_RE"; }
-# Waits (up to 5 s) for the proxy log to show more rejected handshakes than $1, then 1 s more so a
-# retry, if there were one, would show up too. The count is read afterwards and must be exactly one.
-wait_handshake_above() {
-  for _ in $(seq 1 25); do
-    if [ "$(hs_failed)" -gt "$1" ]; then break; fi
-    sleep 0.2
-  done
-  sleep 1
+clock() { date +%H:%M:%S; }
+hs_between() { # start end: rejected handshakes the proxy logged from second $1 to second $2
+  awk -v s="$1" -v e="$2" -v re="$HS_FAIL_RE" \
+    'index($0, re) { t = substr($0, 2, 8); if (t >= s && t <= e) n++ } END { print n + 0 }' "$WORK/proxy.log"
 }
 
 # Waits (up to 5 s) for the proxy log to show more requests than $1.
@@ -192,37 +190,36 @@ works() { [ "$rc" -eq 0 ] && jq -e '.data[0].id == "v1"' "$WORK/out" > /dev/null
 PROXY=http://127.0.0.1:$PROXY_PORT
 
 # --- Case 1: the proxy's CA is not trusted ----------------------------------------------------
-p0=$(proxy_seen) a0=$(api_seen) h0=$(hs_failed)
+p0=$(proxy_seen) a0=$(api_seen)
+t1s=$(clock)
 cli HTTPS_PROXY="$PROXY" -- vendors list --json
 sleep 1
-wait_handshake_above "$h0"
-h1=$(( $(hs_failed) - h0 ))
-echo "case 1: handshakes rejected by the client during the call: $h1"
+t1e=$(clock)
+sleep 1
 if [ "$rc" -eq 7 ] && [[ "$(cat "$WORK/err")" == "error: Could not reach the API:"* ]] \
   && grep -qiE 'certificate|UnknownIssuer' "$WORK/err" \
-  && [ "$(proxy_seen)" -eq "$p0" ] && [ "$(api_seen)" -eq "$a0" ] && [ "$h1" -eq 1 ]; then
-  record 1 "HTTPS_PROXY, proxy CA not trusted: exit 7, certificate error, one handshake, nothing delivered" PASS "exit $rc, $h1 handshake"
+  && [ "$(proxy_seen)" -eq "$p0" ] && [ "$(api_seen)" -eq "$a0" ]; then
+  record 1 "HTTPS_PROXY, proxy CA not trusted: exit 7, certificate error, nothing delivered" PASS "exit $rc"
 else
-  record 1 "HTTPS_PROXY, proxy CA not trusted: exit 7, certificate error, one handshake, nothing delivered" FAIL "exit $rc, $h1 handshakes"
+  record 1 "HTTPS_PROXY, proxy CA not trusted: exit 7, certificate error, nothing delivered" FAIL "exit $rc"
   show_failure 1
 fi
 
 # --- Case 3: the proxy's CA only in SSL_CERT_FILE (run before it enters the system store) -----
 # Linux reads the variable; macOS and Windows use the system store only (README), so there it
 # must fail like case 1.
-p0=$(proxy_seen) a0=$(api_seen) h0=$(hs_failed)
+p0=$(proxy_seen) a0=$(api_seen)
+t3s=$(clock)
 cli HTTPS_PROXY="$PROXY" SSL_CERT_FILE="$WORK/proxy-ca.crt" -- vendors list --json
 if [ "$OS" = linux ]; then
   desc="proxy CA only in SSL_CERT_FILE: works through the proxy"
   if works && wait_proxy_above "$p0"; then ok=1; else ok=0; fi
 else
-  desc="proxy CA only in SSL_CERT_FILE: no effect here, exit 7, certificate error, one handshake"
+  desc="proxy CA only in SSL_CERT_FILE: no effect here, exit 7, certificate error"
   sleep 1
-  wait_handshake_above "$h0"
-  h3=$(( $(hs_failed) - h0 ))
-  echo "case 3: handshakes rejected by the client during the call: $h3"
+  t3e=$(clock)
   if [ "$rc" -eq 7 ] && [[ "$(cat "$WORK/err")" == "error: Could not reach the API:"* ]] \
-    && [ "$(proxy_seen)" -eq "$p0" ] && [ "$(api_seen)" -eq "$a0" ] && [ "$h3" -eq 1 ]; then ok=1; else ok=0; fi
+    && [ "$(proxy_seen)" -eq "$p0" ] && [ "$(api_seen)" -eq "$a0" ]; then ok=1; else ok=0; fi
 fi
 if [ "$ok" -eq 1 ]; then record 3 "$desc" PASS "exit $rc"; else record 3 "$desc" FAIL "exit $rc"; show_failure 3; fi
 
@@ -267,6 +264,36 @@ if works && grep -qE "^GET https://api\.test:8443/v1/vendors.* → 200 " "$WORK/
 else
   record 6 "--verbose: request line on stderr, stdout stays clean JSON" FAIL "exit $rc"
   show_failure 6
+fi
+
+# --- Cases 7 and 8: the untrusted certificate of cases 1 and 3 cost one handshake each ---------
+# Wait (up to 10 s) for the proxy log to show the lines; if it does not, stop the proxy so that
+# it writes what it holds, and read the log again.
+expected=1
+if [ "$OS" != linux ]; then expected=2; fi
+for _ in $(seq 1 50); do
+  if [ "$(count "$WORK/proxy.log" "$HS_FAIL_RE")" -ge "$expected" ]; then break; fi
+  sleep 0.2
+done
+if [ "$(count "$WORK/proxy.log" "$HS_FAIL_RE")" -lt "$expected" ]; then
+  kill "${PIDS[1]}" 2> /dev/null || true
+  sleep 3
+fi
+h1=$(hs_between "$t1s" "$t1e")
+echo "case 1: handshakes rejected by the client during the call: $h1"
+if [ "$h1" -eq 1 ]; then
+  record 7 "case 1: exactly one TLS handshake, the certificate error is not retried" PASS "$h1 handshake"
+else
+  record 7 "case 1: exactly one TLS handshake, the certificate error is not retried" FAIL "$h1 handshakes"
+fi
+if [ "$OS" != linux ]; then
+  h3=$(hs_between "$t3s" "$t3e")
+  echo "case 3: handshakes rejected by the client during the call: $h3"
+  if [ "$h3" -eq 1 ]; then
+    record 8 "case 3: exactly one TLS handshake, the certificate error is not retried" PASS "$h3 handshake"
+  else
+    record 8 "case 3: exactly one TLS handshake, the certificate error is not retried" FAIL "$h3 handshakes"
+  fi
 fi
 
 # --- Report ------------------------------------------------------------------------------------
