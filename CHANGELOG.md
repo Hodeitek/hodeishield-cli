@@ -8,6 +8,11 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ### Fixed
 
+- A `403` with `MODULE_NOT_ENTITLED` (the tenant's plan does not include the module a command
+  reads, or the compliance framework is not enabled) now says so, names the scope the server
+  reports, and tells the user that a tenant administrator must add the module or enable the
+  framework. It still exits with 4. It used to read as a missing scope, and with no scope listed
+  the generic message ended in `needs: .`, which now reads sensibly.
 - The README's DNF setup block wrote an empty `/etc/yum.repos.d/hodeishield.repo`, so `dnf install
   hodeishield` found no package. The file now gets the repository configuration.
 - On Windows, `login` with its output piped (for example `hodeishield login 2>&1 | ForEach-Object

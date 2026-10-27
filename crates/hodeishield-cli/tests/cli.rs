@@ -328,6 +328,38 @@ fn a_missing_scope_exits_4_and_names_the_framework_scope() {
 }
 
 #[test]
+fn a_module_not_entitled_answer_exits_4_with_its_own_message() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    let mock = server
+        .mock("GET", "/v1/vendors")
+        .match_query(mockito::Matcher::Any)
+        .with_status(403)
+        .with_header("x-request-id", "req_mod")
+        .with_body(
+            r#"{"error":{"code":"forbidden","message":"no","request_id":"req_mod","details":{"code":"MODULE_NOT_ENTITLED","scopes":["supply_risk:read"]}}}"#,
+        )
+        .expect(1)
+        .create();
+    let output = env
+        .api(&server)
+        .args(["vendors", "list"])
+        .output()
+        .expect("run");
+    assert_eq!(output.status.code(), Some(4), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("plan does not include the module this needs (scope: supply_risk:read)"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("will not help"), "{stderr}");
+    assert!(stderr.contains("request id: req_mod"), "{stderr}");
+    assert!(!stderr.contains("lacks the scope"), "{stderr}");
+    mock.assert();
+    assert_no_key(&output);
+}
+
+#[test]
 fn an_api_message_that_says_broken_pipe_still_fails() {
     let env = Env::new();
     let mut server = mockito::Server::new();
