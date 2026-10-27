@@ -99,7 +99,7 @@ point is paraphrased from the Official Journal.
 | (2)(h) | Availability of essential and basic functions, also after an incident; resilience against denial of service | The CLI is not a service and has no listener except during sign-in. Requests have timeouts (30 s, 10 s to connect), reads are bounded (T4) and a failure of the update check never changes a command's result (`update_check.rs`). If the keychain is unavailable, the API key path still works (T13). Resilience of the service itself is the service's concern |
 | (2)(i) | Minimise the impact on the availability of other services and networks | Retries are limited to two for rate limits and two for transient failures, wait for the server's `Retry-After` only up to 60 s, and use jittered backoff capped at 8 s (`client.rs`, `backoff`, defaults in `ClientBuilder`). Only `GET` requests are sent. The update check is at most one request a day with a 2 s limit (`update_check.rs`) |
 | (2)(j) | Limit attack surfaces, including external interfaces | See [Attack surface](#attack-surface) |
-| (2)(k) | Reduce the impact of an incident with exploitation mitigation | The code of the workspace is Rust with `unsafe_code = "forbid"` (`Cargo.toml`, `[workspace.lints.rust]`, inherited by every crate), `unwrap_used` is a lint warning, and CI treats warnings as errors. The API client limits body size and time. The impact of a leaked token is bounded by revocation at the app (T12) |
+| (2)(k) | Reduce the impact of an incident with exploitation mitigation | The code of the workspace is Rust with `unsafe_code = "deny"` (`Cargo.toml`, `[workspace.lints.rust]`, inherited by every crate; only the Windows module `std_handles.rs` allows it, for three Win32 calls), `unwrap_used` is a lint warning, and CI treats warnings as errors. The API client limits body size and time. The impact of a leaked token is bounded by revocation at the app (T12) |
 | (2)(l) | Record and monitor relevant internal activity, with an opt-out | See [Security logging](#security-logging) |
 | (2)(m) | Users can securely and easily remove all data and settings permanently; secure transfer where data can be moved | Removal is in [Decommissioning](user-information.md#decommissioning): `logout` for each profile, deleting the configuration directory and uninstalling by the channel used. The CLI has no export or import of settings, so there is no transfer of data to other products to secure |
 
@@ -194,7 +194,7 @@ requests to the API.
 | Command line | Parsed with `clap`; the CLI reads no file other than its configuration and update-check record, and runs no command taken from the server | `cli.rs`, `config.rs`, `update_check.rs` |
 | Proxy and certificates | The system's, with no option to disable verification | README "Networking" |
 
-The workspace crates forbid `unsafe` code. The build tool `xtask` is not shipped.
+The workspace crates deny `unsafe` code; one Windows-only module (`std_handles.rs`) allows it for three Win32 calls that keep the standard handles out of the browser. The build tool `xtask` is not shipped.
 
 ### Data minimisation
 
