@@ -193,7 +193,7 @@ for the rest.
 
 The signing key has an expiry date and is extended before it passes. The fingerprint stays the same, so
 only your copy of the public key needs refreshing, and it must be refreshed before the old expiry date:
-clients that still hold the old copy reject signatures made after it. If `apt update` or `dnf` reports an
+a client that still holds the old copy can reject signatures made after it (DNF 4 does). If `apt update` or `dnf` reports an
 expired key, or the release notes announce a renewal, run:
 
 ```sh
