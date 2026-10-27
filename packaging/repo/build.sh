@@ -16,6 +16,9 @@
 #   SIGNING_KEY   fingerprint of the signing subkey, with a trailing "!" to force that subkey
 #   PUBLIC_KEY    path to the ASCII-armored public key published as /gpg.key
 #
+# PUBLIC_KEY must carry no revoked subkey (rpm on RHEL and Rocky Linux 8 and 9 refuses to import one)
+# and exactly one signing subkey that is neither revoked nor expired, the one SIGNING_KEY names.
+#
 # Runs in the pinned image named in packaging/repo/image (apt-ftparchive, createrepo_c, gnupg, rpm).
 # A package that is already in the repository is never replaced: same name with different content is
 # an error, so a published version cannot change.
@@ -51,6 +54,11 @@ die() {
 }
 
 [ -n "$primary" ] || die "cannot read the fingerprint of the public key $PUBLIC_KEY"
+
+# Every publication, not only a recovery: the key to publish carries no revoked subkey and exactly one
+# usable signing subkey, which is SIGNING_KEY.
+problem=$(public_key_problem "$PUBLIC_KEY" "$SIGNING_KEY")
+[ -z "$problem" ] || die "$PUBLIC_KEY $problem"
 
 # Copies a new package into place, refusing to change a package that is already published.
 place() {

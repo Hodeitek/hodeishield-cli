@@ -14,7 +14,8 @@
 #   PACKAGES_S3_ACCESS_KEY_ID, PACKAGES_S3_SECRET_ACCESS_KEY
 #
 # Runs in the pinned image named in packaging/repo/image. The bucket user may list, read and write
-# but not delete, so nothing here removes anything: a published package is never replaced, and the
+# but not delete, so nothing here removes anything: a published package is never replaced (except by
+# the recovery below, which replaces the RPM files on purpose), and the
 # files of older metadata that a new build leaves behind (by-hash indexes, hashed repodata) stay where
 # they are, which is what lets a client with an older index finish its update.
 #
@@ -31,6 +32,16 @@
 # primary fingerprint. Anything else there means that someone else wrote it, and nothing is published.
 # A different copy of the same key is replaced by PUBLIC_KEY, which is how a renewed key (same
 # fingerprint, new expiry) reaches users. Users check that key against the fingerprint in the README.
+#
+# With RESIGN=1 (set by resign.sh, never by a release) it does the one-off recovery after a signing
+# subkey revocation instead: <new-packages-dir> holds the verified release assets of every package in
+# the bucket, the RPM packages are signed again from them and uploaded over the old ones (the bucket's
+# versioning keeps those), and the indexes are rebuilt without reading the published InRelease. Every
+# package in the bucket must be one of those assets, checked before anything is signed. DRY_RUN=1
+# stops before anything is uploaded; without it, the bucket's versioning must read Enabled before
+# anything is signed. The re-signed RPM files get max-age=60 where a new package is immutable,
+# deliberately: they replace objects that caches may hold as immutable under the same URL, and a short
+# lifetime lets the CDN purge and the clients' own caches converge instead of pinning the replacement.
 
 set -eu
 
@@ -49,6 +60,10 @@ export RCLONE_CONFIG_PKG_ACCESS_KEY_ID="$PACKAGES_S3_ACCESS_KEY_ID"
 export RCLONE_CONFIG_PKG_SECRET_ACCESS_KEY="$PACKAGES_S3_SECRET_ACCESS_KEY"
 export RCLONE_S3_NO_CHECK_BUCKET=true
 bucket=pkg:$PACKAGES_S3_BUCKET
+# Every download names the local encoding explicitly (rclone's default for local files): an object
+# named "." or "..", or holding a "/" of its own, is stored under an escaped name, never as a path
+# outside the directory it is downloaded to.
+fetch() { rclone "$@" --local-encoding Slash,Dot; }
 
 forever='Cache-Control: public, max-age=31536000, immutable'
 short='Cache-Control: public, max-age=60'
@@ -68,7 +83,7 @@ if [ -z "$committed" ] || [ "$(printf '%s\n' "$committed" | wc -l)" -ne 1 ]; the
   printf 'publish.sh: %s does not hold exactly one key\n' "$PUBLIC_KEY" >&2
   exit 1
 fi
-rclone copy "$bucket" "$published" --include /gpg.key
+fetch copy "$bucket" "$published" --include /gpg.key
 if [ -e "$published/gpg.key" ]; then
   stored=$(primaries "$published/gpg.key")
   [ "$stored" = "$committed" ] || {
@@ -80,12 +95,110 @@ fi
 
 # The packages already published, which the indexes are regenerated from. Everything in the pool is
 # downloaded, so that build.sh sees (and refuses) anything that the signed index does not vouch for.
-rclone copy "$bucket" "$repo" --include '/apt/pool/**' --include '/rpm/*/*.rpm'
+fetch copy "$bucket" "$repo" --include '/apt/pool/**' --include '/rpm/*/*.rpm'
+
+resign=${RESIGN:-}
+if [ -n "$resign" ]; then
+  # Every check of the recovery runs here, before build.sh, and so before any package or index is
+  # signed. Only the verified release assets in <new-packages-dir> are trusted: each package in the
+  # bucket must be one of them, a .deb byte for byte and an .rpm apart from its signature header, and
+  # the bucket and the assets must hold the same set of packages. The old signatures are not looked
+  # at, and build.sh signs the RPM packages again from the release assets, never from the bucket's
+  # copies. The working files and the rpm database live in $aux, apart from the bucket's files.
+  aux=$(mktemp -d)
+  back=$(mktemp -d)
+  trap 'rm -rf "$repo" "$published" "$aux" "$back"' EXIT
+  die() {
+    printf 'publish.sh: %s\n' "$*" >&2
+    exit 1
+  }
+  # Only regular files with the names that build.sh writes, where it writes them, reach rpm.
+  odd=$(cd "$repo" && find . -regextype posix-extended ! -type d ! \( -type f \( \
+    -regex '\./apt/pool/main/h/hodeishield/hodeishield_[0-9A-Za-z.+~-]+_(amd64|arm64)\.deb' -o \
+    -regex '\./rpm/x86_64/hodeishield-[0-9A-Za-z.+~^_-]+\.x86_64\.rpm' -o \
+    -regex '\./rpm/aarch64/hodeishield-[0-9A-Za-z.+~^_-]+\.aarch64\.rpm' \) \) -print)
+  [ -z "$odd" ] || die "unexpected files in the bucket: $odd"
+  (cd "$repo" && find . -type f \( -name '*.deb' -o -name '*.rpm' \) -exec basename {} \;) | sort > "$aux/bucket"
+  (cd "$new" && find . -type f -exec basename {} \;) | sort > "$aux/verified"
+  [ -s "$aux/bucket" ] || die "the bucket holds no package; there is nothing to sign again"
+  comm -3 "$aux/bucket" "$aux/verified" > "$aux/differ"
+  [ ! -s "$aux/differ" ] || {
+    cat "$aux/differ" >&2
+    die "the packages in the bucket (left) and the release assets (right, indented) differ; nothing is signed"
+  }
+  for deb in "$repo"/apt/pool/main/h/hodeishield/*.deb; do
+    [ -e "$deb" ] || continue
+    cmp -s "$new/$(basename "$deb")" "$deb" ||
+      die "${deb#"$repo"/} in the bucket differs from its release asset; nothing is signed"
+  done
+  mkdir "$aux/db"
+  nevra() {
+    rpm --dbpath "$aux/db" -qp --qf '%{NAME} %{EPOCHNUM} %{VERSION} %{RELEASE} %{ARCH}' "$1" 2> /dev/null
+  }
+  # be32 <file> <offset>: the 32-bit big-endian number at that offset.
+  be32() {
+    od -An -v -tu1 -j "$2" -N 4 "$1" |
+      awk '{ for (i = 1; i <= NF; i++) { n = n * 256 + $i; c++ } } END { if (c == 4) print n }'
+  }
+  # body <rpm>: the SHA256 of everything after the signature header, the main header and the payload,
+  # which signing leaves byte for byte as they are. The signature header follows the 96-byte lead, has
+  # a 16-byte intro (magic, then the number of index entries and the length of the data, which give
+  # its size) and is padded to a multiple of 8 bytes.
+  body() {
+    [ "$(od -An -v -tx1 -N 4 "$1" | tr -d ' \n')" = edabeedb ] || return 1
+    [ "$(od -An -v -tx1 -j 96 -N 8 "$1" | tr -d ' \n')" = 8eade80100000000 ] || return 1
+    entries=$(be32 "$1" 104)
+    length=$(be32 "$1" 108)
+    [ -n "$entries" ] && [ -n "$length" ] || return 1
+    tail -c "+$((96 + (16 + 16 * entries + length + 7) / 8 * 8 + 1))" "$1" | sha256sum | cut -d' ' -f1
+  }
+  # What signing does not change: the digest of the main header, the payload digest that the main
+  # header records, and the bytes of the main header and the payload. rpm checks the header digest
+  # against the main header when it reads a package; the bytes after the signature header are compared
+  # as well, as defence in depth.
+  identity() {
+    rpm --dbpath "$aux/db" -qp --qf '%{SHA256HEADER} [%{PAYLOADDIGEST} ]' "$1" 2> /dev/null || return 1
+    body "$1"
+  }
+  : > "$aux/old.sums"
+  for rpm in "$repo"/rpm/*/*.rpm; do
+    [ -e "$rpm" ] || continue
+    path=${rpm#"$repo"/}
+    asset=$new/$(basename "$rpm")
+    mine=$(nevra "$rpm") || mine=
+    [ -n "$mine" ] || die "cannot read $path in the bucket; nothing is signed"
+    [ "$(nevra "$asset")" = "$mine" ] ||
+      die "$path in the bucket is not the same package as its release asset; nothing is signed"
+    want=$(identity "$asset") || die "cannot read the release asset of $path"
+    got=$(identity "$rpm") || die "cannot read $path in the bucket; nothing is signed"
+    [ "$got" = "$want" ] ||
+      die "$path in the bucket differs from its release asset beyond the signature; nothing is signed"
+    (cd "$repo" && sha256sum "$path") >> "$aux/old.sums"
+  done
+  # After the checks of the bucket and before anything is signed, for an apply: the old RPM objects
+  # are kept only if the bucket keeps versions. Reading that needs s3:GetBucketVersioning; a credential
+  # that lacks it stops the run here, by design. The versioning command is never given an argument,
+  # which would change the setting.
+  if [ -z "${DRY_RUN:-}" ]; then
+    # Read into a file first: the status of a pipeline is that of its last command, so a failed read
+    # would otherwise go unnoticed.
+    if rclone backend versioning "$bucket" > "$aux/versioning" 2> /dev/null; then
+      versioning=$(tr -d '"[:space:]' < "$aux/versioning")
+    else
+      versioning=unreadable
+    fi
+    [ "$versioning" = Enabled ] ||
+      die "versioning of the bucket is '${versioning:-unreadable}', not Enabled (the credential needs s3:GetBucketVersioning); re-signing replaces the RPM objects, so nothing is signed or uploaded"
+  fi
+  # Only the local copy: build.sh signs them again from the release assets.
+  rm -f "$repo"/rpm/*/*.rpm
+fi
 
 # The signed APT index as published (none before the first release), and the Packages files it lists,
 # by hash: what build.sh checks the downloaded packages against. The hashes are read here before the
 # signature is checked, only to know what to download; build.sh checks both.
-rclone copy "$bucket" "$published" --include /apt/dists/stable/InRelease
+# (Not in a recovery: that InRelease was signed by the revoked subkey and is not trusted.)
+[ -n "$resign" ] || fetch copy "$bucket" "$published" --include /apt/dists/stable/InRelease
 if [ -e "$published/apt/dists/stable/InRelease" ]; then
   for arch in amd64 arm64; do
     hash=$(awk -v f="main/binary-$arch/Packages" \
@@ -95,16 +208,45 @@ if [ -e "$published/apt/dists/stable/InRelease" ]; then
       printf 'publish.sh: the published InRelease does not give one SHA256 for Packages (%s)\n' "$arch" >&2
       exit 1
     }
-    rclone copyto "$bucket/apt/dists/stable/main/binary-$arch/by-hash/SHA256/$hash" \
+    fetch copyto "$bucket/apt/dists/stable/main/binary-$arch/by-hash/SHA256/$hash" \
       "$published/apt/dists/stable/main/binary-$arch/Packages"
   done
 fi
 
 sh "$here/build.sh" "$repo" "$new" "$published/apt/dists/stable"
 
-# Packages first. --immutable makes a published package that differs from the local copy an error.
-rclone copy "$repo" "$bucket" --immutable --header-upload "$forever" \
-  --include '/apt/pool/**' --include '/rpm/*/*.rpm'
+if [ -n "$resign" ]; then
+  printf 'RPM packages signed again (build.sh verified each one against the new key):\n'
+  (cd "$repo" && sha256sum rpm/*/*.rpm) | while read -r sum file; do
+    printf '  %s\n    before %s\n    after  %s\n' "$file" \
+      "$(awk -v f="$file" '$2 == f { print $1 }' "$aux/old.sums")" "$sum"
+  done
+  if [ -n "${DRY_RUN:-}" ]; then
+    printf 'Dry run: nothing was uploaded.\n'
+    exit 0
+  fi
+fi
+
+# Packages first. --immutable makes a published package that differs from the local copy an error;
+# in a recovery that holds for the .deb files, and the re-signed .rpm files go over the old ones.
+if [ -n "$resign" ]; then
+  rclone copy "$repo" "$bucket" --immutable --header-upload "$forever" --include '/apt/pool/**'
+  rclone copy "$repo" "$bucket" --ignore-times --header-upload "$short" --include '/rpm/*/*.rpm'
+else
+  rclone copy "$repo" "$bucket" --immutable --header-upload "$forever" \
+    --include '/apt/pool/**' --include '/rpm/*/*.rpm'
+fi
+
+# A recovery reads the RPM packages back from the bucket before any index is uploaded: they must be
+# the re-signed files, and a failure leaves the published indexes as they were.
+if [ -n "$resign" ]; then
+  fetch copy "$bucket" "$back" --include '/rpm/*/*.rpm'
+  for rpm in "$repo"/rpm/*/*.rpm; do
+    cmp -s "$rpm" "$back/${rpm#"$repo"/}" ||
+      die "${rpm#"$repo"/} in the bucket is not the re-signed file"
+  done
+  printf 'Re-signed RPM packages uploaded and read back from the bucket.\n'
+fi
 
 # Then the indexes that are named by their hash: the by-hash copies of the APT indexes and the
 # hashed repodata files of DNF (createrepo_c names them <sha256 of the file>-<type>.xml.gz, so a name
