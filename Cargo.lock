@@ -980,6 +980,7 @@ version = "0.6.0"
 dependencies = [
  "mockito",
  "reqwest",
+ "rustls",
  "secrecy",
  "serde",
  "serde_json",

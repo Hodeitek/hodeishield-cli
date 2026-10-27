@@ -8,6 +8,11 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ### Fixed
 
+- A certificate that is not trusted (unknown issuer, expired, wrong name) is no longer retried as a
+  transient connection failure. The CLI makes one TLS handshake and exits with 7 and the same
+  message as before, instead of making three. Refused, reset and timed-out connections and
+  `502`/`503`/`504` are still retried.
+  ([#245](https://github.com/Hodeitek/hodeishield-cli/issues/245))
 - A `403` with `MODULE_NOT_ENTITLED` (the tenant's plan does not include the module a command
   reads, or the compliance framework is not enabled) now says so, names the scope the server
   reports, and tells the user that a tenant administrator must add the module or enable the

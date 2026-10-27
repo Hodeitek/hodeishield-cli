@@ -542,6 +542,7 @@ impl Client {
                 Ok(response) => response,
                 Err(e)
                     if (e.is_connect() || e.is_timeout())
+                        && !is_certificate_failure(&e)
                         && transient_retries < self.max_transient_retries =>
                 {
                     let reason = if e.is_connect() {
@@ -634,6 +635,41 @@ impl Client {
             return Err(Error::from_response(operation, meta, &body));
         }
     }
+}
+
+/// Whether a transport error is a failed verification of the peer's certificate (unknown issuer,
+/// expired, wrong name, and the like). The handshake reports it as a connect error, but it does not
+/// go away on a retry, so it is never retried as a transient failure.
+///
+/// The check is typed: it looks for a `rustls::Error` anywhere in the source chain, including one
+/// boxed inside an `io::Error` (whose `source()` skips the error it wraps). As a fallback for a
+/// verifier that wraps the failure in an error of its own, it also accepts the text rustls gives
+/// to a certificate failure.
+fn is_certificate_failure(error: &(dyn std::error::Error + 'static)) -> bool {
+    fn typed(error: &(dyn std::error::Error + 'static)) -> bool {
+        let tls = error.downcast_ref::<rustls::Error>().or_else(|| {
+            error
+                .downcast_ref::<std::io::Error>()
+                .and_then(|io| io.get_ref())
+                .and_then(|inner| inner.downcast_ref::<rustls::Error>())
+        });
+        matches!(
+            tls,
+            Some(
+                rustls::Error::InvalidCertificate(_)
+                    | rustls::Error::NoCertificatesPresented
+                    | rustls::Error::InvalidCertRevocationList(_)
+            )
+        )
+    }
+    let mut current = Some(error);
+    while let Some(e) = current {
+        if typed(e) || e.to_string().contains("invalid peer certificate") {
+            return true;
+        }
+        current = e.source();
+    }
+    false
 }
 
 /// Longest wait between two retries of a transient failure.
@@ -763,6 +799,55 @@ pub fn encode_path_segment(segment: &str) -> Result<String, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Debug)]
+    struct Wrapper(Box<dyn std::error::Error + Send + Sync>);
+    impl fmt::Display for Wrapper {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("error trying to connect")
+        }
+    }
+    impl std::error::Error for Wrapper {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(self.0.as_ref())
+        }
+    }
+
+    #[test]
+    fn certificate_failures_are_recognised_in_a_source_chain() {
+        use rustls::CertificateError;
+        for cert in [
+            CertificateError::UnknownIssuer,
+            CertificateError::Expired,
+            CertificateError::NotValidForName,
+        ] {
+            // As a connector reports it: rustls error boxed in an io::Error, inside another error.
+            let io = std::io::Error::other(rustls::Error::InvalidCertificate(cert.clone()));
+            assert!(is_certificate_failure(&Wrapper(Box::new(io))));
+            // Directly in the chain.
+            let direct = Wrapper(Box::new(rustls::Error::InvalidCertificate(cert)));
+            assert!(is_certificate_failure(&direct));
+        }
+        assert!(is_certificate_failure(&Wrapper(Box::new(
+            rustls::Error::NoCertificatesPresented
+        ))));
+    }
+
+    #[test]
+    fn a_verifier_error_with_the_rustls_text_is_recognised() {
+        let other = std::io::Error::other("invalid peer certificate: Other(OtherError(..))");
+        assert!(is_certificate_failure(&Wrapper(Box::new(other))));
+    }
+
+    #[test]
+    fn other_connection_failures_are_not_certificate_failures() {
+        let refused = std::io::Error::from(std::io::ErrorKind::ConnectionRefused);
+        assert!(!is_certificate_failure(&Wrapper(Box::new(refused))));
+        let reset = std::io::Error::from(std::io::ErrorKind::ConnectionReset);
+        assert!(!is_certificate_failure(&reset));
+        let alert = rustls::Error::AlertReceived(rustls::AlertDescription::HandshakeFailure);
+        assert!(!is_certificate_failure(&Wrapper(Box::new(alert))));
+    }
 
     #[test]
     fn known_values_are_looked_up_by_parameter() {
