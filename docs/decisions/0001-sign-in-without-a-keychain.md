@@ -106,8 +106,8 @@ the following rules. Containers and CI keep using API keys.
   No new exit codes: `login` and `logout` failures are 1, other commands that need a credential and
   find the file refused are 3, a corrupt file is 1.
 - **Windows is deferred.** There are no permission bits to check, and setting and checking an ACL
-  needs platform calls that the workspace's `unsafe_code = "forbid"` rules out without a vetted
-  wrapper. Selecting the file store on Windows is refused with exit code 1, before anything is asked
+  needs platform calls that the workspace's `unsafe_code = "deny"` rules out without a vetted
+  wrapper or a further exception (today's only one is the Windows handle helper, `std_handles.rs`). Selecting the file store on Windows is refused with exit code 1, before anything is asked
   of the app.
 - **Network home directories.** Documented, not refused. On Linux the CLI also warns on `login` when
   the directory is on NFS or SMB, where that can be told cheaply from the file system type; elsewhere
@@ -137,7 +137,7 @@ the following rules. Containers and CI keep using API keys.
 ## Deferred
 
 - **Windows.** Needs an ACL design and either a vetted wrapper crate or an exception to
-  `unsafe_code = "forbid"`.
+  `unsafe_code = "deny"` (the one exception today is `std_handles.rs`).
 - **Linux kernel keyring.** Not worth a spike until users on SSH servers report that the file store
   does not fit, for example because data on disk is the main concern. Its lifetime rules (above) make
   it a surprising default.
