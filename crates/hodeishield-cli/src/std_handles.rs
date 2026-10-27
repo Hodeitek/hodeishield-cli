@@ -44,7 +44,7 @@ fn clear_inheritance(handle: HANDLE) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ptr::{null, null_mut};
+    use std::ptr::null_mut;
     use windows_sys::Win32::Foundation::{CloseHandle, GetHandleInformation};
     use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
     use windows_sys::Win32::System::Pipes::CreatePipe;
@@ -88,7 +88,7 @@ mod tests {
 
     #[test]
     fn null_and_invalid_handles_are_skipped() {
-        clear_inheritance(null());
+        clear_inheritance(null_mut());
         clear_inheritance(INVALID_HANDLE_VALUE);
     }
 
