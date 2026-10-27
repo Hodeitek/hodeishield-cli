@@ -54,6 +54,7 @@ builder=rt-builder
 net=rt-net
 minio=rt-minio
 mcbox=rt-mc
+rn_names=
 rootuser=rtroot
 rootpass="rtroot-secret-123"
 pubuser=pubuser
@@ -84,6 +85,7 @@ cleanup() {
   trap - EXIT
   print_table
   docker rm -f "$minio" "$mcbox" > /dev/null 2>&1 || true
+  for c in $rn_names; do docker rm -f "$c" > /dev/null 2>&1 || true; done
   docker network rm "$net" > /dev/null 2>&1 || true
   rm -rf "$work"
   if [ "$status" = 0 ] && [ "$failed" != 0 ]; then
@@ -840,6 +842,247 @@ client dnf C6 "dnf: unsigned rpm, gpgcheck=1" "install refused" refuse package "
   'is not signed|GPG check FAILED'
 client dnf C7 "dnf: rpm signed by another key, gpgcheck=1" "install refused" refuse package "$srv/rt-c7" \
   'Public key for .* is not installed|GPG check FAILED'
+
+# --- A DNF client renews the repository key (README, "When the repository key is renewed") -------------
+# A key of its own, with a lifetime of a few minutes: a repository signed with it is installed from,
+# the key expires, it is extended (same fingerprint), the indexes are signed again, and the new public
+# key is published. The README's renewal block for Fedora and RHEL is then run as written, with only
+# the pinned fingerprints and the server substituted. The same repository URL is kept throughout, as
+# DNF keeps its cache (and its own keyring) per repository URL. Clients: Rocky Linux 9 (DNF 4) and
+# Fedora (DNF 5), each with the old key in the rpm keyring and without it, and without the renewal
+# steps, which must keep being refused.
+group "DNF key renewal: key, repositories and clients"
+rn_life=300
+rn_url=$srv/rt-rn
+pin_fpr=$(sed -n 's/^PINNED_FINGERPRINT=//p' "$here/keycheck.sh")
+pin_sub=$(sed -n 's/^PINNED_SIGNING_SUBKEY=//p' "$here/keycheck.sh")
+
+# The README's renewal block for Fedora and RHEL: from the line after its comment to the closing fence.
+awk '/^#### When the repository key is renewed/ { s = 1; next }
+  s && /^# Fedora, RHEL/ { f = 1; next }
+  s && f && /^```/ { exit }
+  s && f { print }' "$root/README.md" > "$work/bin/renew-fedora.sh"
+if ! grep -q 'rpm --import' "$work/bin/renew-fedora.sh" || ! grep -q "$pin_fpr $pin_sub" "$work/bin/renew-fedora.sh"; then
+  echo "repo-test.sh: no DNF renewal block in README.md" >&2
+  exit 2
+fi
+
+# rnkeys.sh <lifetime in seconds>: the primary key and its signing subkey, both with that lifetime.
+cat > "$work/bin/rnkeys.sh" << 'EOF'
+set -eu
+export HOME=/tmp
+quiet() { gpg --batch --quiet --pinentry-mode loopback --passphrase '' "$@"; }
+GNUPGHOME=/w/gnupg-rn
+export GNUPGHOME
+mkdir -m 700 "$GNUPGHOME"
+quiet --quick-generate-key 'HodeiShield Packages <repo-test@example.invalid>' rsa4096 cert "seconds=$1"
+primary=$(gpg --batch --with-colons --list-keys | awk -F: '$1 == "fpr" { print $10; exit }')
+quiet --quick-add-key "$primary" rsa4096 sign "seconds=$1"
+sub=$(gpg --batch --with-colons --list-keys | awk -F: '$1 == "sub" { s = ($12 ~ /s/) } $1 == "fpr" && s { print $10; s = 0 }')
+[ "$(printf '%s\n' "$sub" | grep -c .)" = 1 ]
+printf '%s\n' "$primary" > /w/rn.fpr
+printf '%s\n' "$sub" > /w/rn.sub
+gpg --batch --with-colons --list-keys | awk -F: '$1 == "pub" { print $7; exit }' > /w/rn.exp
+gpg --batch --armor --export "$primary" > /w/rn-old.asc
+gpgconf --kill all
+EOF
+
+# rnrenew.sh: extends the expiry of the primary key and its subkey (same fingerprints) and exports the key.
+cat > "$work/bin/rnrenew.sh" << 'EOF'
+set -eu
+export HOME=/tmp GNUPGHOME=/w/gnupg-rn
+primary=$(cat /w/rn.fpr)
+gpg --batch --quiet --pinentry-mode loopback --passphrase '' --quick-set-expire "$primary" 2y '*'
+[ "$(gpg --batch --with-colons --list-keys | awk -F: '$1 == "pub" { print $7; exit }')" -gt "$(date +%s)" ]
+gpg --batch --armor --export "$primary" > /w/rn-new.asc
+gpgconf --kill all
+EOF
+
+# rnrepo.sh <dir> <key>: a DNF repository of the packages in <dir>, with repomd.xml signed by that key.
+cat > "$work/bin/rnrepo.sh" << 'EOF'
+set -eu
+export HOME=/tmp GNUPGHOME=/w/gnupg-rn
+createrepo_c --quiet --no-database --general-compress-type=gz "$1"
+gpg --batch --yes --local-user "$2" --digest-algo SHA512 --armor --detach-sign \
+  --output "$1/repodata/repomd.xml.asc" "$1/repodata/repomd.xml"
+EOF
+
+# dnf-renew-client.sh prepare <url> <version>
+# dnf-renew-client.sh renew <url> <present|absent> <steps|nosteps> <fingerprint> <signing subkey> \
+#   <version 1> <version 2> <README's fingerprint> <README's signing subkey>
+# The client stays up between the two, so that it holds what DNF keeps after the first install.
+cat > "$work/bin/dnf-renew-client.sh" << 'EOF'
+set -uf
+dnfq="dnf -y --disablerepo=* --enablerepo=hodeishield"
+repo=/etc/yum.repos.d/hodeishield.repo
+key=/etc/pki/rpm-gpg/RPM-GPG-KEY-hodeishield
+# As in dnf-client.sh: the key in a local file, and the README's .repo file.
+setup() {
+  mkdir -p /etc/pki/rpm-gpg
+  curl -fsS "$1/gpg.key" -o "$key" || { echo "SETUP: cannot fetch the key"; exit 90; }
+  sed "s#https://packages.hodeishield.com#$1#g" /b/hodeishield.repo > "$repo"
+  grep -qx "gpgkey=file://$key" "$repo" || { echo "SETUP: the README's .repo does not read the local key"; exit 90; }
+  grep -qx 'gpgcheck=1' "$repo" && grep -qx 'repo_gpgcheck=1' "$repo" || { echo "SETUP: signature checks are off"; exit 90; }
+}
+# Which keyrings hold the repository key: rpm's, and the ones DNF keeps in its cache.
+keyring() {
+  echo "KEYRING $1: dnf $(dnf --version 2> /dev/null | head -n 1)"
+  echo "KEYRING $1: rpm keyring: $(rpm -q gpg-pubkey --qf '%{NAME}-%{VERSION}-%{RELEASE} %{PACKAGER}; ' 2> /dev/null)"
+  echo "KEYRING $1: key file expires: $(gpg --batch --with-colons --show-keys "$key" 2> /dev/null | awk -F: '$1 == "pub" { print $7; exit }')"
+  find /var/cache/dnf /var/cache/libdnf5 /var/lib/dnf /var/lib/dnf5 \( -name 'pubring*' -o -name 'trustdb.gpg' -o -name '*.gpg' \) 2> /dev/null |
+    sort | sed "s#^#KEYRING $1: file #"
+  for d in $(find /var/cache/dnf /var/cache/libdnf5 -type d -name 'pubring*' 2> /dev/null); do
+    echo "KEYRING $1: $d holds: $(GNUPGHOME=$d gpg --batch --with-colons --list-keys 2> /dev/null | awk -F: '$1 == "pub" { printf "pub expires %s; ", $7 }')"
+  done
+  echo "KEYRING $1: now $(date +%s)"
+}
+mode=$1
+shift
+case $mode in
+prepare)
+  set -e
+  setup "$1"
+  $dnfq install hodeishield
+  [ "$(hodeishield --version)" = "hodeishield $2" ]
+  keyring installed
+  echo "OK: installed $2 from the repository signed with the key that expires soon"
+  ;;
+renew)
+  url=$1 have=$2 steps=$3 fpr=$4 sub=$5 v1=$6 v2=$7 pinfpr=$8 pinsub=$9
+  [ "$(hodeishield --version)" = "hodeishield $v1" ] || { echo "SETUP: hodeishield $v1 is not installed"; exit 90; }
+  exp=$(gpg --batch --with-colons --show-keys "$key" | awk -F: '$1 == "pub" { print $7; exit }')
+  [ -n "$exp" ] && [ "$exp" -le "$(date +%s)" ] || { echo "SETUP: the old key has not expired"; exit 90; }
+  mine() { rpm -q gpg-pubkey --qf '%{NAME}-%{VERSION}-%{RELEASE} %{PACKAGER}\n' | grep -c 'HodeiShield Packages <' || true; }
+  if [ "$have" = absent ]; then
+    rpm -q gpg-pubkey --qf '%{NAME}-%{VERSION}-%{RELEASE} %{PACKAGER}\n' | awk '/HodeiShield Packages </ { print $1 }' | xargs -r rpm -e
+    [ "$(mine)" = 0 ] || { echo "SETUP: the old key is still in the rpm keyring"; exit 90; }
+  else
+    [ "$(mine)" = 1 ] || { echo "SETUP: the old key is not in the rpm keyring"; exit 90; }
+  fi
+  keyring "before"
+  if [ "$steps" = nosteps ]; then
+    rc=0
+    out=$($dnfq makecache --refresh 2>&1) || rc=$?
+    echo "$out"
+    [ "$rc" != 0 ] || { echo "NOT REFUSED: dnf accepted the renewed repository with the old key"; exit 1; }
+    rc2=0
+    out2=$($dnfq upgrade hodeishield 2>&1) || rc2=$?
+    echo "$out2"
+    [ "$rc2" != 0 ] || { echo "NOT REFUSED: hodeishield was upgraded"; exit 1; }
+    [ "$(hodeishield --version)" = "hodeishield $v1" ] || { echo "NOT REFUSED: hodeishield changed"; exit 1; }
+    line=$(printf '%s\n%s\n' "$out" "$out2" | grep -iE 'gpg|signature|expired|key' | head -n 1)
+    [ -n "$line" ] || { echo "NOT REFUSED FOR THE EXPECTED REASON"; exit 1; }
+    keyring after
+    echo "REFUSED: without the renewal steps: $line"
+    exit 0
+  fi
+  # The README's block, as written: the pinned fingerprints and the server are the only things replaced,
+  # and a client without sudo gets a function that runs the command.
+  sed -e "s#$pinfpr $pinsub#$fpr $sub#g" -e "s#https://packages.hodeishield.com#$url#g" /b/renew-fedora.sh > /tmp/renew-body.sh
+  grep -q "$fpr $sub" /tmp/renew-body.sh && grep -q "$url/gpg.key" /tmp/renew-body.sh || { echo "SETUP: the README block was not substituted"; exit 90; }
+  { echo 'sudo() { "$@"; }'; cat /tmp/renew-body.sh; } > /tmp/renew.sh
+  cd /tmp
+  rc=0
+  out=$(sh /tmp/renew.sh 2>&1) || rc=$?
+  echo "$out"
+  [ "$rc" = 0 ] || { echo "README STEPS FAILED: exit $rc"; exit 1; }
+  case $out in *STOP:*) echo "README STEPS FAILED: the block stopped"; exit 1 ;; esac
+  [ "$(mine)" = 1 ] || { echo "README STEPS FAILED: the rpm keyring does not hold exactly the one new key"; exit 1; }
+  keyring after
+  rc=0
+  out=$($dnfq makecache --refresh 2>&1) || rc=$?
+  echo "$out"
+  keyring "after makecache"
+  [ "$rc" = 0 ] || { echo "REJECTED: dnf makecache fails after the README steps"; exit 1; }
+  $dnfq upgrade hodeishield
+  [ "$(hodeishield --version)" = "hodeishield $v2" ] || { echo "REJECTED: hodeishield was not upgraded to $v2"; exit 1; }
+  grep -qx 'gpgcheck=1' "$repo" && grep -qx 'repo_gpgcheck=1' "$repo"
+  echo "OK: after the README steps ($have), makecache and upgrade to $v2 pass with gpgcheck and repo_gpgcheck on"
+  ;;
+esac
+EOF
+
+# The key, the first repository (0.2.0 signed while the key is valid) and the images, all before the key expires.
+docker pull --quiet rockylinux:9 > /dev/null
+docker pull --quiet fedora:latest > /dev/null
+tool sh /w/bin/rnkeys.sh "$rn_life"
+rn_fpr=$(cat "$work/rn.fpr")
+rn_sub=$(cat "$work/rn.sub")
+rn_exp=$(cat "$work/rn.exp")
+mkdir -p "$work/rn/old/x86_64" "$work/rn/new/x86_64"
+cp "$pk/v1/hodeishield-0.2.0-1.x86_64.rpm" "$work/rn/old/x86_64/"
+tool sh /w/bin/signrpm.sh /w/gnupg-rn "$rn_sub!" /w/rn-old.asc /w/rn/old/x86_64/hodeishield-0.2.0-1.x86_64.rpm
+tool sh /w/bin/rnrepo.sh /w/rn/old/x86_64 "$rn_sub!"
+newbucket rt-rn
+mcx mirror --quiet /w/rn/old/x86_64 r/rt-rn/rpm/x86_64 > /dev/null
+put rt-rn gpg.key "$work/rn-old.asc"
+endgroup
+
+cat > "$work/rn-cases" << 'EOF'
+K1 rockylinux:9 present steps
+K2 rockylinux:9 absent steps
+K3 rockylinux:9 present nosteps
+K4 fedora:latest present steps
+K5 fedora:latest absent steps
+K6 fedora:latest present nosteps
+EOF
+# rn_exec <case> <description> <container> <client args...>
+rn_exec() {
+  rid=$1 rdesc=$2 rname=$3
+  shift 3
+  group "$rid $rdesc"
+  rrc=0
+  rout=$(docker exec "$rname" sh /b/dnf-renew-client.sh "$@" 2>&1) || rrc=$?
+  printf '%s\n' "$rout"
+  endgroup
+  rline=$(printf '%s\n' "$rout" | grep -E '^(OK|REFUSED):' | tail -n 1 || true)
+  if [ "$rrc" = 0 ] && [ -n "$rline" ]; then
+    record "$rid $rdesc" "$rwant" "$(printf '%s' "$rline" | cut -c1-120)" PASS
+  else
+    record "$rid $rdesc" "$rwant" "exit $rrc: $(printf '%s\n' "$rout" | tail -n 1 | cut -c1-100)" FAIL
+  fi
+}
+rn_n=0
+while read -r rid rimage rhave rsteps; do
+  rn_n=$((rn_n + 1))
+  rn_names="$rn_names rt-rn-$rn_n"
+  docker run -d --name "rt-rn-$rn_n" --network "$net" --volume "$work/bin:/b:ro" "$rimage" sleep infinity > /dev/null
+  rwant="installs from the repository"
+  rn_exec "$rid" "$rimage installs 0.2.0 (key expires in $rn_life s)" "rt-rn-$rn_n" prepare "$rn_url" 0.2.0
+done < "$work/rn-cases"
+
+# The old key expires; it is extended (same fingerprint), the indexes are signed again, the new public key is
+# published at the same URLs.
+now=$(date +%s)
+if [ "$now" -ge "$rn_exp" ]; then
+  record "K0 the clients were set up before the key expired" "before expiry" "after expiry" FAIL
+else
+  printf 'Waiting %s s for the key to expire\n' "$((rn_exp - now + 3))"
+  sleep "$((rn_exp - now + 3))"
+fi
+group "DNF key renewal: extend the key, sign again, publish"
+tool sh /w/bin/rnrenew.sh
+cp "$work/rn/old/x86_64/hodeishield-0.2.0-1.x86_64.rpm" "$pk/v2/hodeishield-0.2.1-1.x86_64.rpm" "$work/rn/new/x86_64/"
+tool sh /w/bin/signrpm.sh /w/gnupg-rn "$rn_sub!" /w/rn-new.asc /w/rn/new/x86_64/hodeishield-0.2.1-1.x86_64.rpm
+tool sh /w/bin/rnrepo.sh /w/rn/new/x86_64 "$rn_sub!"
+mcx rm --recursive --force r/rt-rn/rpm/x86_64 > /dev/null
+mcx mirror --quiet /w/rn/new/x86_64 r/rt-rn/rpm/x86_64 > /dev/null
+put rt-rn gpg.key "$work/rn-new.asc"
+endgroup
+
+rn_n=0
+while read -r rid rimage rhave rsteps; do
+  rn_n=$((rn_n + 1))
+  if [ "$rsteps" = steps ]; then
+    rwant="README steps, then makecache and upgrade"
+    rn_exec "$rid" "$rimage, old key $rhave in the rpm keyring: README renewal steps, then upgrade" "rt-rn-$rn_n" \
+      renew "$rn_url" "$rhave" steps "$rn_fpr" "$rn_sub" 0.2.0 0.2.1 "$pin_fpr" "$pin_sub"
+  else
+    rwant="renewed signatures refused"
+    rn_exec "$rid" "$rimage, old key $rhave in the rpm keyring: no renewal steps" "rt-rn-$rn_n" \
+      renew "$rn_url" "$rhave" nosteps "$rn_fpr" "$rn_sub" 0.2.0 0.2.1 "$pin_fpr" "$pin_sub"
+  fi
+done < "$work/rn-cases"
 
 # --- Recovery after a signing subkey revocation --------------------------------------------------------
 # A key of its own: a primary, a signing subkey that signs a release and is then revoked, and a new

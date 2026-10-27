@@ -9,12 +9,14 @@ on:
   pull_request:
     paths:
       - "packaging/repo/**"
+      - "README.md"
       - "packaging/nfpm.yaml"
       - ".github/workflows/repo-builder-tests.yml"
   push:
     branches: [dev, main]
     paths:
       - "packaging/repo/**"
+      - "README.md"
       - "packaging/nfpm.yaml"
       - ".github/workflows/repo-builder-tests.yml"
   workflow_dispatch:
@@ -31,7 +33,7 @@ jobs:
   tests:
     name: repository builder security tests
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     permissions:
       contents: read
     env:
