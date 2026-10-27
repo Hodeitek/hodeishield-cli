@@ -35,22 +35,26 @@ sig_ok() {
 
 # public_key_problem <public key file> [<signing key fingerprint>]
 #
-# Prints why the public key is not one to publish, and nothing when it is: no revoked subkey (rpm on
-# RHEL and Rocky Linux 8 and 9 refuses to import one), and exactly one signing-capable subkey that is
-# neither revoked nor expired, which is the key that signs (when a fingerprint is given, a trailing "!"
-# allowed, it must be that subkey). Always succeeds: the caller tests whether the output is empty.
+# Prints why the public key is not one to publish, and nothing when it is: exactly one primary key,
+# neither revoked, expired nor invalid; no revoked subkey (rpm on RHEL and Rocky Linux 8 and 9 refuses
+# to import one); and exactly one signing-capable subkey that is neither revoked, expired nor invalid
+# (field 2 r, e or i, the same filter as the workflows'), which is the key that signs (when a
+# fingerprint is given, a trailing "!" allowed, it must be that subkey). Always succeeds: the caller
+# tests whether the output is empty.
 public_key_problem() {
   pkp_want=$(printf '%s' "${2-}" | tr 'a-f' 'A-F')
   pkp_want=${pkp_want%!}
   gpg --batch --with-colons --show-keys "$1" 2> /dev/null | awk -F: -v want="$pkp_want" '
-    $1 == "pub" { cur = 0 }
+    $1 == "pub" { cur = 0; primaries++; if ($2 ~ /[rei]/) badprimary = $2 }
     $1 == "sub" {
       if ($2 == "r") revoked++
-      cur = ($2 != "r" && $2 != "e" && $12 ~ /s/)
+      cur = ($2 !~ /[rei]/ && $12 ~ /s/)
     }
     $1 == "fpr" && cur { n++; fp = $10; cur = 0 }
     END {
-      if (revoked) print "carries a revoked subkey; export it with export-public-key.sh (CONTRIBUTING.md)"
+      if (primaries != 1) print "does not hold exactly one primary key (found " primaries + 0 ")"
+      else if (badprimary != "") print "has a primary key that is revoked, expired or invalid (validity " badprimary ")"
+      else if (revoked) print "carries a revoked subkey; export it with export-public-key.sh (CONTRIBUTING.md)"
       else if (n != 1) print "does not carry exactly one signing subkey that is neither revoked nor expired (found " n + 0 ")"
       else if (want != "" && toupper(fp) != want) print "has the signing subkey " fp ", not " want
     }'
