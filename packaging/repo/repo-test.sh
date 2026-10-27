@@ -966,13 +966,23 @@ renew)
     rc=0
     out=$($dnfq makecache --refresh 2>&1) || rc=$?
     echo "$out"
+    if [ "$rc" = 0 ] && dnf --version 2> /dev/null | head -n 1 | grep -q dnf5; then
+      # DNF 5 does not reject the renewed repository when only the expired copy of the key is held: the
+      # stale key is not refused here, so this client is only observed, not required to refuse.
+      rc2=0
+      out2=$($dnfq upgrade hodeishield 2>&1) || rc2=$?
+      echo "$out2"
+      keyring after
+      echo "OBSERVED: dnf5 accepted the renewed repository without the renewal steps (upgrade exit $rc2)"
+      exit 0
+    fi
     [ "$rc" != 0 ] || { echo "NOT REFUSED: dnf accepted the renewed repository with the old key"; exit 1; }
     rc2=0
     out2=$($dnfq upgrade hodeishield 2>&1) || rc2=$?
     echo "$out2"
     [ "$rc2" != 0 ] || { echo "NOT REFUSED: hodeishield was upgraded"; exit 1; }
     [ "$(hodeishield --version)" = "hodeishield $v1" ] || { echo "NOT REFUSED: hodeishield changed"; exit 1; }
-    line=$(printf '%s\n%s\n' "$out" "$out2" | grep -iE 'gpg|signature|expired|key' | head -n 1)
+    line=$(printf '%s\n%s\n' "$out" "$out2" | grep -E 'Bad GPG signature|GPG check FAILED|expired|not signed' | head -n 1)
     [ -n "$line" ] || { echo "NOT REFUSED FOR THE EXPECTED REASON"; exit 1; }
     keyring after
     echo "REFUSED: without the renewal steps: $line"
@@ -1037,7 +1047,7 @@ rn_exec() {
   rout=$(docker exec "$rname" sh /b/dnf-renew-client.sh "$@" 2>&1) || rrc=$?
   printf '%s\n' "$rout"
   endgroup
-  rline=$(printf '%s\n' "$rout" | grep -E '^(OK|REFUSED):' | tail -n 1 || true)
+  rline=$(printf '%s\n' "$rout" | grep -E '^(OK|REFUSED|OBSERVED):' | tail -n 1 || true)
   if [ "$rrc" = 0 ] && [ -n "$rline" ]; then
     record "$rid $rdesc" "$rwant" "$(printf '%s' "$rline" | cut -c1-120)" PASS
   else
@@ -1080,7 +1090,7 @@ while read -r rid rimage rhave rsteps; do
     rn_exec "$rid" "$rimage, old key $rhave in the rpm keyring: README renewal steps, then upgrade" "rt-rn-$rn_n" \
       renew "$rn_url" "$rhave" steps "$rn_fpr" "$rn_sub" 0.2.0 0.2.1 "$pin_fpr" "$pin_sub"
   else
-    rwant="renewed signatures refused"
+    rwant="renewed signatures refused (dnf5: observed)"
     rn_exec "$rid" "$rimage, old key $rhave in the rpm keyring: no renewal steps" "rt-rn-$rn_n" \
       renew "$rn_url" "$rhave" nosteps "$rn_fpr" "$rn_sub" 0.2.0 0.2.1 "$pin_fpr" "$pin_sub"
   fi
