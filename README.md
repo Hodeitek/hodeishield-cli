@@ -121,6 +121,15 @@ The repositories are signed with this key (RSA 4096); check its fingerprint befo
 AA2A F212 85A9 AB99 0833  9089 35D5 F941 71C1 CD0B
 ```
 
+It signs with this subkey, the only one in use; `gpg --show-keys --with-subkey-fingerprints` shows it:
+
+```text
+DC7E 2403 287C DB08 BD84  AD7D D7E7 2E1B 6356 66B0
+```
+
+If the signing subkey is ever replaced, the release notes and a security advisory say so, and list the
+fingerprint of the subkey that was revoked.
+
 The commands below check that the downloaded file holds exactly one key and that its fingerprint is this
 one. Reading the fingerprint is not enough: a file can hold the real key and a second one, and the
 second would then be trusted as well. Each command below runs the check first and goes on to install
