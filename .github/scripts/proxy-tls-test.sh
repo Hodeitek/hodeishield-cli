@@ -161,6 +161,15 @@ api_seen() { count "$WORK/api.log" "GET /v1/vendors"; }
 # cost exactly one: it is not retried.
 HS_FAIL_RE="Client TLS handshake failed"
 hs_failed() { count "$WORK/proxy.log" "$HS_FAIL_RE"; }
+# Waits (up to 5 s) for the proxy log to show more rejected handshakes than $1, then 1 s more so a
+# retry, if there were one, would show up too. The count is read afterwards and must be exactly one.
+wait_handshake_above() {
+  for _ in $(seq 1 25); do
+    if [ "$(hs_failed)" -gt "$1" ]; then break; fi
+    sleep 0.2
+  done
+  sleep 1
+}
 
 # Waits (up to 5 s) for the proxy log to show more requests than $1.
 wait_proxy_above() {
@@ -186,6 +195,7 @@ PROXY=http://127.0.0.1:$PROXY_PORT
 p0=$(proxy_seen) a0=$(api_seen) h0=$(hs_failed)
 cli HTTPS_PROXY="$PROXY" -- vendors list --json
 sleep 1
+wait_handshake_above "$h0"
 h1=$(( $(hs_failed) - h0 ))
 echo "case 1: handshakes rejected by the client during the call: $h1"
 if [ "$rc" -eq 7 ] && [[ "$(cat "$WORK/err")" == "error: Could not reach the API:"* ]] \
@@ -208,6 +218,7 @@ if [ "$OS" = linux ]; then
 else
   desc="proxy CA only in SSL_CERT_FILE: no effect here, exit 7, certificate error, one handshake"
   sleep 1
+  wait_handshake_above "$h0"
   h3=$(( $(hs_failed) - h0 ))
   echo "case 3: handshakes rejected by the client during the call: $h3"
   if [ "$rc" -eq 7 ] && [[ "$(cat "$WORK/err")" == "error: Could not reach the API:"* ]] \
