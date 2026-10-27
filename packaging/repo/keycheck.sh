@@ -55,7 +55,8 @@ if [ $# -ge 2 ]; then
   grep -Fqx "$spaced" "$readme" || die "$readme does not state the fingerprint as $spaced"
   spaced=$(spaced "$PINNED_SIGNING_SUBKEY")
   grep -Fqx "$spaced" "$readme" || die "$readme does not state the signing subkey as $spaced"
-  grep -Fq "= $PINNED_FINGERPRINT ]" "$readme" || die "$readme does not check the fingerprint $PINNED_FINGERPRINT"
+  grep -Fq "= \"$PINNED_FINGERPRINT $PINNED_SIGNING_SUBKEY\" ]" "$readme" ||
+    die "$readme does not check the fingerprint $PINNED_FINGERPRINT and the signing subkey $PINNED_SIGNING_SUBKEY"
 fi
 printf 'keycheck.sh: %s holds exactly one key, %s, signing subkey %s\n' "$key" "$PINNED_FINGERPRINT" \
   "$PINNED_SIGNING_SUBKEY"

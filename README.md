@@ -130,9 +130,11 @@ DC7E 2403 287C DB08 BD84  AD7D D7E7 2E1B 6356 66B0
 If the signing subkey is ever replaced, the release notes and a security advisory say so, and list the
 fingerprint of the subkey that was revoked.
 
-The commands below check that the downloaded file holds exactly one key and that its fingerprint is this
-one. Reading the fingerprint is not enough: a file can hold the real key and a second one, and the
-second would then be trusted as well. Each command below runs the check first and goes on to install
+The commands below check that the downloaded file holds exactly one key, that its fingerprint is the
+first one above, and that it carries exactly one usable signing subkey, the one above. Reading the
+fingerprint is not enough: a file can hold the real key and a second one, and the second would then be
+trusted as well; and an older signing subkey that has since been revoked would pass a check of the
+primary key alone. Each command below runs the check first and goes on to install
 the key, and to write the repository source, only when it passes; otherwise it prints `STOP` and
 deletes the file. The check needs `gpg` (`sudo apt-get install gnupg` on a minimal Debian or Ubuntu
 image).
@@ -142,8 +144,8 @@ image).
 ```sh
 sudo install -d -m 0755 /etc/apt/keyrings
 curl -fsSL https://packages.hodeishield.com/gpg.key -o hodeishield.asc
-gpg --show-keys --with-fingerprint hodeishield.asc     # shows the fingerprint above
-[ "$(gpg --show-keys --with-colons hodeishield.asc | awk -F: '$1=="pub"{n++} $1=="fpr"&&!f{f=$10} END{if(n==1)print f}')" = AA2AF21285A9AB990833908935D5F94171C1CD0B ] \
+gpg --show-keys --with-fingerprint --with-subkey-fingerprints hodeishield.asc     # shows both fingerprints above
+[ "$(gpg --show-keys --with-colons hodeishield.asc | awk -F: '$1=="pub"{n++} $1=="fpr"&&!f{f=$10} $1=="sub"{s=($12~/s/&&$2!~/[rei]/)} $1=="fpr"&&s{m++;g=$10;s=0} END{if(n==1&&m==1)print f,g}')" = "AA2AF21285A9AB990833908935D5F94171C1CD0B DC7E2403287CDB08BD84AD7DD7E72E1B635666B0" ] \
   && sudo install -m 0644 hodeishield.asc /etc/apt/keyrings/hodeishield.asc \
   && rm hodeishield.asc \
   && echo "deb [signed-by=/etc/apt/keyrings/hodeishield.asc] https://packages.hodeishield.com/apt stable main" \
@@ -157,14 +159,14 @@ only. Upgrade with `sudo apt update && sudo apt upgrade` (or `sudo apt install -
 
 #### Fedora, RHEL, Rocky Linux, AlmaLinux (DNF)
 
-Download the key and check it (it must be exactly one key, with the fingerprint above), then write the repository file below by hand. It turns on
+Download the key and check it (it must be exactly one key, with the fingerprints above), then write the repository file below by hand. It turns on
 signature checking of both the packages and the repository metadata (`gpgcheck=1`, `repo_gpgcheck=1`)
 and reads the key from the file you checked:
 
 ```sh
 curl -fsSL https://packages.hodeishield.com/gpg.key -o hodeishield.asc
-gpg --show-keys --with-fingerprint hodeishield.asc     # shows the fingerprint above
-[ "$(gpg --show-keys --with-colons hodeishield.asc | awk -F: '$1=="pub"{n++} $1=="fpr"&&!f{f=$10} END{if(n==1)print f}')" = AA2AF21285A9AB990833908935D5F94171C1CD0B ] \
+gpg --show-keys --with-fingerprint --with-subkey-fingerprints hodeishield.asc     # shows both fingerprints above
+[ "$(gpg --show-keys --with-colons hodeishield.asc | awk -F: '$1=="pub"{n++} $1=="fpr"&&!f{f=$10} $1=="sub"{s=($12~/s/&&$2!~/[rei]/)} $1=="fpr"&&s{m++;g=$10;s=0} END{if(n==1&&m==1)print f,g}')" = "AA2AF21285A9AB990833908935D5F94171C1CD0B DC7E2403287CDB08BD84AD7DD7E72E1B635666B0" ] \
   && sudo install -m 0644 hodeishield.asc /etc/pki/rpm-gpg/RPM-GPG-KEY-hodeishield \
   && rm hodeishield.asc \
   && sudo tee /etc/yum.repos.d/hodeishield.repo > /dev/null << 'REPO' || { echo "STOP: the file is not the one key with the fingerprint above, or an install step failed"; rm -f hodeishield.asc; }
@@ -197,16 +199,16 @@ expired key, or the release notes announce a renewal, run:
 ```sh
 # Debian, Ubuntu
 curl -fsSL https://packages.hodeishield.com/gpg.key -o hodeishield.asc
-gpg --show-keys --with-fingerprint hodeishield.asc     # shows the fingerprint above
-[ "$(gpg --show-keys --with-colons hodeishield.asc | awk -F: '$1=="pub"{n++} $1=="fpr"&&!f{f=$10} END{if(n==1)print f}')" = AA2AF21285A9AB990833908935D5F94171C1CD0B ] \
+gpg --show-keys --with-fingerprint --with-subkey-fingerprints hodeishield.asc     # shows both fingerprints above
+[ "$(gpg --show-keys --with-colons hodeishield.asc | awk -F: '$1=="pub"{n++} $1=="fpr"&&!f{f=$10} $1=="sub"{s=($12~/s/&&$2!~/[rei]/)} $1=="fpr"&&s{m++;g=$10;s=0} END{if(n==1&&m==1)print f,g}')" = "AA2AF21285A9AB990833908935D5F94171C1CD0B DC7E2403287CDB08BD84AD7DD7E72E1B635666B0" ] \
   && sudo install -m 0644 hodeishield.asc /etc/apt/keyrings/hodeishield.asc \
   && rm hodeishield.asc \
   || { echo "STOP: the file is not the one key with the fingerprint above, or an install step failed"; rm -f hodeishield.asc; }
 
 # Fedora, RHEL, Rocky Linux, AlmaLinux
 curl -fsSL https://packages.hodeishield.com/gpg.key -o hodeishield.asc
-gpg --show-keys --with-fingerprint hodeishield.asc     # shows the fingerprint above
-[ "$(gpg --show-keys --with-colons hodeishield.asc | awk -F: '$1=="pub"{n++} $1=="fpr"&&!f{f=$10} END{if(n==1)print f}')" = AA2AF21285A9AB990833908935D5F94171C1CD0B ] \
+gpg --show-keys --with-fingerprint --with-subkey-fingerprints hodeishield.asc     # shows both fingerprints above
+[ "$(gpg --show-keys --with-colons hodeishield.asc | awk -F: '$1=="pub"{n++} $1=="fpr"&&!f{f=$10} $1=="sub"{s=($12~/s/&&$2!~/[rei]/)} $1=="fpr"&&s{m++;g=$10;s=0} END{if(n==1&&m==1)print f,g}')" = "AA2AF21285A9AB990833908935D5F94171C1CD0B DC7E2403287CDB08BD84AD7DD7E72E1B635666B0" ] \
   && sudo install -m 0644 hodeishield.asc /etc/pki/rpm-gpg/RPM-GPG-KEY-hodeishield \
   && rm hodeishield.asc \
   && { rpm -q gpg-pubkey --qf '%{NAME}-%{VERSION}-%{RELEASE} %{PACKAGER}\n' | awk '/HodeiShield Packages </ { print $1 }' | sudo xargs -r rpm -e; } \
