@@ -73,6 +73,12 @@ fn login_with(
             &state,
             &pkce,
         )?;
+        // A browser started with our pipe handles would keep a piped `login` from finishing until
+        // the browser exits.
+        #[cfg(windows)]
+        if !args.no_browser {
+            crate::std_handles::clear_std_handle_inheritance();
+        }
         let opened = !args.no_browser && webbrowser::open(url.as_str()).is_ok();
         if opened {
             eprintln!("Opened your browser to sign in. If nothing happened, open:\n\n    {url}\n");

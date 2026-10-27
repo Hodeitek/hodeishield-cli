@@ -14,6 +14,8 @@ mod config;
 mod failure;
 mod filters;
 mod output;
+#[cfg(windows)]
+mod std_handles;
 mod update_check;
 
 use std::io::Write;
