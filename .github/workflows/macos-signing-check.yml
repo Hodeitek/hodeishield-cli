@@ -20,7 +20,7 @@ permissions: {}
 # through a reviewed pull request. Empty until a maintainer sets it, so signing fails closed. The
 # same value is in release.yml; keep the two in step.
 env:
-  MACOS_TEAM_ID: ""
+  MACOS_TEAM_ID: "8UW5SZ932N"
 
 concurrency:
   group: macos-signing-check

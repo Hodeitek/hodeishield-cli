@@ -100,7 +100,9 @@ checks the binary's notarization online on first run. See
 - **Identities.** A Developer ID Application certificate for the binary and a Developer ID Installer
   certificate for the package, both issued to Hodeitek S.L. by Apple's Developer ID certification
   authority. The signature carries the Apple Developer Team ID of the account.
-- **Expected Team ID.** The Team ID is public and is kept in the repository, not in a secret: the
+- **Expected Team ID.** The Apple Developer Team ID of Hodeitek S.L. is `8UW5SZ932N`. Check a
+  signature against it (`codesign -dv` shows it as `TeamIdentifier`). It is public and is kept in
+  the repository, not in a secret: the
   `MACOS_TEAM_ID` constant at the top of `release.yml` and `macos-signing-check.yml` (change both
   in one reviewed pull request). The signing steps compare it exactly with the `TeamIdentifier`
   of the binary's signature and with the Team ID of the installer certificate, and fail if either
@@ -133,14 +135,15 @@ checks the binary's notarization online on first run. See
   listing the names, if a secret is missing, and if the certificates are not those of
   `MACOS_TEAM_ID`. It is bound to the same environment, so it needs the
   same approval, and it has two preconditions: the workflow must be on the default branch to be
-  dispatched, and the environment accepts deployments from `v*` tags only, so a repository
-  administrator adds `main` to its allowed branches for the check and removes it afterwards.
+  dispatched, and the environment must allow that branch. The `release-signing` environment allows
+  the `main` branch (for the hand-started check) and `v*` tags (for releases), still with required
+  reviewer approval and no administrator bypass.
 
 To enable it, a maintainer with the right to change the environment:
 
-1. sets `MACOS_TEAM_ID` in `release.yml` and `macos-signing-check.yml` to the Team ID of the
-   Hodeitek S.L. Apple Developer account, through a reviewed pull request merged to `main`
-   (while it is empty, the signing job fails at its first step);
+1. (done) sets `MACOS_TEAM_ID` in `release.yml` and `macos-signing-check.yml` to the Team ID of the
+   Hodeitek S.L. Apple Developer account, `8UW5SZ932N` (while it is empty, the signing job fails
+   at its first step);
 2. stores the nine secrets in the `release-signing` environment;
 3. sets the repository variable `MACOS_SIGNING_ENABLED` to `true`.
 
