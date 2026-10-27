@@ -892,9 +892,9 @@ cat > "$work/bin/rnrenew.sh" << 'EOF'
 set -eu
 export HOME=/tmp GNUPGHOME=/w/gnupg-rn
 primary=$(cat /w/rn.fpr)
-# The primary key first, then all its subkeys (with a subkey argument gpg leaves the primary key alone).
+# The primary key first, then its subkey (with a subkey argument gpg leaves the primary key alone).
 gpg --batch --pinentry-mode loopback --passphrase '' --quick-set-expire "$primary" 2y
-gpg --batch --pinentry-mode loopback --passphrase '' --quick-set-expire "$primary" 2y '*'
+gpg --batch --pinentry-mode loopback --passphrase '' --quick-set-expire "$primary" 2y "$(cat /w/rn.sub)"
 [ "$(gpg --batch --with-colons --list-keys | awk -F: '$1 == "pub" { print $7; exit }')" -gt "$(date +%s)" ]
 gpg --batch --armor --export "$primary" > /w/rn-new.asc
 gpgconf --kill all
