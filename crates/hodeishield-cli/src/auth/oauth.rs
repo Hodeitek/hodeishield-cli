@@ -1116,6 +1116,27 @@ mod tests {
     }
 
     #[test]
+    fn a_token_granting_fewer_scopes_than_requested_is_accepted_as_granted() {
+        let mut server = mockito::Server::new();
+        server
+            .mock("POST", "/token")
+            .with_body(r#"{"access_token":"at","token_type":"bearer","scope":"offline_access"}"#)
+            .create();
+        let http = http_client(&server.url().parse().expect("url")).expect("http");
+        let pkce = Pkce::from_verifier("v".repeat(43));
+        let tokens = exchange_code(
+            &http,
+            &app_metadata(&server),
+            "cli",
+            &SecretString::from("code"),
+            "http://127.0.0.1:1/callback",
+            &pkce,
+        )
+        .expect("a narrower grant is not an error");
+        assert_eq!(tokens.scope.as_deref(), Some("offline_access"));
+    }
+
+    #[test]
     fn hostile_device_timings_are_bounded() {
         let mut server = mockito::Server::new();
         server
