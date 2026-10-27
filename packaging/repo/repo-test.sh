@@ -892,7 +892,9 @@ cat > "$work/bin/rnrenew.sh" << 'EOF'
 set -eu
 export HOME=/tmp GNUPGHOME=/w/gnupg-rn
 primary=$(cat /w/rn.fpr)
-gpg --batch --quiet --pinentry-mode loopback --passphrase '' --quick-set-expire "$primary" 2y '*'
+# The primary key first, then all its subkeys (with a subkey argument gpg leaves the primary key alone).
+gpg --batch --pinentry-mode loopback --passphrase '' --quick-set-expire "$primary" 2y
+gpg --batch --pinentry-mode loopback --passphrase '' --quick-set-expire "$primary" 2y '*'
 [ "$(gpg --batch --with-colons --list-keys | awk -F: '$1 == "pub" { print $7; exit }')" -gt "$(date +%s)" ]
 gpg --batch --armor --export "$primary" > /w/rn-new.asc
 gpgconf --kill all
@@ -1019,12 +1021,12 @@ put rt-rn gpg.key "$work/rn-old.asc"
 endgroup
 
 cat > "$work/rn-cases" << 'EOF'
-K1 rockylinux:9 present steps
-K2 rockylinux:9 absent steps
-K3 rockylinux:9 present nosteps
-K4 fedora:latest present steps
-K5 fedora:latest absent steps
-K6 fedora:latest present nosteps
+D1 rockylinux:9 present steps
+D2 rockylinux:9 absent steps
+D3 rockylinux:9 present nosteps
+D4 fedora:latest present steps
+D5 fedora:latest absent steps
+D6 fedora:latest present nosteps
 EOF
 # rn_exec <case> <description> <container> <client args...>
 rn_exec() {
@@ -1055,7 +1057,7 @@ done < "$work/rn-cases"
 # published at the same URLs.
 now=$(date +%s)
 if [ "$now" -ge "$rn_exp" ]; then
-  record "K0 the clients were set up before the key expired" "before expiry" "after expiry" FAIL
+  record "D0 the clients were set up before the key expired" "before expiry" "after expiry" FAIL
 else
   printf 'Waiting %s s for the key to expire\n' "$((rn_exp - now + 3))"
   sleep "$((rn_exp - now + 3))"
