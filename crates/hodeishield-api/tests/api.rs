@@ -613,6 +613,31 @@ fn a_connection_error_is_retried() {
 }
 
 #[test]
+fn a_refused_connection_is_retried() {
+    // Bind to get a free port, then close it: nothing listens there, so every attempt is refused.
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    drop(listener);
+
+    let retries = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = std::sync::Arc::clone(&retries);
+    let result = Client::builder(
+        format!("http://127.0.0.1:{port}").parse().expect("url"),
+        SecretString::from("hsk_example"),
+    )
+    .transient_retries(2, Duration::from_millis(1))
+    .retry_observer(move |_event| {
+        counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    })
+    .build()
+    .expect("client")
+    .list_vendors(&ListVendorsParams::default());
+
+    assert!(matches!(result, Err(Error::Transport(_))));
+    assert_eq!(retries.load(std::sync::atomic::Ordering::SeqCst), 2);
+}
+
+#[test]
 fn retry_observer_receives_expected_events() {
     let mut server = mockito::Server::new();
     let unavailable = server

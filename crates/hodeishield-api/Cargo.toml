@@ -13,6 +13,7 @@ publish.workspace = true
 
 [dependencies]
 reqwest.workspace = true
+rustls = { version = "0.23", default-features = false, features = ["std"] }
 secrecy = "0.10.3"
 serde.workspace = true
 serde_json.workspace = true
