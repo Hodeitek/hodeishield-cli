@@ -151,6 +151,29 @@ pub fn from_api(error: hodeishield_api::Error, context: &ApiContext<'_>) -> Fail
                          using another key of this tenant will not help.",
                     )
                 }
+                403 if detail(&api, "code") == Some("MODULE_NOT_ENTITLED") => {
+                    // The scopes name the module (or `compliance.<framework>`); only short tokens
+                    // are shown.
+                    let scopes = entitlement_scopes(&api);
+                    let compliance = scopes.iter().any(|s| s.starts_with("compliance."));
+                    let what = if compliance {
+                        "The tenant's plan does not include this module, or the compliance framework \
+                         is not enabled for the tenant"
+                    } else {
+                        "The tenant's plan does not include the module this needs"
+                    };
+                    let shown = if scopes.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" (scope: {})", scopes.join(", "))
+                    };
+                    Failure::new(Kind::Forbidden, format!("{what}{shown}."))
+                    .hint(
+                        "Ask a tenant administrator to add the module to the plan, or to enable the \
+                         framework. Signing in again or using another key of this tenant will not \
+                         help.",
+                    )
+                }
                 403 => {
                     let scopes: Vec<String> = api
                         .required_scopes
@@ -163,14 +186,15 @@ pub fn from_api(error: hodeishield_api::Error, context: &ApiContext<'_>) -> Fail
                     } else {
                         "Ask a tenant administrator for a key or access with that scope."
                     };
-                    Failure::new(
-                        Kind::Forbidden,
+                    let message = if scopes.is_empty() {
+                        "The credential is valid but is not allowed to do this.".to_owned()
+                    } else {
                         format!(
                             "The credential is valid but lacks the scope this needs: {}.",
                             scopes.join(", ")
-                        ),
-                    )
-                    .hint(hint)
+                        )
+                    };
+                    Failure::new(Kind::Forbidden, message).hint(hint)
                 }
                 404 => {
                     let failure = Failure::new(
@@ -360,6 +384,31 @@ fn detail<'a>(api: &'a hodeishield_api::ApiError, key: &str) -> Option<&'a str> 
         .and_then(|v| v.as_str())
 }
 
+/// The scopes a `MODULE_NOT_ENTITLED` answer lists in `details.scopes`: at most 5 short tokens,
+/// anything else is dropped.
+fn entitlement_scopes(api: &hodeishield_api::ApiError) -> Vec<String> {
+    api.body
+        .as_ref()
+        .and_then(|b| b.details.as_ref())
+        .and_then(|d| d.get("scopes"))
+        .and_then(|v| v.as_array())
+        .map(|list| {
+            list.iter()
+                .filter_map(|v| v.as_str())
+                .filter(|s| {
+                    !s.is_empty()
+                        && s.len() <= 64
+                        && s.chars().all(|c| {
+                            c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | ':')
+                        })
+                })
+                .take(5)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// The error and its causes on one line: `reqwest` puts the useful part (DNS, TLS, refused) in the
 /// source chain.
 pub fn error_chain(error: &dyn std::error::Error) -> String {
@@ -450,6 +499,90 @@ mod tests {
                 .is_some_and(|h| h.contains("ca-certificates"))
         );
         assert!(ca_hint(Failure::general("x"), "dns error").hint.is_none());
+    }
+
+    fn forbidden(details: &str) -> hodeishield_api::Error {
+        let body = format!(
+            r#"{{"code":"forbidden","message":"no","request_id":"r","details":{details}}}"#
+        );
+        hodeishield_api::Error::Api(Box::new(hodeishield_api::ApiError {
+            status: 403,
+            operation: "test",
+            required_scopes: &[],
+            body: Some(serde_json::from_str(&body).expect("body")),
+            meta: hodeishield_api::ResponseMeta::default(),
+        }))
+    }
+
+    fn context() -> ApiContext<'static> {
+        ApiContext {
+            source: CredentialSource::ApiKey,
+            framework: None,
+            tenant_selected: false,
+            is_portfolio_key: false,
+        }
+    }
+
+    #[test]
+    fn a_module_not_entitled_answer_names_the_scope_and_exits_4() {
+        let f = from_api(
+            forbidden(r#"{"code":"MODULE_NOT_ENTITLED","scopes":["supply_risk:read"]}"#),
+            &context(),
+        );
+        assert_eq!(f.kind, Kind::Forbidden);
+        assert_eq!(
+            f.message,
+            "The tenant's plan does not include the module this needs (scope: supply_risk:read)."
+        );
+        let hint = f.hint.as_deref().expect("hint");
+        assert!(hint.contains("tenant administrator"), "{hint}");
+        assert!(hint.contains("will not help"), "{hint}");
+    }
+
+    #[test]
+    fn a_compliance_scope_mentions_the_framework_being_enabled() {
+        let f = from_api(
+            forbidden(r#"{"code":"MODULE_NOT_ENTITLED","scopes":["compliance.nis2:read"]}"#),
+            &context(),
+        );
+        assert_eq!(f.kind, Kind::Forbidden);
+        assert!(
+            f.message.contains("framework is not enabled"),
+            "{}",
+            f.message
+        );
+        assert!(f.message.contains("compliance.nis2:read"), "{}", f.message);
+    }
+
+    #[test]
+    fn a_module_not_entitled_answer_without_scopes_names_nothing() {
+        let f = from_api(forbidden(r#"{"code":"MODULE_NOT_ENTITLED"}"#), &context());
+        assert_eq!(f.kind, Kind::Forbidden);
+        assert_eq!(
+            f.message,
+            "The tenant's plan does not include the module this needs."
+        );
+    }
+
+    #[test]
+    fn odd_or_long_scope_values_are_not_shown() {
+        let long = "a".repeat(65);
+        let details = format!(
+            r#"{{"code":"MODULE_NOT_ENTITLED","scopes":["{long}","\u001b[31mred","bad scope",7]}}"#
+        );
+        let f = from_api(forbidden(&details), &context());
+        assert_eq!(
+            f.message,
+            "The tenant's plan does not include the module this needs."
+        );
+    }
+
+    #[test]
+    fn a_generic_403_without_scopes_does_not_end_in_an_empty_list() {
+        let f = from_api(forbidden("{}"), &context());
+        assert_eq!(f.kind, Kind::Forbidden);
+        assert!(!f.message.contains("needs:"), "{}", f.message);
+        assert!(f.message.ends_with('.'), "{}", f.message);
     }
 
     #[test]
