@@ -193,7 +193,7 @@ for the rest.
 
 The signing key has an expiry date and is extended before it passes. The fingerprint stays the same, so
 only your copy of the public key needs refreshing, and it must be refreshed before the old expiry date:
-clients that still hold the old copy reject signatures made after it. If `apt update` or `dnf` reports an
+a client that still holds the old copy can reject signatures made after it (DNF 4 does). If `apt update` or `dnf` reports an
 expired key, or the release notes announce a renewal, run:
 
 ```sh
@@ -218,11 +218,13 @@ gpg --show-keys --with-fingerprint --with-subkey-fingerprints hodeishield.asc   
 ```
 
 The `rpm -e` line removes the old copy of the key, which rpm would keep otherwise; it does nothing when
-there is none, so the import that follows always runs. The import adds the one you checked. DNF may
-also keep its own copy of the key it uses to check repository metadata (`repo_gpgcheck`); `dnf clean all`
-is harmless, but whether it is enough to refresh that copy has not been verified yet, and a test of this
-renewal on a DNF system is planned. If `dnf` still reports an expired key after these steps, please
-open an issue.
+there is none, so the import that follows always runs. The import adds the one you checked. DNF
+also keeps its own copy of the key it uses to check repository metadata (`repo_gpgcheck`) in its cache;
+`dnf clean all` makes the next DNF command fetch the metadata again, and DNF then replaces that copy with
+the key you installed. A test in this repository runs these steps on Rocky Linux 9 (DNF 4) and Fedora
+(DNF 5), with and without the old key in the rpm keyring, and then runs `dnf makecache` and an upgrade with
+`gpgcheck=1` and `repo_gpgcheck=1`. If `dnf` still reports an expired key after these steps, please open
+an issue.
 
 #### A single package file
 
