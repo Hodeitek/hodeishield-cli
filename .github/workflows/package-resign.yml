@@ -12,7 +12,11 @@ name: Re-sign package repository
 # those verified release assets (a .deb byte for byte, an RPM apart from its signature), checked before
 # anything is signed. The inputs only choose between a dry run (the default: the bucket is read and
 # everything is checked, nothing is uploaded) and an apply, which also needs the primary key
-# fingerprint that the README publishes.
+# fingerprint that the README publishes; publish.sh refuses an apply unless the bucket's versioning
+# reads Enabled, so the replaced RPM objects are kept.
+#
+# A first job, with no environment, checks that packaging-resign exists and is protected (a required
+# reviewer, no administrator bypass, deployments from main only) before the job that uses it starts.
 #
 # It shares the concurrency group of the other packaging workflows, so a pending run here and a pending
 # release can displace each other: start it when no release is pending.
@@ -37,8 +41,46 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Before the job that names packaging-resign starts: a job that names an environment that does not
+  # exist creates it, unprotected. This job has no environment and only reads the environment's
+  # settings (public for a public repository; GITHUB_TOKEN needs actions: read), and fails unless it
+  # exists with a required reviewer, no administrator bypass, and deployments from main only.
+  preflight:
+    name: check the packaging-resign environment
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read # to read the environment and its deployment branch policies
+    steps:
+      - name: Check the environment's protection rules
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          env_url="repos/$GITHUB_REPOSITORY/environments/packaging-resign"
+          if ! settings=$(gh api "$env_url" 2> /dev/null); then
+            echo "::error::The packaging-resign environment does not exist or cannot be read. Create it as CONTRIBUTING.md describes (\"The packaging-resign environment\") before running this workflow."
+            exit 1
+          fi
+          policies=$(gh api --paginate "$env_url/deployment-branch-policies" --jq '.branch_policies[] | "\(.type) \(.name)"')
+          problems=$(jq -r --arg policies "$policies" '
+            [ (if ([.protection_rules[]? | select(.type == "required_reviewers") | (.reviewers // []) | length] | add // 0) < 1
+               then "no required reviewer" else empty end),
+              (if any(.protection_rules[]?; .type == "branch_policy") then empty else "no deployment branch policy" end),
+              (if .deployment_branch_policy.custom_branch_policies == true and .deployment_branch_policy.protected_branches == false
+               then empty else "the deployment branches are not custom branch policies" end),
+              (if .can_admins_bypass == false then empty else "administrators can bypass the protection rules" end),
+              (if $policies == "branch main" then empty else "the deployment branch policies are not exactly the branch main (they are: \($policies | gsub("\n"; ", ")))" end)
+            ] | join("; ")' <<< "$settings")
+          if [ -n "$problems" ]; then
+            echo "::error::The packaging-resign environment is not protected as CONTRIBUTING.md requires: $problems. Nothing was run."
+            exit 1
+          fi
+          echo "packaging-resign: a required reviewer, no administrator bypass, deployments from main only."
+
   resign:
     name: re-sign the RPM packages and rebuild the indexes
+    needs: preflight
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # A separate environment from the release's `packaging`: it accepts deployments from main only,
@@ -97,10 +139,12 @@ jobs:
           fi
           sh packaging/repo/keycheck.sh packaging/gpg.key README.md
 
-      # The releases to re-sign are read from the names of the packages in the bucket. The bucket is not
-      # trusted for anything else: a name only selects a release, which must be a published stable
-      # release and is verified below, and resign.sh then requires the bucket's packages to be exactly
-      # those verified assets. A package name of any other form stops the run.
+      # The releases to re-sign are read from the names of the packages in the bucket, by
+      # packaging/repo/bucket-releases.sh (tested in repo-test.sh). The bucket is not trusted for anything
+      # else: a name only selects a release, which must be a published stable release and is verified
+      # below, and resign.sh then requires the bucket's packages to be exactly those verified assets.
+      # A package name of any other form stops the run, and so does a stable release newer than
+      # LAST_RELEASE_WITHOUT_REPOSITORY (packaging/repo/live.sh) that is not in the bucket.
       - name: List the releases in the bucket
         id: releases
         env:
@@ -113,38 +157,22 @@ jobs:
           APPLY: ${{ inputs.apply }}
         run: |
           set -euo pipefail
-          # Each listing on its own, so that a failed one stops the run (set -e).
-          debkeys=$(aws s3api list-objects-v2 --endpoint-url "$ENDPOINT" --bucket "$BUCKET" --prefix apt/pool/ \
-            --output json | jq -r '.Contents[]?.Key')
-          rpmkeys=$(aws s3api list-objects-v2 --endpoint-url "$ENDPOINT" --bucket "$BUCKET" --prefix rpm/ \
-            --output json | jq -r '.Contents[]?.Key')
-          deb='^apt/pool/main/h/hodeishield/hodeishield_([0-9]+\.[0-9]+\.[0-9]+)-1_(amd64|arm64)\.deb$'
-          rpm='^rpm/(x86_64|aarch64)/hodeishield-([0-9]+\.[0-9]+\.[0-9]+)-1\.(x86_64|aarch64)\.rpm$'
-          found=()
-          while IFS= read -r key; do
-            if [[ "$key" =~ $deb ]]; then
-              found+=("${BASH_REMATCH[1]}")
-            elif [[ "$key" =~ $rpm ]] && [ "${BASH_REMATCH[1]}" = "${BASH_REMATCH[3]}" ]; then
-              found+=("${BASH_REMATCH[2]}")
-            elif [[ "$key" == apt/pool/* ]] || [[ "$key" =~ ^rpm/[^/]+/[^/]+\.rpm$ ]]; then
-              echo "::error::Unexpected package object in the bucket: $key"
-              exit 1
-            fi
-          done <<< "$debkeys"$'\n'"$rpmkeys"
-          if [ "${#found[@]}" = 0 ]; then
-            echo "::error::The bucket holds no package; there is nothing to sign again."
-            exit 1
-          fi
-          versions=$(printf '%s\n' "${found[@]}" | sort -uV | tr '\n' ' ')
+          listings="$RUNNER_TEMP/listings"
+          mkdir "$listings"
+          aws s3api list-objects-v2 --endpoint-url "$ENDPOINT" --bucket "$BUCKET" --prefix apt/pool/ \
+            --output json > "$listings/apt.json"
+          aws s3api list-objects-v2 --endpoint-url "$ENDPOINT" --bucket "$BUCKET" --prefix rpm/ \
+            --output json > "$listings/rpm.json"
+          gh release list -R "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases --limit 1000 \
+            --json tagName --jq '.[].tagName | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")) | ltrimstr("v")' \
+            > "$listings/stable"
+          versions=$(sh packaging/repo/bucket-releases.sh "$listings/stable" "$listings/apt.json" "$listings/rpm.json" |
+            tr '\n' ' ')
           versions=${versions% }
-          # Stable releases that are not in the bucket are reported, not added: the approver decides
-          # whether that is expected (for example releases older than the repository).
-          stable=$(gh release list -R "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases \
-            --limit 1000 --json tagName --jq '.[].tagName | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")) | ltrimstr("v")')
-          absent=$(comm -23 <(printf '%s\n' "$stable" | sort -u) <(printf '%s\n' "${found[@]}" | sort -u) | tr '\n' ' ')
-          if [ -n "${absent% }" ]; then
-            echo "::warning::Stable releases whose packages are not in the bucket (not re-signed): ${absent% }"
-          fi
+          [[ "$versions" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\ [0-9]+\.[0-9]+\.[0-9]+)*$ ]] || {
+            echo "::error::Unexpected list of releases: $versions"
+            exit 1
+          }
           echo "versions=$versions" >> "$GITHUB_OUTPUT"
           {
             if [ "$APPLY" = true ]; then
@@ -156,10 +184,6 @@ jobs:
             echo "Releases whose packages are in the bucket and are re-signed:"
             echo
             for v in $versions; do echo "- \`$v\`"; done
-            if [ -n "${absent% }" ]; then
-              echo
-              echo "Stable releases not in the bucket, left out: \`${absent% }\`"
-            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Install cosign
@@ -220,25 +244,6 @@ jobs:
             done
           done
           ls -l release-rpms release-debs
-
-      # Before an apply: the old RPM objects are kept only if the bucket keeps versions. Reading that
-      # needs s3:GetBucketVersioning; a credential that lacks it stops the run here, by design.
-      - name: Check the bucket keeps old versions
-        if: ${{ inputs.apply }}
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.PACKAGES_S3_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.PACKAGES_S3_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: ${{ vars.PACKAGES_S3_REGION }}
-          ENDPOINT: ${{ vars.PACKAGES_S3_ENDPOINT }}
-          BUCKET: ${{ vars.PACKAGES_S3_BUCKET }}
-        run: |
-          set -euo pipefail
-          status=$(aws s3api get-bucket-versioning --endpoint-url "$ENDPOINT" --bucket "$BUCKET" \
-            --query Status --output text 2> /dev/null) || status=unreadable
-          if [ "$status" != Enabled ]; then
-            echo "::error::Versioning of the bucket is '$status', not Enabled (or the credential may not read it: it needs s3:GetBucketVersioning). Re-signing replaces the RPM objects, so nothing is applied."
-            exit 1
-          fi
 
       # The same image as the release's `repos` job, with exactly these packages.
       - name: Build the repository image

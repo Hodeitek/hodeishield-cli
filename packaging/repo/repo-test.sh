@@ -28,10 +28,13 @@
 #     refuse the bucket's old signatures, resign.sh must refuse every unsafe run (a package in the bucket
 #     that is not a release asset, a .deb byte for byte and an RPM apart from its signature, an
 #     unexpected file, a public key that is not the one to publish or whose primary key the README does
-#     not publish) and leave the bucket as it was, ignore the published InRelease, and
+#     not publish, a bucket that does not keep versions) and leave the bucket as it was, ignore the
+#     published InRelease, keep each RPM's header and payload digests, and
 #     the one confirmed run must sign the RPM packages again (the old objects stay as versions), after
-#     which a new release publishes and apt and dnf install from the repository with the exported key,
-#     which carries no revoked subkey.
+#     which a new release publishes without touching the re-signed RPM objects, and apt and dnf
+#     install from the repository with the exported key, which carries no revoked subkey;
+#   - bucket-releases.sh must read the releases of a bucket listing, and refuse an unexpected name, a
+#     name with a newline, an empty bucket, an incomplete release, and a missing stable release.
 
 set -eu
 
@@ -380,7 +383,7 @@ done
 # The publishing user may list, read and write, never delete (like the real one).
 cat > "$work/policy.json" << 'EOF'
 {"Version": "2012-10-17", "Statement": [
-  {"Effect": "Allow", "Action": ["s3:ListBucket"], "Resource": ["arn:aws:s3:::rt-*"]},
+  {"Effect": "Allow", "Action": ["s3:ListBucket", "s3:GetBucketVersioning"], "Resource": ["arn:aws:s3:::rt-*"]},
   {"Effect": "Allow", "Action": ["s3:GetObject", "s3:PutObject"], "Resource": ["arn:aws:s3:::rt-*/*"]}]}
 EOF
 mcx admin policy create r rt-nodelete /w/policy.json > /dev/null
@@ -1109,12 +1112,51 @@ else
   printf '%s\n' "$out"
 fi
 
-# After the recovery the builder accepts the bucket, and the clients accept it.
+# Re-signing changes the signature only: each re-signed RPM keeps the header digest and the payload
+# digest of its release asset.
+r12b=same
+for arch in x86_64 aarch64; do
+  get rt-rv1 "rpm/$arch/hodeishield-0.2.0-1.$arch.rpm" "$work/t/r12b.$arch.rpm"
+  # shellcheck disable=SC2016 # expanded by the sh inside the image
+  digests=$(tool sh -c 'mkdir -p /tmp/db && for f in "$@"; do
+    rpm --dbpath /tmp/db -qp --qf "%{SHA256HEADER} [%{PAYLOADDIGEST} ]\n" "$f" 2> /dev/null || echo unreadable; done' \
+    sh "/w/t/r12b.$arch.rpm" "/w/pk/v1/hodeishield-0.2.0-1.$arch.rpm")
+  resigned=$(printf '%s\n' "$digests" | sed -n 1p)
+  asset=$(printf '%s\n' "$digests" | sed -n 2p)
+  case $resigned in '' | unreadable | '(none)'*) r12b="unreadable ($arch)" ;; esac
+  [ "$resigned" = "$asset" ] || r12b="different ($arch)"
+done
+if [ "$r12b" = same ]; then
+  record "R12b re-signed rpms keep SHA256HEADER and the payload digest" same same PASS
+else
+  record "R12b re-signed rpms keep SHA256HEADER and the payload digest" same "$r12b" FAIL
+fi
+
+# After the recovery the builder accepts the bucket, and the clients accept it. The copy keeps versions,
+# so that a normal run that rewrote a re-signed RPM would show as a second version.
 runner=publish
 rflags=
 rconfirm=
 clone rt-rv1 rt-rv3
+mcx version enable r/rt-rv3 > /dev/null
+# rpm_state <bucket>: for each RPM of 0.2.0, its ETag and its number of versions.
+rpm_state() {
+  for arch in x86_64 aarch64; do
+    key=rpm/$arch/hodeishield-0.2.0-1.$arch.rpm
+    printf '%s %s %s\n' "$key" "$(mcx stat --json "r/$1/$key" | jq -r .etag)" \
+      "$(mcx ls --versions --json "r/$1/$key" | wc -l | tr -d ' ')"
+  done
+}
+r13_before=$(rpm_state rt-rv3)
 must_publish R13 "release 0.2.1 with the new subkey on top of the recovered repository" rt-rv3 "$pk/v2"
+r13_after=$(rpm_state rt-rv3)
+if [ "$r13_before" = "$r13_after" ] && ! printf '%s\n' "$r13_after" | grep -q ' null '; then
+  record "R13 the next release leaves the re-signed rpms as they are" "same ETag, same versions" \
+    "same ETag, same versions" PASS
+else
+  record "R13 the next release leaves the re-signed rpms as they are" "same ETag, same versions" \
+    "before: $(printf '%s' "$r13_before" | tr '\n' ';') after: $(printf '%s' "$r13_after" | tr '\n' ';')" FAIL
+fi
 get rt-rv3 gpg.key "$work/t/rv.gpg.key"
 if cmp -s "$work/t/rv.gpg.key" "$work/rv-pub-new.asc"; then
   record "R13 the published key is the export without the revoked subkey" same same PASS
@@ -1215,6 +1257,75 @@ rconfirm=$(cat "$work/pub.fpr")
 must_refuse R24 "resign: another primary key, confirmed, that the README does not publish" rt-rv0 \
   "resign.sh: the primary key of .* is .*, not the one the README publishes" "$work/rv-v1"
 rvkeys new
+
+# An apply into a bucket that does not keep versions: the replaced RPM objects would be lost.
+rflags=--apply
+rconfirm=$rv_primary
+clone rt-rv0 rt-rv25
+mcx version enable r/rt-rv25 > /dev/null
+mcx version suspend r/rt-rv25 > /dev/null
+must_refuse R25 "resign: bucket versioning suspended" rt-rv25 \
+  "publish.sh: versioning of the bucket is 'Suspended', not Enabled" "$work/rv-v1"
+clone rt-rv0 rt-rv26
+must_refuse R26 "resign: bucket never versioned" rt-rv26 \
+  "publish.sh: versioning of the bucket is '[A-Za-z]*', not Enabled" "$work/rv-v1"
 runner=publish
 rflags=
 rconfirm=
+
+# --- The releases a re-sign run takes from the bucket (bucket-releases.sh) --------------------------------
+# The listing as the workflow reads it (aws s3api list-objects-v2), here made from a bucket of these
+# tests; LAST_RELEASE_WITHOUT_REPOSITORY in live.sh is newer than every test release, so 0.5.0 is left
+# out on purpose and only a release newer than it (0.6.0) must be in the bucket.
+group "Releases in the bucket"
+mcx ls --recursive --json r/rt-rv3 | jq -s '{Contents: [.[] | {Key: .key}]}' > "$work/t/l-ok.json"
+printf '0.2.0\n0.2.1\n0.5.0\n' > "$work/t/l-stable"
+printf '0.2.0\n0.2.1\n0.5.0\n0.6.0\n' > "$work/t/l-stable-new"
+printf '0.2.0\n' > "$work/t/l-stable-old"
+# with_key <out> <key>: the good listing with one more object.
+with_key() { jq --arg k "$2" '.Contents += [{Key: $k}]' "$work/t/l-ok.json" > "$1"; }
+with_key "$work/t/l-unexpected.json" apt/pool/main/h/hodeishield/evil.deb
+with_key "$work/t/l-newline.json" "$(printf 'apt/pool/main/h/hodeishield/hodeishield_0.2.0-1_amd64.deb\nx')"
+with_key "$work/t/l-wrongarch.json" rpm/aarch64/hodeishield-0.2.1-1.x86_64.rpm
+jq '.Contents |= map(select(.Key != "rpm/aarch64/hodeishield-0.2.1-1.aarch64.rpm"))' "$work/t/l-ok.json" \
+  > "$work/t/l-three.json"
+printf '{}\n' > "$work/t/l-empty.json"
+endgroup
+# releases <id> <description> <expected output or "refused: <pattern>"> <stable file> <listing>...
+releases() {
+  rid=$1 rdesc=$2 rwant=$3
+  shift 3
+  rrc=0
+  rout=$(sh "$here/bucket-releases.sh" "$@" 2>&1) || rrc=$?
+  rgot=$(printf '%s' "$rout" | tr '\n' ' ')
+  case $rwant in
+    refused:*)
+      if [ "$rrc" != 0 ] && printf '%s\n' "$rout" | grep -qE "${rwant#refused: }"; then
+        record "$rid $rdesc" refused "refused (exit $rrc)" PASS
+      else
+        record "$rid $rdesc" "$rwant" "exit $rrc: $rgot" FAIL
+      fi
+      ;;
+    *)
+      if [ "$rrc" = 0 ] && [ "$rgot" = "$rwant" ]; then
+        record "$rid $rdesc" "$rwant" "$rgot" PASS
+      else
+        record "$rid $rdesc" "$rwant" "exit $rrc: $rgot" FAIL
+      fi
+      ;;
+  esac
+}
+releases L1 "the releases of a bucket" "0.2.0 0.2.1" "$work/t/l-stable" "$work/t/l-ok.json"
+releases L2 "a stable release after the repositories is missing" \
+  "refused: newer than .* have no package in the bucket: 0.6.0" "$work/t/l-stable-new" "$work/t/l-ok.json"
+releases L3 "a release in the bucket is not a stable release" \
+  "refused: not published stable releases .*0.2.1" "$work/t/l-stable-old" "$work/t/l-ok.json"
+releases L4 "an unexpected package object" "refused: unexpected package object in the bucket: apt/pool/" \
+  "$work/t/l-stable" "$work/t/l-unexpected.json"
+releases L5 "an object name with a newline" "refused: an object name holds an unexpected character" \
+  "$work/t/l-stable" "$work/t/l-newline.json"
+releases L6 "an rpm under the other architecture" "refused: unexpected package object in the bucket: rpm/" \
+  "$work/t/l-stable" "$work/t/l-wrongarch.json"
+releases L7 "a release with three of its four packages" "refused: release 0.2.1 has 3 packages" \
+  "$work/t/l-stable" "$work/t/l-three.json"
+releases L8 "an empty bucket" "refused: the bucket holds no package" "$work/t/l-stable" "$work/t/l-empty.json"

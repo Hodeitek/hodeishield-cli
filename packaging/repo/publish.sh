@@ -14,7 +14,8 @@
 #   PACKAGES_S3_ACCESS_KEY_ID, PACKAGES_S3_SECRET_ACCESS_KEY
 #
 # Runs in the pinned image named in packaging/repo/image. The bucket user may list, read and write
-# but not delete, so nothing here removes anything: a published package is never replaced, and the
+# but not delete, so nothing here removes anything: a published package is never replaced (except by
+# the recovery below, which replaces the RPM files on purpose), and the
 # files of older metadata that a new build leaves behind (by-hash indexes, hashed repodata) stay where
 # they are, which is what lets a client with an older index finish its update.
 #
@@ -37,7 +38,8 @@
 # the bucket, the RPM packages are signed again from them and uploaded over the old ones (the bucket's
 # versioning keeps those), and the indexes are rebuilt without reading the published InRelease. Every
 # package in the bucket must be one of those assets, checked before anything is signed. DRY_RUN=1
-# stops before anything is uploaded. The re-signed RPM files get max-age=60 where a new package is immutable,
+# stops before anything is uploaded; without it, the bucket's versioning must read Enabled before
+# anything is signed. The re-signed RPM files get max-age=60 where a new package is immutable,
 # deliberately: they replace objects that caches may hold as immutable under the same URL, and a short
 # lifetime lets the CDN purge and the clients' own caches converge instead of pinning the replacement.
 
@@ -173,6 +175,15 @@ if [ -n "$resign" ]; then
       die "$path in the bucket differs from its release asset beyond the signature; nothing is signed"
     (cd "$repo" && sha256sum "$path") >> "$aux/old.sums"
   done
+  # After the checks of the bucket and before anything is signed, for an apply: the old RPM objects
+  # are kept only if the bucket keeps versions. Reading that needs s3:GetBucketVersioning; a credential
+  # that lacks it stops the run here, by design. The versioning command is never given an argument,
+  # which would change the setting.
+  if [ -z "${DRY_RUN:-}" ]; then
+    versioning=$(rclone backend versioning "$bucket" 2> /dev/null | tr -d '"[:space:]') || versioning=unreadable
+    [ "$versioning" = Enabled ] ||
+      die "versioning of the bucket is '${versioning:-unreadable}', not Enabled (the credential needs s3:GetBucketVersioning); re-signing replaces the RPM objects, so nothing is signed or uploaded"
+  fi
   # Only the local copy: build.sh signs them again from the release assets.
   rm -f "$repo"/rpm/*/*.rpm
 fi

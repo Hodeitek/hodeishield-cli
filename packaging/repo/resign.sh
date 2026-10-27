@@ -94,6 +94,9 @@ problem=$(public_key_problem "$PUBLIC_KEY" "$SIGNING_KEY")
 [ -z "$problem" ] || die "$PUBLIC_KEY $problem"
 
 # A signature made with the new subkey must verify against the public key, as build.sh will require.
+# Defence in depth, which no test reaches: public_key_problem above already requires SIGNING_KEY to be
+# the one usable signing subkey of PUBLIC_KEY, so this fails only if the keyring's secret for that
+# fingerprint does not match the published subkey, which repo-test.sh cannot construct.
 gpg --batch --quiet --dearmor --output "$tmp/key.gpg" "$PUBLIC_KEY"
 printf 'resign.sh preflight\n' > "$tmp/probe"
 gpg --batch --yes --local-user "$SIGNING_KEY" --digest-algo SHA512 --armor --detach-sign \
