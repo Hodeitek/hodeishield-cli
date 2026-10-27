@@ -75,9 +75,10 @@ first one that contains this file were published before this documentation exist
   [risk-assessment.md](risk-assessment.md#decisions). Decision record 0001 is a proposal: nothing in
   it is decided or implemented.
 - **Development rules.** [CONTRIBUTING.md](../CONTRIBUTING.md#development): the Rust toolchain is
-  pinned in `rust-toolchain.toml`, `unsafe` code is forbidden in the workspace (`Cargo.toml`,
-  `[workspace.lints.rust]`), changes reach `main` only through pull requests with passing checks and
-  signed commits ([release-signing.md](release-signing.md#who-may-change-them)).
+  pinned in `rust-toolchain.toml`, `unsafe` code is denied in the workspace (`Cargo.toml`,
+  `[workspace.lints.rust]`) and allowed only in `std_handles.rs` (Windows), changes reach `main`
+  only through pull requests with passing checks and signed commits
+  ([release-signing.md](release-signing.md#who-may-change-them)).
 - **Components.** The dependencies are fixed in `Cargo.lock`, and the components of each release are
   listed in its SBOM (item 8). How they are chosen, monitored and fixed is in
   [third-party-components.md](third-party-components.md) (Article 13(5)). Drawings and schemes other than the above are not kept: the product

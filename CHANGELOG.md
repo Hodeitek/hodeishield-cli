@@ -10,6 +10,10 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 - The README's DNF setup block wrote an empty `/etc/yum.repos.d/hodeishield.repo`, so `dnf install
   hodeishield` found no package. The file now gets the repository configuration.
+- On Windows, `login` with its output piped (for example `hodeishield login 2>&1 | ForEach-Object
+  { "$_" }`) did not return until the browser exited. The browser inherited the pipe, so the reader
+  waited for it. `login` now stops the browser from inheriting the standard handles.
+  ([#238](https://github.com/Hodeitek/hodeishield-cli/issues/238))
 
 ## [0.6.0] - 2026-10-26
 
