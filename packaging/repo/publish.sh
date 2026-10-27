@@ -180,7 +180,13 @@ if [ -n "$resign" ]; then
   # that lacks it stops the run here, by design. The versioning command is never given an argument,
   # which would change the setting.
   if [ -z "${DRY_RUN:-}" ]; then
-    versioning=$(rclone backend versioning "$bucket" 2> /dev/null | tr -d '"[:space:]') || versioning=unreadable
+    # Read into a file first: the status of a pipeline is that of its last command, so a failed read
+    # would otherwise go unnoticed.
+    if rclone backend versioning "$bucket" > "$aux/versioning" 2> /dev/null; then
+      versioning=$(tr -d '"[:space:]' < "$aux/versioning")
+    else
+      versioning=unreadable
+    fi
     [ "$versioning" = Enabled ] ||
       die "versioning of the bucket is '${versioning:-unreadable}', not Enabled (the credential needs s3:GetBucketVersioning); re-signing replaces the RPM objects, so nothing is signed or uploaded"
   fi

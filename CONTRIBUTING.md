@@ -289,7 +289,7 @@ The recovery run has its own environment, separate from the release's `packaging
 One-time setup, by a repository administrator. `<id>` is the numeric id of a reviewer (`gh api users/<login> --jq .id`; a team works too, with `"type": "Team"` and its id):
 
 ```sh
-printf '%s' '{"reviewers": [{"type": "User", "id": <id>}], "prevent_self_review": false,
+printf '%s' '{"reviewers": [{"type": "User", "id": <id>}], "prevent_self_review": true,
   "can_admins_bypass": false,
   "deployment_branch_policy": {"protected_branches": false, "custom_branch_policies": true}}' |
   gh api -X PUT repos/Hodeitek/hodeishield-cli/environments/packaging-resign --input -
@@ -300,7 +300,7 @@ gh variable set PACKAGES_S3_REGION --env packaging-resign --body '<region>'
 gh variable set PACKAGES_S3_BUCKET --env packaging-resign --body '<bucket>'
 ```
 
-`prevent_self_review` is left to the maintainers: with more than one maintainer, set it to `true` so that whoever starts a run cannot approve it; a project with a single maintainer cannot enable it. Check the result: it must show at least one required reviewer, `can_admins_bypass` false, custom branch policies, and the one branch policy `main` of type `branch`:
+`prevent_self_review` is `true` so that whoever starts a run cannot approve it. A project with a single maintainer must set it to `false`, since that maintainer would otherwise be unable to approve their own run. Check the result: it must show at least one required reviewer, `can_admins_bypass` false, custom branch policies, and the one branch policy `main` of type `branch`:
 
 ```sh
 gh api repos/Hodeitek/hodeishield-cli/environments/packaging-resign \
