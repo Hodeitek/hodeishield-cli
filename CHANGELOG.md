@@ -8,6 +8,9 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ### Fixed
 
+- The README now says that the MSI installs for all users and needs an administrator. Run silently
+  by a standard user it fails with exit code 1603 on Windows 11 and 1625 on Windows Server 2022
+  (measured on 0.6.0); standard users without administrator rights should use the zip or Scoop.
 - A certificate that is not trusted (unknown issuer, expired, wrong name) is no longer retried as a
   transient connection failure. The CLI makes one TLS handshake and exits with 7 and the same
   message as before, instead of making three. Refused, reset and timed-out connections and
