@@ -114,5 +114,5 @@ jobs:
           fi
           {
             printf '### Brew upgrade check\n\n'
-            printf -- '- before: `%s`\n- after: `%s`\n' "$OLD_VERSION" "$new"
+            printf -- "- before: \`%s\`\n- after: \`%s\`\n" "$OLD_VERSION" "$new"
           } >> "$GITHUB_STEP_SUMMARY"
