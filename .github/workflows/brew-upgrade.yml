@@ -1,0 +1,118 @@
+name: Brew upgrade check
+
+# Checks that `brew upgrade hodeishield` works for a formula installed by its full name
+# (`brew install hodeitek/hodeishield/hodeishield`) on a Homebrew where tap trust is enforced.
+# It installs an older release from the tap, moves the tap to its latest commit, upgrades, and
+# asserts the installed version changed to the one the tap now carries.
+#
+# Trust is never granted and never disabled here: there is no `brew trust` and no
+# HOMEBREW_NO_REQUIRE_TAP_TRUST. Installing by the full name is what trusts the formula.
+#
+# It runs on demand, and on a pull request that changes this file so the change carries its own
+# evidence. Like the other checks, it checks nothing out and uses no secrets.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/brew-upgrade.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: brew-upgrade-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TAP: hodeitek/hodeishield
+  FORMULA: hodeitek/hodeishield/hodeishield
+  # An older commit of the tap, whose Formula/hodeishield.rb is release 0.5.1. Any commit whose
+  # formula is older than the tap's latest works; list them with
+  # `gh api 'repos/Hodeitek/homebrew-hodeishield/commits?path=Formula/hodeishield.rb'`.
+  OLD_TAP_SHA: 2a96ee5b8ac8efb7841c0218c6f72cfd549788fd
+  # Keep brew from moving the tap by itself, and make it read the tap's formula file rather than
+  # the public API, so the pinned commit is what gets installed.
+  HOMEBREW_NO_AUTO_UPDATE: "1"
+  HOMEBREW_NO_INSTALL_FROM_API: "1"
+  HOMEBREW_NO_ANALYTICS: "1"
+
+jobs:
+  upgrade:
+    name: brew upgrade of a full-name install
+    runs-on: macos-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read # the job's default; nothing is checked out
+    steps:
+      - name: Check the Homebrew version
+        run: |
+          set -euo pipefail
+          brew --version
+          major="$(brew --version | head -n1 | sed -E 's/^Homebrew ([0-9]+)\..*/\1/')"
+          if ! [[ "$major" =~ ^[0-9]+$ ]] || [ "$major" -lt 7 ]; then
+            echo "::error::Homebrew 7 or newer is required; found major version '$major'."
+            exit 1
+          fi
+
+      - name: Tap the repository at an older commit
+        run: |
+          set -euo pipefail
+          brew tap "$TAP"
+          repo="$(brew --repository "$TAP")"
+          git -C "$repo" fetch --quiet origin
+          git -C "$repo" checkout --quiet --detach "$OLD_TAP_SHA"
+          echo "Tap is at $(git -C "$repo" rev-parse HEAD)"
+
+      # Refusing a tap's formula by its short name is the behaviour the full-name install avoids.
+      # The message wording is Homebrew's; the check is on the failure and on the word "untrusted",
+      # which the issue measured, not on the whole sentence.
+      - name: Check that tap trust is enforced
+        run: |
+          set -uo pipefail
+          if out="$(brew install hodeishield 2>&1)"; then
+            echo "::error::Installing by the short name succeeded, so tap trust is not enforced here."
+            printf '%s\n' "$out"
+            exit 1
+          fi
+          printf '%s\n' "$out"
+          if ! printf '%s' "$out" | grep -qi 'untrusted'; then
+            echo "::error::The short-name install failed, but not because of tap trust."
+            exit 1
+          fi
+          echo "Tap trust is enforced: the short name was refused."
+
+      - name: Install by the full name
+        run: |
+          set -euo pipefail
+          brew install "$FORMULA"
+          old="$(hodeishield --version)"
+          echo "Installed: $old"
+          echo "OLD_VERSION=$old" >> "$GITHUB_ENV"
+
+      - name: Move the tap to its latest commit and upgrade
+        run: |
+          set -euo pipefail
+          repo="$(brew --repository "$TAP")"
+          git -C "$repo" fetch --quiet origin
+          git -C "$repo" checkout --quiet --detach origin/HEAD
+          echo "Tap is at $(git -C "$repo" rev-parse HEAD)"
+          expected="$(brew info --json=v2 "$FORMULA" | jq -r '.formulae[0].versions.stable')"
+          echo "The tap now carries $expected"
+          brew upgrade hodeishield
+          new="$(hodeishield --version)"
+          echo "After the upgrade: $new"
+          case "$new" in
+            *"$expected"*) ;;
+            *)
+              echo "::error::Expected version $expected after the upgrade, got: $new"
+              exit 1
+              ;;
+          esac
+          if [ "$new" = "$OLD_VERSION" ]; then
+            echo "::error::The version did not change across the upgrade: $new"
+            exit 1
+          fi
+          {
+            printf '### Brew upgrade check\n\n'
+            printf -- "- before: \`%s\`\n- after: \`%s\`\n" "$OLD_VERSION" "$new"
+          } >> "$GITHUB_STEP_SUMMARY"
