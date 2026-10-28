@@ -275,6 +275,13 @@ It installs for all users in `%ProgramFiles%\HodeiShield CLI` and adds that fold
 `PATH` (open a new terminal afterwards). A newer MSI upgrades an older one in place; uninstall from
 **Settings → Apps** or with `msiexec /x`.
 
+Because it installs for all users, the MSI needs an administrator. Run by a standard user, the
+silent install fails: with exit code 1603 on Windows 11 (the log shows error 1925, not enough
+privileges to install for all users) and with 1625 on Windows Server 2022, whose default Windows
+Installer policy blocks installs by standard users. Run interactively, User Account Control asks
+for an administrator's user name and password. Without administrator rights, use the zip (no
+installation, no elevation) or Scoop (per user) instead.
+
 Silent installation, for Intune, Group Policy or any other deployment tool:
 
 ```powershell
