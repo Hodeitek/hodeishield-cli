@@ -21,6 +21,10 @@ commands, `--json` output and exit codes. Each release's notes start with its se
   reports, and tells the user that a tenant administrator must add the module or enable the
   framework. It still exits with 4. It used to read as a missing scope, and with no scope listed
   the generic message ended in `needs: .`, which now reads sensibly.
+- That `403` now names the module the plan lacks or the compliance framework that is not enabled
+  when the server says which, with a hint to add the module or enable the framework, instead of
+  guessing between the two. An older server gets the same message as before.
+  ([#249](https://github.com/Hodeitek/hodeishield-cli/issues/249))
 - The README's DNF setup block wrote an empty `/etc/yum.repos.d/hodeishield.repo`, so `dnf install
   hodeishield` found no package. The file now gets the repository configuration.
 - On Windows, `login` with its output piped (for example `hodeishield login 2>&1 | ForEach-Object

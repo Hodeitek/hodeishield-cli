@@ -154,25 +154,63 @@ pub fn from_api(error: hodeishield_api::Error, context: &ApiContext<'_>) -> Fail
                 403 if detail(&api, "code") == Some("MODULE_NOT_ENTITLED") => {
                     // The scopes name the module (or `compliance.<framework>`); only short tokens
                     // are shown.
-                    let scopes = entitlement_scopes(&api);
+                    let scopes = entitlement_list(&api, "scopes");
+                    // A newer server names the cause. When a framework is not enabled it also lists
+                    // `compliance` as a module, but the module is in the plan, so that entry is
+                    // not shown.
+                    let frameworks = entitlement_list(&api, "frameworks");
+                    let mut modules = entitlement_list(&api, "modules");
+                    if !frameworks.is_empty() {
+                        modules.retain(|m| m != "compliance");
+                    }
                     let compliance = scopes.iter().any(|s| s.starts_with("compliance."));
-                    let what = if compliance {
-                        "The tenant's plan does not include this module, or the compliance framework \
-                         is not enabled for the tenant"
-                    } else {
-                        "The tenant's plan does not include the module this needs"
+                    let what = match (modules.is_empty(), frameworks.is_empty()) {
+                        (false, true) => format!(
+                            "The tenant's plan does not include the {} {}",
+                            if modules.len() == 1 { "module" } else { "modules" },
+                            modules.join(", ")
+                        ),
+                        (true, false) => format!(
+                            "The compliance {} {} not enabled for the tenant",
+                            if frameworks.len() == 1 { "framework" } else { "frameworks" },
+                            frameworks.join(", ") + if frameworks.len() == 1 { " is" } else { " are" }
+                        ),
+                        (false, false) => format!(
+                            "The tenant's plan does not include the {} {}, and the compliance {} {} \
+                             not enabled for the tenant",
+                            if modules.len() == 1 { "module" } else { "modules" },
+                            modules.join(", "),
+                            if frameworks.len() == 1 { "framework" } else { "frameworks" },
+                            frameworks.join(", ") + if frameworks.len() == 1 { " is" } else { " are" }
+                        ),
+                        (true, true) if compliance => "The tenant's plan does not include this \
+                             module, or the compliance framework is not enabled for the tenant"
+                            .to_owned(),
+                        (true, true) => {
+                            "The tenant's plan does not include the module this needs".to_owned()
+                        }
                     };
                     let shown = if scopes.is_empty() {
                         String::new()
                     } else {
                         format!(" (scope: {})", scopes.join(", "))
                     };
+                    let ask = match (modules.is_empty(), frameworks.is_empty()) {
+                        (false, true) => "Ask a tenant administrator to add the module to the plan.",
+                        (true, false) => "Ask a tenant administrator to enable the framework for the tenant.",
+                        (false, false) => {
+                            "Ask a tenant administrator to add the module to the plan and to enable \
+                             the framework for the tenant."
+                        }
+                        (true, true) => {
+                            "Ask a tenant administrator to add the module to the plan, or to enable \
+                             the framework."
+                        }
+                    };
                     Failure::new(Kind::Forbidden, format!("{what}{shown}."))
-                    .hint(
-                        "Ask a tenant administrator to add the module to the plan, or to enable the \
-                         framework. Signing in again or using another key of this tenant will not \
-                         help.",
-                    )
+                    .hint(format!(
+                        "{ask} Signing in again or using another key of this tenant will not help."
+                    ))
                 }
                 403 => {
                     let scopes: Vec<String> = api
@@ -384,13 +422,13 @@ fn detail<'a>(api: &'a hodeishield_api::ApiError, key: &str) -> Option<&'a str> 
         .and_then(|v| v.as_str())
 }
 
-/// The scopes a `MODULE_NOT_ENTITLED` answer lists in `details.scopes`: at most 5 short tokens,
-/// anything else is dropped.
-fn entitlement_scopes(api: &hodeishield_api::ApiError) -> Vec<String> {
+/// A list a `MODULE_NOT_ENTITLED` answer sends in `details` (`scopes`, `modules` or `frameworks`):
+/// at most 5 short tokens, anything else is dropped.
+fn entitlement_list(api: &hodeishield_api::ApiError, key: &str) -> Vec<String> {
     api.body
         .as_ref()
         .and_then(|b| b.details.as_ref())
-        .and_then(|d| d.get("scopes"))
+        .and_then(|d| d.get(key))
         .and_then(|v| v.as_array())
         .map(|list| {
             list.iter()
@@ -575,6 +613,108 @@ mod tests {
             f.message,
             "The tenant's plan does not include the module this needs."
         );
+    }
+
+    #[test]
+    fn a_missing_module_is_named_with_a_hint_to_add_it_to_the_plan() {
+        let f = from_api(
+            forbidden(
+                r#"{"code":"MODULE_NOT_ENTITLED","scopes":["supply_risk:read"],"modules":["supply_risk"]}"#,
+            ),
+            &context(),
+        );
+        assert_eq!(f.kind, Kind::Forbidden);
+        assert_eq!(
+            f.message,
+            "The tenant's plan does not include the module supply_risk (scope: supply_risk:read)."
+        );
+        assert_eq!(
+            f.hint.as_deref(),
+            Some(
+                "Ask a tenant administrator to add the module to the plan. Signing in again or \
+                 using another key of this tenant will not help."
+            )
+        );
+    }
+
+    #[test]
+    fn a_framework_that_is_not_enabled_is_named_and_not_reported_as_a_module() {
+        let f = from_api(
+            forbidden(
+                r#"{"code":"MODULE_NOT_ENTITLED","scopes":["compliance.nis2:read"],"modules":["compliance"],"frameworks":["nis2"]}"#,
+            ),
+            &context(),
+        );
+        assert_eq!(f.kind, Kind::Forbidden);
+        assert_eq!(
+            f.message,
+            "The compliance framework nis2 is not enabled for the tenant (scope: compliance.nis2:read)."
+        );
+        assert!(!f.message.contains("module"), "{}", f.message);
+        assert_eq!(
+            f.hint.as_deref(),
+            Some(
+                "Ask a tenant administrator to enable the framework for the tenant. Signing in \
+                 again or using another key of this tenant will not help."
+            )
+        );
+    }
+
+    #[test]
+    fn a_missing_module_and_a_framework_that_is_not_enabled_are_both_named() {
+        let f = from_api(
+            forbidden(
+                r#"{"code":"MODULE_NOT_ENTITLED","modules":["supply_risk","compliance"],"frameworks":["nis2","dora"]}"#,
+            ),
+            &context(),
+        );
+        assert_eq!(f.kind, Kind::Forbidden);
+        assert_eq!(
+            f.message,
+            "The tenant's plan does not include the module supply_risk, and the compliance \
+             frameworks nis2, dora are not enabled for the tenant."
+        );
+        let hint = f.hint.as_deref().expect("hint");
+        assert!(
+            hint.contains("add the module to the plan and to enable the framework"),
+            "{hint}"
+        );
+    }
+
+    #[test]
+    fn an_old_server_without_modules_or_frameworks_gets_the_earlier_message() {
+        let f = from_api(
+            forbidden(
+                r#"{"code":"MODULE_NOT_ENTITLED","scopes":["compliance.nis2:read"],"modules":"x","frameworks":[7,null]}"#,
+            ),
+            &context(),
+        );
+        assert_eq!(
+            f.message,
+            "The tenant's plan does not include this module, or the compliance framework is not \
+             enabled for the tenant (scope: compliance.nis2:read)."
+        );
+        assert_eq!(
+            f.hint.as_deref(),
+            Some(
+                "Ask a tenant administrator to add the module to the plan, or to enable the \
+                 framework. Signing in again or using another key of this tenant will not help."
+            )
+        );
+    }
+
+    #[test]
+    fn odd_long_or_control_character_modules_and_frameworks_are_not_shown() {
+        let long = "a".repeat(65);
+        let details = format!(
+            r#"{{"code":"MODULE_NOT_ENTITLED","modules":["{long}","\u001b[31mred","bad module",7,"ok_module"],"frameworks":["{long}","nis2\n","\u0007"]}}"#
+        );
+        let f = from_api(forbidden(&details), &context());
+        assert_eq!(
+            f.message,
+            "The tenant's plan does not include the module ok_module."
+        );
+        assert!(!f.message.contains('\u{1b}') && !f.message.contains('\u{7}'));
     }
 
     #[test]
