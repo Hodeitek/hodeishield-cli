@@ -6,6 +6,8 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-10-29
+
 ### Fixed
 
 - The README now says that the MSI installs for all users and needs an administrator. Run silently
@@ -488,7 +490,8 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 - Profiles (`config`), shell completions, and release archives for Linux, macOS and Windows signed
   with Sigstore and with SLSA provenance.
 
-[Unreleased]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.4.4...v0.5.0
