@@ -434,8 +434,10 @@ the proof that the file is genuine; once it passes, unblock the binary as follow
 **macOS.** Gatekeeper may refuse to open `hodeishield` ("Apple could not verify… is free of
 malware"). Verify the download first, then allow the binary in System Settings: after the first
 blocked attempt, open **System Settings → Privacy & Security**, scroll down to the message about
-`hodeishield`, click **Open Anyway**, confirm, and run the command again. The dialog's wording and
-button labels follow the system language, so they may differ from the English text quoted here.
+`hodeishield`, click **Allow Anyway** and authenticate. Then run the command again and choose
+**Open Anyway** in the dialog that appears; later runs show no dialog. Older macOS versions may show
+**Open Anyway** directly in System Settings. The dialog's wording and button labels follow the
+system language, so they may differ from the English text quoted here.
 
 Or remove the quarantine attribute from the unpacked binary:
 

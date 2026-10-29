@@ -6,6 +6,12 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ## [Unreleased]
 
+### Fixed
+
+- The README now describes the two macOS steps to allow a blocked browser download: **Allow Anyway** in
+  System Settings → Privacy & Security, then **Open Anyway** in the dialog shown on the next run
+  (measured on macOS 27.0.1 with 0.6.1).
+
 ## [0.6.1] - 2026-10-29
 
 ### Fixed
