@@ -43,13 +43,13 @@ see; we talk to you there. A report made by email is answered by email.
 
 We rate severity with [CVSS v3.1](https://www.first.org/cvss/v3.1/specification-document) and use
 its qualitative ratings. You can comment on the rating in the advisory or by email. The targets
-below are for shipping a fixed release, counted from the first assessment.
+below are for shipping a fixed release. Critical and high are counted from the first assessment; medium is counted from your report, so it never runs past the coordinated disclosure period.
 
 | Severity | CVSS v3.1 base score | Target to ship a fix |
 |---|---|---|
 | Critical | 9.0 – 10.0 | 7 days |
 | High | 7.0 – 8.9 | 30 days |
-| Medium | 4.0 – 6.9 | 90 days |
+| Medium | 4.0 – 6.9 | Within 90 days of the report, extendable by mutual agreement |
 | Low | 0.1 – 3.9 | The next release |
 
 ### Coordinated disclosure
