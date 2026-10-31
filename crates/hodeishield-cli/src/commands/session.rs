@@ -7,7 +7,7 @@ use super::Context;
 use crate::auth::oauth::{self, Pkce, Revocation};
 use crate::auth::{self, StoredToken, loopback::Loopback};
 use crate::cli::LoginArgs;
-use crate::failure::{CredentialSource, Failure, Result};
+use crate::failure::{CredentialSource, Failure, Kind, Result};
 use crate::output::{clean, print_json, unix_to_rfc3339};
 use hodeishield_api::v1::WhoAmI;
 use serde_json::{Map, Value, json};
@@ -227,15 +227,15 @@ fn note_api_key() {
 pub fn whoami(ctx: &Context, out: &mut dyn Write) -> Result<()> {
     let settings = ctx.settings()?;
     // `GET /v1/me` describes the credential itself: it takes no tenant selection.
-    let me = || -> std::result::Result<Me, String> {
-        let (client, source) = ctx.api(&settings, None).map_err(|f| f.message)?;
+    let me = || -> std::result::Result<Me, Failure> {
+        let (client, source) = ctx.api(&settings, None)?;
         client
             .who_am_i()
             .map(|answer| Me::from_answer(answer.data.data, &answer.raw))
             .map_err(|e| {
                 let mut call = ctx.call(source, None);
                 call.tenant_selected = false;
-                crate::failure::from_api(e, &call).message
+                crate::failure::from_api(e, &call)
             })
     };
     whoami_with(
@@ -323,7 +323,7 @@ fn whoami_with(
     has_api_key: bool,
     store: &dyn auth::TokenStore,
     json: bool,
-    me: &dyn Fn() -> std::result::Result<Me, String>,
+    me: &dyn Fn() -> std::result::Result<Me, Failure>,
     userinfo: &dyn Fn(&StoredToken) -> Option<String>,
     out: &mut dyn Write,
 ) -> Result<()> {
@@ -362,14 +362,20 @@ fn whoami_with(
             CredentialSource::OAuth => "oauth",
         })),
     );
+    // Set when the API did not accept the credential: unlike an API that cannot be reached, that
+    // means "not signed in", so the command ends with the exit code of every other command.
+    let mut rejected = None;
     let me = match source.map(|_| me()) {
         Some(Ok(me)) => Some(me),
-        Some(Err(reason)) => {
+        Some(Err(failure)) => {
             // The reason can carry the API's own message: untrusted text.
             eprintln!(
                 "warning: could not read from the API who this credential is: {}",
-                clean(&reason)
+                clean(&failure.message)
             );
+            if failure.kind == Kind::NotAuthenticated {
+                rejected = Some(failure);
+            }
             None
         }
         None => None,
@@ -431,9 +437,10 @@ fn whoami_with(
             writeln!(out, "{label:<11} {value}")?;
         }
     }
-    match source {
-        Some(_) => Ok(()),
-        None => Err(auth::not_signed_in(settings)),
+    match (source, rejected) {
+        (Some(_), None) => Ok(()),
+        (Some(_), Some(failure)) => Err(failure),
+        (None, _) => Err(auth::not_signed_in(settings)),
     }
 }
 
@@ -892,7 +899,7 @@ mod tests {
         let (api, app) = (mockito::Server::new(), mockito::Server::new());
         let settings = settings_for(&api, &app);
         let mut out = Vec::new();
-        let me = || Err("offline".to_owned());
+        let me = || Err(Failure::new(Kind::Unavailable, "offline"));
         whoami_with(
             &settings,
             true,
@@ -911,7 +918,7 @@ mod tests {
         }
     }
 
-    fn no_call() -> std::result::Result<Me, String> {
+    fn no_call() -> std::result::Result<Me, Failure> {
         panic!("GET /v1/me is not called without a credential")
     }
 

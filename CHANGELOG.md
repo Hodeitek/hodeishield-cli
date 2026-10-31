@@ -8,6 +8,9 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ### Fixed
 
+- `whoami` exits 3, like every other command, when the API does not accept the credential, after
+  printing the local details and the warning. An API that cannot be reached or fails on its side still
+  gives exit 0.
 - The README now describes the two macOS steps to allow a blocked browser download: **Allow Anyway** in
   System Settings → Privacy & Security, then **Open Anyway** in the dialog shown on the next run
   (measured on macOS 27.0.1 with 0.6.1).
