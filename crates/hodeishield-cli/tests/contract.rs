@@ -555,6 +555,55 @@ fn whoami_with_a_key_ignores_a_user_in_the_answer() {
     assert!(!out(&output).contains("User") && !out(&output).contains("Ana"));
 }
 
+/// A credential the API does not accept is "not signed in": `whoami` still prints the local details
+/// and the warning, leaves the API fields null, and exits 3 with the sign-in hint, as every other
+/// command does.
+#[test]
+fn whoami_with_a_rejected_credential_exits_3() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    server
+        .mock("GET", "/v1/me")
+        .with_status(401)
+        .with_body(r#"{"error":{"code":"unauthorized","message":"bad","request_id":"req-1"}}"#)
+        .create();
+    let output = env.api(&server.url(), &["--json", "whoami"]);
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
+    let printed: Value = serde_json::from_str(&out(&output)).expect("json");
+    assert_eq!(printed["credential"], "api_key");
+    for key in ["tenant", "organization", "portfolio", "credential_scopes"] {
+        assert_eq!(printed[key], Value::Null, "{key}");
+    }
+    let stderr = err(&output);
+    assert!(
+        stderr.contains("warning: could not read from the API who this credential is:"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("HODEISHIELD_API_KEY"), "{stderr}");
+
+    let output = env.api(&server.url(), &["whoami"]);
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
+    assert!(out(&output).contains("Credential"), "{}", out(&output));
+}
+
+/// An API that fails on its side, or cannot be reached, says nothing about the credential:
+/// `whoami` still exits 0.
+#[test]
+fn whoami_with_a_failing_api_still_exits_0() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    server
+        .mock("GET", "/v1/me")
+        .with_status(503)
+        .with_body(r#"{"error":{"code":"unavailable","message":"later","request_id":"req-2"}}"#)
+        .expect_at_least(1)
+        .create();
+    let output = env.api(&server.url(), &["--json", "whoami"]);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let output = env.api("http://127.0.0.1:9", &["--json", "whoami"]);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+}
+
 /// When `GET /v1/me` fails, `whoami` still succeeds with the local fields; the API's are null and
 /// standard error says why.
 #[test]

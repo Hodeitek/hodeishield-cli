@@ -487,8 +487,10 @@ your CI's secret store; the CLI never prints it.
 organisation and, for a key, its scopes; for a sign-in, also the signed-in user when the service
 provides it; for a portfolio key, the MSSP and how many client tenants it
 can select. With `--json` these are the `tenant`, `organization`, `portfolio` and
-`credential_scopes` fields. If the API cannot be reached, `whoami` still shows the local settings,
-leaves those fields null and says why on standard error.
+`credential_scopes` fields. If the API cannot be reached or fails on its side, `whoami` still shows
+the local settings, leaves those fields null, says why on standard error and exits 0. If the API
+does not accept the credential (revoked, expired or mistyped), it does the same but exits 3, like
+every other command, so a script can tell that the profile is signed out.
 
 ### By signing in (people)
 
@@ -805,7 +807,7 @@ hodeishield vendors list --all --csv > vendors.csv
 | 0 | Success |
 | 1 | Error (invalid input, configuration, unexpected answer) |
 | 2 | Invalid command line |
-| 3 | Not authenticated: no credential (also when the system keychain cannot be reached in this session, or the opt-in token file is refused as unsafe; `login` and `logout` exit 1 for that), or the API rejected it |
+| 3 | Not authenticated: no credential (also when the system keychain cannot be reached in this session, or the opt-in token file is refused as unsafe; `login` and `logout` exit 1 for that), or the API rejected it (`whoami` too, after showing the local details) |
 | 4 | The credential lacks the scope the command needs, or the tenant's plan does not include the module (or the compliance framework is not enabled) |
 | 5 | Not found (or not in your organisation) |
 | 6 | Rate limit exhausted (the CLI already retried short waits) |
