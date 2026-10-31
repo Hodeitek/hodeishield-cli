@@ -6,18 +6,23 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-01
+
 ### Changed
 
 - The page the browser shows at the end of `hodeishield login` is now a styled page with the product mark,
   for success, denied access, a failed or mismatched response and unknown paths. It follows the system
   light or dark preference, needs no script, font or outside request, and uses the language of the
   browser when it is supported.
+- `SECURITY.md` now counts the fix target for medium-severity vulnerabilities from the report, like the
+  coordinated disclosure period, so it never runs past it: within 90 days of the report, extendable by
+  mutual agreement. Critical and high are still counted from the first assessment.
 
 ### Fixed
 
-- `whoami` exits 3, like every other command, when the API does not accept the credential, after
-  printing the local details and the warning. An API that cannot be reached or fails on its side still
-  gives exit 0.
+- **Behaviour change for scripts:** `whoami` now exits 3, like every other command, when the API
+  does not accept the credential, after printing the local details and the warning. It used to exit
+  0. An API that cannot be reached or fails on its side still gives exit 0.
 - The README now describes the two macOS steps to allow a blocked browser download: **Allow Anyway** in
   System Settings → Privacy & Security, then **Open Anyway** in the dialog shown on the next run
   (measured on macOS 27.0.1 with 0.6.1).
@@ -506,7 +511,8 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 - Profiles (`config`), shell completions, and release archives for Linux, macOS and Windows signed
   with Sigstore and with SLSA provenance.
 
-[Unreleased]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.5.0...v0.5.1
