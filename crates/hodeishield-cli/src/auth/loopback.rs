@@ -7,6 +7,7 @@
 //! callback, and stops. Requests for any other path get a 404 and are otherwise ignored, so a stray
 //! `favicon.ico` does not end the sign-in.
 
+use super::callback_page::{self, Lang, Page};
 use crate::failure::{Failure, Kind, Result};
 use secrecy::SecretString;
 use std::io::{Read, Write};
@@ -151,14 +152,14 @@ fn handle(mut stream: TcpStream, request: &Request<'_>) -> Option<Result<Callbac
     // A client that never reads the answer must not hold the listener either.
     let _ = stream.set_write_timeout(Some(request.limits.read));
     let connection_deadline = Instant::now() + request.limits.connection;
-    let target = read_request_target(
+    let (target, lang) = read_request_target(
         &mut stream,
         request.limits.read,
         connection_deadline.min(request.deadline),
     )?;
     let (path, query) = target.split_once('?').unwrap_or((target.as_str(), ""));
     if path != CALLBACK_PATH {
-        respond(&mut stream, "404 Not Found", "Not found.");
+        respond(&mut stream, Page::NotFound, lang);
         return None;
     }
     let params: Vec<(String, String)> = url::form_urlencoded::parse(query.as_bytes())
@@ -173,19 +174,11 @@ fn handle(mut stream: TcpStream, request: &Request<'_>) -> Option<Result<Callbac
     if get("state") != Some(state) {
         // Not our sign-in: an old tab, another page probing local ports, or a forged request.
         // Refuse it and keep waiting, so that it cannot cancel the real one either.
-        respond(
-            &mut stream,
-            "400 Bad Request",
-            "This sign-in response does not match the one the CLI started. You can close this tab and return to the terminal.",
-        );
+        respond(&mut stream, Page::Mismatch, lang);
         return None;
     }
     if require_iss && get("iss").is_none() {
-        respond(
-            &mut stream,
-            "400 Bad Request",
-            "Missing issuer. You can close this tab and return to the terminal.",
-        );
+        respond(&mut stream, Page::Failed, lang);
         return Some(Err(Failure::new(
             Kind::NotAuthenticated,
             "The sign-in response did not say which server issued it, and the app promises it does.",
@@ -194,11 +187,7 @@ fn handle(mut stream: TcpStream, request: &Request<'_>) -> Option<Result<Callbac
     if let Some(iss) = get("iss")
         && iss.trim_end_matches('/') != issuer.trim_end_matches('/')
     {
-        respond(
-            &mut stream,
-            "400 Bad Request",
-            "Unexpected issuer. You can close this tab and return to the terminal.",
-        );
+        respond(&mut stream, Page::Failed, lang);
         return Some(Err(Failure::new(
             Kind::NotAuthenticated,
             format!("The sign-in response came from issuer {iss}, not {issuer}."),
@@ -208,8 +197,12 @@ fn handle(mut stream: TcpStream, request: &Request<'_>) -> Option<Result<Callbac
         let detail = get("error_description").map_or_else(String::new, |d| format!(" ({d})"));
         respond(
             &mut stream,
-            "200 OK",
-            "Sign-in did not complete. You can close this tab and return to the terminal.",
+            if error == "access_denied" {
+                Page::Denied
+            } else {
+                Page::Failed
+            },
+            lang,
         );
         return Some(Err(Failure::new(
             Kind::NotAuthenticated,
@@ -221,21 +214,13 @@ fn handle(mut stream: TcpStream, request: &Request<'_>) -> Option<Result<Callbac
         )));
     }
     let Some(code) = get("code").filter(|c| !c.is_empty()) else {
-        respond(
-            &mut stream,
-            "400 Bad Request",
-            "No authorization code. You can close this tab and return to the terminal.",
-        );
+        respond(&mut stream, Page::Failed, lang);
         return Some(Err(Failure::new(
             Kind::NotAuthenticated,
             "The sign-in response carried no authorization code.",
         )));
     };
-    respond(
-        &mut stream,
-        "200 OK",
-        "Signed in to HodeiShield. You can close this tab and return to the terminal.",
-    );
+    respond(&mut stream, Page::Success, lang);
     Some(Ok(Callback {
         code: SecretString::from(code.to_owned()),
     }))
@@ -249,7 +234,7 @@ fn read_request_target(
     stream: &mut TcpStream,
     read_timeout: Duration,
     deadline: Instant,
-) -> Option<String> {
+) -> Option<(String, Lang)> {
     let mut buffer = Vec::with_capacity(1024);
     let mut chunk = [0_u8; 1024];
     while !buffer.windows(4).any(|w| w == b"\r\n\r\n") && buffer.len() < 16 * 1024 {
@@ -265,26 +250,32 @@ fn read_request_target(
         }
     }
     let text = String::from_utf8_lossy(&buffer);
-    let line = text.lines().next()?;
+    let mut lines = text.lines();
+    let line = lines.next()?;
+    let language = lines
+        .find_map(|l| {
+            let (name, value) = l.split_once(':')?;
+            name.trim()
+                .eq_ignore_ascii_case("accept-language")
+                .then_some(value)
+        })
+        .map(str::trim);
     let mut parts = line.split(' ');
     match (parts.next(), parts.next()) {
-        (Some("GET"), Some(target)) => Some(target.to_owned()),
+        (Some("GET"), Some(target)) => Some((target.to_owned(), Lang::negotiate(language))),
         _ => None,
     }
 }
 
-fn respond(stream: &mut TcpStream, status: &str, message: &str) {
-    let body = format!(
-        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>HodeiShield CLI</title>\
-         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"></head>\
-         <body style=\"font-family:system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem;line-height:1.5;color:#1a1a1a\">\
-         <h1 style=\"font-size:1.1rem;margin:0 0 0.5rem\">HodeiShield CLI</h1>\
-         <p style=\"margin:0\">{message}</p></body></html>"
-    );
+fn respond(stream: &mut TcpStream, page: Page, lang: Lang) {
+    let body = callback_page::render(page, lang);
     let response = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\n\
-         Cache-Control: no-store\r\nReferrer-Policy: no-referrer\r\nConnection: close\r\n\r\n{body}",
-        body.len()
+        "HTTP/1.1 {}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\n\
+         Content-Security-Policy: {}\r\nCache-Control: no-store\r\nReferrer-Policy: no-referrer\r\n\
+         X-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n{body}",
+        callback_page::status(page),
+        body.len(),
+        callback_page::content_security_policy(),
     );
     let _ = stream.write_all(response.as_bytes());
     let _ = stream.flush();
@@ -296,6 +287,10 @@ mod tests {
     use secrecy::ExposeSecret;
 
     fn hit(uri: &str, path_and_query: &str) -> String {
+        hit_in(uri, path_and_query, None)
+    }
+
+    fn hit_in(uri: &str, path_and_query: &str, language: Option<&str>) -> String {
         let addr = uri
             .trim_start_matches("http://")
             .split('/')
@@ -303,7 +298,12 @@ mod tests {
             .expect("host")
             .to_owned();
         let mut stream = TcpStream::connect(addr).expect("connect");
-        write!(stream, "GET {path_and_query} HTTP/1.1\r\nHost: x\r\n\r\n").expect("write");
+        let header = language.map_or_else(String::new, |l| format!("Accept-Language: {l}\r\n"));
+        write!(
+            stream,
+            "GET {path_and_query} HTTP/1.1\r\nHost: x\r\n{header}\r\n"
+        )
+        .expect("write");
         let mut answer = String::new();
         let _ = stream.read_to_string(&mut answer);
         answer
@@ -379,6 +379,92 @@ mod tests {
             "/callback?error=access_denied&state=expected-state".to_owned(),
         ]);
         assert!(result.expect_err("denied").message.contains("denied"));
+    }
+
+    /// The pages of every outcome, in two languages: the status, the policy header, the language and
+    /// the headline; and nothing of the request is written into the page.
+    #[test]
+    fn each_outcome_gets_its_page_in_the_browsers_language() {
+        let cases = [
+            (
+                "code=abc&state=expected-state",
+                "200 OK",
+                "You are signed in",
+                "Sesión iniciada",
+            ),
+            (
+                "error=access_denied&state=expected-state",
+                "200 OK",
+                "Sign-in cancelled",
+                "Inicio de sesión cancelado",
+            ),
+            (
+                "error=server_error&error_description=SECRET-TEXT&state=expected-state",
+                "400 Bad Request",
+                "Sign-in did not complete",
+                "El inicio de sesión no se completó",
+            ),
+            (
+                "code=abc&state=other-state",
+                "400 Bad Request",
+                "This is not the current sign-in",
+                "No es el inicio de sesión actual",
+            ),
+        ];
+        for (query, status, english, spanish) in cases {
+            for (language, headline, lang_attr) in [
+                (Some("fr-CH, ja;q=0.5"), None, "fr"),
+                (Some("es-ES,es;q=0.9,en;q=0.8"), Some(spanish), "es"),
+                (None, Some(english), "en"),
+                (Some("ja"), Some(english), "en"),
+            ] {
+                let loopback = Loopback::bind().expect("bind");
+                let uri = loopback.redirect_uri().to_owned();
+                let target = format!("/callback?{query}&iss=https://app.example.test");
+                let client = std::thread::spawn(move || {
+                    let first = hit_in(&uri, &target, language);
+                    // A wrong state does not end the sign-in: finish it with the right one.
+                    // Every other outcome ends it, so nothing would answer a second request.
+                    if query.contains("other-state") {
+                        let _ = hit(&uri, "/callback?code=z&state=expected-state");
+                    }
+                    first
+                });
+                let _ = loopback.wait(
+                    "expected-state",
+                    "https://app.example.test",
+                    false,
+                    Duration::from_secs(10),
+                );
+                let answer = client.join().expect("client");
+                assert!(
+                    answer.starts_with(&format!("HTTP/1.1 {status}\r\n")),
+                    "{answer}"
+                );
+                assert!(
+                    answer.contains(
+                        "Content-Security-Policy: default-src 'none'; style-src 'sha256-"
+                    ),
+                    "{answer}"
+                );
+                assert!(
+                    answer.contains(&format!("<html lang=\"{lang_attr}\">")),
+                    "{answer}"
+                );
+                if let Some(headline) = headline {
+                    assert!(answer.contains(headline), "{answer}");
+                }
+                for echoed in [
+                    "SECRET-TEXT",
+                    "server_error",
+                    "other-state",
+                    "app.example.test",
+                    "abc",
+                ] {
+                    assert!(!answer.contains(echoed), "{echoed} reflected: {answer}");
+                }
+            }
+        }
     }
 
     /// Connects and sends one byte every `pause`, `count` times, stopping when the server hangs up.

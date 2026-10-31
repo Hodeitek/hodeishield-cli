@@ -6,6 +6,13 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ## [Unreleased]
 
+### Changed
+
+- The page the browser shows at the end of `hodeishield login` is now a styled page with the product mark,
+  for success, denied access, a failed or mismatched response and unknown paths. It follows the system
+  light or dark preference, needs no script, font or outside request, and uses the language of the
+  browser when it is supported.
+
 ### Fixed
 
 - The README now describes the two macOS steps to allow a blocked browser download: **Allow Anyway** in

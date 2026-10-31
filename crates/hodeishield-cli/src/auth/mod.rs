@@ -3,6 +3,7 @@
 
 //! Credentials: a tenant API key from the environment, or a sign-in token from the keychain.
 
+pub mod callback_page;
 pub mod file_store;
 pub mod loopback;
 pub mod oauth;
