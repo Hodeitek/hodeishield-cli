@@ -61,7 +61,7 @@ Windows blocks the downloaded binary, see
 | Windows x86_64 | `hodeishield-<version>-x86_64-pc-windows-msvc.zip` |
 | Windows arm64 | `hodeishield-<version>-aarch64-pc-windows-msvc.zip` (from 0.4.0) |
 
-`<version>` has no leading `v`: release `v0.6.1` ships `hodeishield-0.6.1-…`. The Linux binaries are
+`<version>` has no leading `v`: release `v0.7.0` ships `hodeishield-0.7.0-…`. The Linux binaries are
 statically linked and run on any distribution. Homebrew and Scoop packages (next section) and a
 [container image](#container-image) are also available.
 
@@ -76,7 +76,7 @@ neither is part of a distribution's default install.
 From source, with the Rust toolchain installed (pin the release tag you want):
 
 ```sh
-cargo install --locked --git https://github.com/Hodeitek/hodeishield-cli --tag v0.6.1 hodeishield-cli
+cargo install --locked --git https://github.com/Hodeitek/hodeishield-cli --tag v0.7.0 hodeishield-cli
 ```
 
 ### Homebrew and Scoop
@@ -343,7 +343,7 @@ exact version, or better its digest. The image carries no documentation: the
 0.4.2, as `USER-INFORMATION.md` in its archives.
 
 ```sh
-v=0.6.1   # the version you want
+v=0.7.0   # the version you want
 docker pull ghcr.io/hodeitek/hodeishield-cli:$v
 docker run --rm -e HODEISHIELD_API_KEY ghcr.io/hodeitek/hodeishield-cli:$v vendors list
 ```
@@ -357,7 +357,7 @@ The image is signed by digest with cosign (keyless) and carries the release's Cy
 signed attestation. Verify both before you rely on the image:
 
 ```sh
-v=0.6.1
+v=0.7.0
 image=ghcr.io/hodeitek/hodeishield-cli:$v
 cosign verify $image \
   --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/container-image.yml@refs/tags/v$v \
@@ -393,11 +393,11 @@ Each release has a `SHA256SUMS` file, a Sigstore bundle (`*.sigstore.json`) for 
 `SHA256SUMS`, and SLSA provenance (`hodeishield.intoto.jsonl`). In short:
 
 ```sh
-grep hodeishield-0.6.1-x86_64-unknown-linux-musl.tar.gz SHA256SUMS | sha256sum -c -
+grep hodeishield-0.7.0-x86_64-unknown-linux-musl.tar.gz SHA256SUMS | sha256sum -c -
 
-cosign verify-blob hodeishield-0.6.1-x86_64-unknown-linux-musl.tar.gz \
-  --bundle hodeishield-0.6.1-x86_64-unknown-linux-musl.tar.gz.sigstore.json \
-  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.6.1 \
+cosign verify-blob hodeishield-0.7.0-x86_64-unknown-linux-musl.tar.gz \
+  --bundle hodeishield-0.7.0-x86_64-unknown-linux-musl.tar.gz.sigstore.json \
+  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.7.0 \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --certificate-github-workflow-trigger push
 ```
@@ -408,12 +408,12 @@ On Windows, PowerShell has no `sha256sum`: compare the hash of the zip or MSI wi
 fail with a missing-source error), and the same `verify-blob` command works with Windows paths:
 
 ```powershell
-(Get-FileHash .\hodeishield-0.6.1-x86_64-pc-windows-msvc.zip -Algorithm SHA256).Hash.ToLower()
-Select-String hodeishield-0.6.1-x86_64-pc-windows-msvc.zip SHA256SUMS      # the two hashes must match
+(Get-FileHash .\hodeishield-0.7.0-x86_64-pc-windows-msvc.zip -Algorithm SHA256).Hash.ToLower()
+Select-String hodeishield-0.7.0-x86_64-pc-windows-msvc.zip SHA256SUMS      # the two hashes must match
 # the same two lines with .msi for the MSI
-cosign verify-blob .\hodeishield-0.6.1-x86_64-pc-windows-msvc.zip `
-  --bundle .\hodeishield-0.6.1-x86_64-pc-windows-msvc.zip.sigstore.json `
-  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.6.1 `
+cosign verify-blob .\hodeishield-0.7.0-x86_64-pc-windows-msvc.zip `
+  --bundle .\hodeishield-0.7.0-x86_64-pc-windows-msvc.zip.sigstore.json `
+  --certificate-identity https://github.com/Hodeitek/hodeishield-cli/.github/workflows/release.yml@refs/tags/v0.7.0 `
   --certificate-oidc-issuer https://token.actions.githubusercontent.com `
   --certificate-github-workflow-trigger push
 ```
@@ -434,8 +434,10 @@ the proof that the file is genuine; once it passes, unblock the binary as follow
 **macOS.** Gatekeeper may refuse to open `hodeishield` ("Apple could not verify… is free of
 malware"). Verify the download first, then allow the binary in System Settings: after the first
 blocked attempt, open **System Settings → Privacy & Security**, scroll down to the message about
-`hodeishield`, click **Open Anyway**, confirm, and run the command again. The dialog's wording and
-button labels follow the system language, so they may differ from the English text quoted here.
+`hodeishield`, click **Allow Anyway** and authenticate. Then run the command again and choose
+**Open Anyway** in the dialog that appears; later runs show no dialog. Older macOS versions may show
+**Open Anyway** directly in System Settings. The dialog's wording and button labels follow the
+system language, so they may differ from the English text quoted here.
 
 Or remove the quarantine attribute from the unpacked binary:
 
@@ -448,7 +450,7 @@ on the binary, so the block still applies. A download with `curl` does not set i
 place:
 
 ```sh
-curl -LO https://github.com/Hodeitek/hodeishield-cli/releases/download/v0.6.1/hodeishield-0.6.1-universal-apple-darwin.tar.gz
+curl -LO https://github.com/Hodeitek/hodeishield-cli/releases/download/v0.7.0/hodeishield-0.7.0-universal-apple-darwin.tar.gz
 ```
 
 **Windows.** SmartScreen can warn about a signed file that is still new to it, and versions before
@@ -485,8 +487,10 @@ your CI's secret store; the CLI never prints it.
 organisation and, for a key, its scopes; for a sign-in, also the signed-in user when the service
 provides it; for a portfolio key, the MSSP and how many client tenants it
 can select. With `--json` these are the `tenant`, `organization`, `portfolio` and
-`credential_scopes` fields. If the API cannot be reached, `whoami` still shows the local settings,
-leaves those fields null and says why on standard error.
+`credential_scopes` fields. If the API cannot be reached or fails on its side, `whoami` still shows
+the local settings, leaves those fields null, says why on standard error and exits 0. If the API
+does not accept the credential (revoked, expired or mistyped), it does the same but exits 3, like
+every other command, so a script can tell that the profile is signed out.
 
 ### By signing in (people)
 
@@ -502,6 +506,8 @@ You sign in to [app.hodeishield.com](https://app.hodeishield.com) as usual (2FA,
 on the consent screen you choose **the one tenant** the CLI may read. A sign-in token never covers
 more than that tenant, and it only reads. To use an unrelated tenant, define another profile and sign in
 to it:
+When the sign-in ends, the browser shows a short page in the language of the browser (English, Spanish,
+German, French, Italian or Basque; English otherwise) that says whether it worked and that you can close the tab.
 
 ```sh
 hodeishield config set --profile client-b api_url https://api.hodeishield.com
@@ -801,7 +807,7 @@ hodeishield vendors list --all --csv > vendors.csv
 | 0 | Success |
 | 1 | Error (invalid input, configuration, unexpected answer) |
 | 2 | Invalid command line |
-| 3 | Not authenticated: no credential (also when the system keychain cannot be reached in this session, or the opt-in token file is refused as unsafe; `login` and `logout` exit 1 for that), or the API rejected it |
+| 3 | Not authenticated: no credential (also when the system keychain cannot be reached in this session, or the opt-in token file is refused as unsafe; `login` and `logout` exit 1 for that), or the API rejected it (`whoami` too, after showing the local details) |
 | 4 | The credential lacks the scope the command needs, or the tenant's plan does not include the module (or the compliance framework is not enabled) |
 | 5 | Not found (or not in your organisation) |
 | 6 | Rate limit exhausted (the CLI already retried short waits) |
