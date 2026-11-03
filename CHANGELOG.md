@@ -6,6 +6,13 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ## [Unreleased]
 
+### Changed
+
+- The generated `/v1` client follows version 2026-10-29 of the API document. Sign-in asks only for
+  the scopes of operations a command calls: the new `GET /v1/changes` operation and its
+  `changes:read` scope are not asked for until a command uses them.
+  ([#265](https://github.com/Hodeitek/hodeishield-cli/issues/265))
+
 ## [0.7.0] - 2026-11-01
 
 ### Changed
