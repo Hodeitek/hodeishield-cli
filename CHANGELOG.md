@@ -6,6 +6,15 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-11-03
+
+### Changed
+
+- The generated `/v1` client follows version 2026-10-29 of the API document. Sign-in asks only for
+  the scopes of operations a command calls: the new `GET /v1/changes` operation and its
+  `changes:read` scope are not asked for until a command uses them.
+  ([#265](https://github.com/Hodeitek/hodeishield-cli/issues/265))
+
 ## [0.7.0] - 2026-11-01
 
 ### Changed
@@ -511,7 +520,8 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 - Profiles (`config`), shell completions, and release archives for Linux, macOS and Windows signed
   with Sigstore and with SLSA provenance.
 
-[Unreleased]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/Hodeitek/hodeishield-cli/compare/v0.5.1...v0.6.0

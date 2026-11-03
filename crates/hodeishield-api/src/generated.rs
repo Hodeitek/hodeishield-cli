@@ -13,7 +13,7 @@
 use serde::{Deserialize, Serialize};
 
 /// `info.version` of the OpenAPI document this client was generated from.
-pub const OPENAPI_VERSION: &str = "2026-10-26";
+pub const OPENAPI_VERSION: &str = "2026-10-29";
 
 /// The server the OpenAPI document declares.
 pub const DEFAULT_SERVER: &str = "https://api.hodeishield.com";
@@ -169,10 +169,31 @@ pub struct AlertsPagination {
     pub next_cursor: Option<String>,
 }
 
+/// A filter value outside the published vocabulary. The request was served as sent.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Warnings {
+    /// The query parameter whose value is not in the published list.
+    pub param: String,
+    /// The value as sent.
+    pub value: String,
+    /// The published values of the parameter (its `x-hs-known-values`).
+    pub known: Vec<String>,
+}
+
+/// Present only when at least one filter value is outside its published list; omitted otherwise.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Meta {
+    /// One entry per filter whose value is not a published value. The list is still filtered by the value as sent (so it is usually empty); the same parameters are named in the `X-HS-Unknown-Filter` response header.
+    pub warnings: Vec<Warnings>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ListAlertsResponse {
     pub data: Vec<Alert>,
     pub pagination: AlertsPagination,
+    /// Present only when at least one filter value is outside its published list; omitted otherwise.
+    #[serde(default)]
+    pub meta: Option<Meta>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -233,6 +254,9 @@ pub struct Risk {
 pub struct ListRisksResponse {
     pub data: Vec<Risk>,
     pub pagination: Pagination,
+    /// Present only when at least one filter value is outside its published list; omitted otherwise.
+    #[serde(default)]
+    pub meta: Option<Meta>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -261,6 +285,9 @@ pub struct ComplianceControl {
 pub struct ListComplianceControlsResponse {
     pub data: Vec<ComplianceControl>,
     pub pagination: Pagination,
+    /// Present only when at least one filter value is outside its published list; omitted otherwise.
+    #[serde(default)]
+    pub meta: Option<Meta>,
 }
 
 /// Posture summary for one framework.
@@ -526,6 +553,62 @@ pub struct ReportDetail {
 pub struct GetReportResponse {
     /// One report, with the formats it can be downloaded in.
     pub data: ReportDetail,
+}
+
+/// How many decisions the change holds.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Approvals {
+    pub approved: i64,
+    pub rejected: i64,
+}
+
+/// One change request of the register.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Change {
+    pub id: String,
+    /// Human reference, `CHG-<year>-<number>`, unique per tenant.
+    pub r#ref: String,
+    pub title: String,
+    /// Documented values: `draft`, `submitted`, `approved`, `rejected`, `scheduled`, `implementing`, `implemented`, `failed`, `rolled_back`, `in_review`, `closed`, `cancelled`. Treat any other value as valid: the vocabulary may grow.
+    pub status: String,
+    /// `emergency` may be carried out before approval.
+    ///
+    /// Documented values: `normal`, `emergency`. Treat any other value as valid: the vocabulary may grow.
+    pub change_type: String,
+    /// Documented values: `infrastructure`, `application`, `configuration`, `access`, `vendor`, `other`. Treat any other value as valid: the vocabulary may grow.
+    pub category: String,
+    /// Documented values: `low`, `medium`, `high`. Treat any other value as valid: the vocabulary may grow.
+    pub risk_level: String,
+    /// RFC 3339, UTC.
+    #[serde(default)]
+    pub planned_start_at: Option<String>,
+    /// RFC 3339, UTC.
+    #[serde(default)]
+    pub planned_end_at: Option<String>,
+    /// RFC 3339, UTC.
+    #[serde(default)]
+    pub implemented_at: Option<String>,
+    /// RFC 3339, UTC.
+    #[serde(default)]
+    pub closed_at: Option<String>,
+    /// Set by the post-change review.
+    #[serde(default)]
+    pub outcome: Option<String>,
+    /// True when four-eyes approval was waived because the tenant has a single administrator.
+    pub approved_without_second_person: bool,
+    /// Reference in an external ITSM, when linked.
+    #[serde(default)]
+    pub external_ref: Option<String>,
+    /// How many decisions the change holds.
+    pub approvals: Approvals,
+    /// RFC 3339, UTC.
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ListChangesResponse {
+    pub data: Vec<Change>,
+    pub pagination: Pagination,
 }
 
 /// Accepted values of a query parameter.
@@ -1151,6 +1234,251 @@ impl std::str::FromStr for Locale {
     }
 }
 
+/// Accepted values of a query parameter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ChangeSort {
+    /// `created_at`
+    CreatedAt,
+    /// `planned_start_at`
+    PlannedStartAt,
+    /// `implemented_at`
+    ImplementedAt,
+}
+
+impl ChangeSort {
+    /// Every accepted value, as sent on the wire.
+    pub const VALUES: &'static [&'static str] =
+        &["created_at", "planned_start_at", "implemented_at"];
+
+    /// The value as sent on the wire.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::CreatedAt => "created_at",
+            Self::PlannedStartAt => "planned_start_at",
+            Self::ImplementedAt => "implemented_at",
+        }
+    }
+}
+
+impl std::fmt::Display for ChangeSort {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for ChangeSort {
+    type Err = crate::ParseEnumError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "created_at" => Ok(Self::CreatedAt),
+            "planned_start_at" => Ok(Self::PlannedStartAt),
+            "implemented_at" => Ok(Self::ImplementedAt),
+            _ => Err(crate::ParseEnumError::new(value, Self::VALUES)),
+        }
+    }
+}
+
+/// Accepted values of a query parameter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ChangeStatus {
+    /// `draft`
+    Draft,
+    /// `submitted`
+    Submitted,
+    /// `approved`
+    Approved,
+    /// `rejected`
+    Rejected,
+    /// `scheduled`
+    Scheduled,
+    /// `implementing`
+    Implementing,
+    /// `implemented`
+    Implemented,
+    /// `failed`
+    Failed,
+    /// `rolled_back`
+    RolledBack,
+    /// `in_review`
+    InReview,
+    /// `closed`
+    Closed,
+    /// `cancelled`
+    Cancelled,
+}
+
+impl ChangeStatus {
+    /// Every accepted value, as sent on the wire.
+    pub const VALUES: &'static [&'static str] = &[
+        "draft",
+        "submitted",
+        "approved",
+        "rejected",
+        "scheduled",
+        "implementing",
+        "implemented",
+        "failed",
+        "rolled_back",
+        "in_review",
+        "closed",
+        "cancelled",
+    ];
+
+    /// The value as sent on the wire.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Draft => "draft",
+            Self::Submitted => "submitted",
+            Self::Approved => "approved",
+            Self::Rejected => "rejected",
+            Self::Scheduled => "scheduled",
+            Self::Implementing => "implementing",
+            Self::Implemented => "implemented",
+            Self::Failed => "failed",
+            Self::RolledBack => "rolled_back",
+            Self::InReview => "in_review",
+            Self::Closed => "closed",
+            Self::Cancelled => "cancelled",
+        }
+    }
+}
+
+impl std::fmt::Display for ChangeStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for ChangeStatus {
+    type Err = crate::ParseEnumError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "draft" => Ok(Self::Draft),
+            "submitted" => Ok(Self::Submitted),
+            "approved" => Ok(Self::Approved),
+            "rejected" => Ok(Self::Rejected),
+            "scheduled" => Ok(Self::Scheduled),
+            "implementing" => Ok(Self::Implementing),
+            "implemented" => Ok(Self::Implemented),
+            "failed" => Ok(Self::Failed),
+            "rolled_back" => Ok(Self::RolledBack),
+            "in_review" => Ok(Self::InReview),
+            "closed" => Ok(Self::Closed),
+            "cancelled" => Ok(Self::Cancelled),
+            _ => Err(crate::ParseEnumError::new(value, Self::VALUES)),
+        }
+    }
+}
+
+/// Accepted values of a query parameter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ChangeType {
+    /// `normal`
+    Normal,
+    /// `emergency`
+    Emergency,
+}
+
+impl ChangeType {
+    /// Every accepted value, as sent on the wire.
+    pub const VALUES: &'static [&'static str] = &["normal", "emergency"];
+
+    /// The value as sent on the wire.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::Emergency => "emergency",
+        }
+    }
+}
+
+impl std::fmt::Display for ChangeType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for ChangeType {
+    type Err = crate::ParseEnumError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "normal" => Ok(Self::Normal),
+            "emergency" => Ok(Self::Emergency),
+            _ => Err(crate::ParseEnumError::new(value, Self::VALUES)),
+        }
+    }
+}
+
+/// Accepted values of a query parameter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ChangeCategory {
+    /// `infrastructure`
+    Infrastructure,
+    /// `application`
+    Application,
+    /// `configuration`
+    Configuration,
+    /// `access`
+    Access,
+    /// `vendor`
+    Vendor,
+    /// `other`
+    Other,
+}
+
+impl ChangeCategory {
+    /// Every accepted value, as sent on the wire.
+    pub const VALUES: &'static [&'static str] = &[
+        "infrastructure",
+        "application",
+        "configuration",
+        "access",
+        "vendor",
+        "other",
+    ];
+
+    /// The value as sent on the wire.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Infrastructure => "infrastructure",
+            Self::Application => "application",
+            Self::Configuration => "configuration",
+            Self::Access => "access",
+            Self::Vendor => "vendor",
+            Self::Other => "other",
+        }
+    }
+}
+
+impl std::fmt::Display for ChangeCategory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for ChangeCategory {
+    type Err = crate::ParseEnumError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "infrastructure" => Ok(Self::Infrastructure),
+            "application" => Ok(Self::Application),
+            "configuration" => Ok(Self::Configuration),
+            "access" => Ok(Self::Access),
+            "vendor" => Ok(Self::Vendor),
+            "other" => Ok(Self::Other),
+            _ => Err(crate::ParseEnumError::new(value, Self::VALUES)),
+        }
+    }
+}
+
 /// Query parameters of `listVendors`.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ListVendorsParams {
@@ -1220,7 +1548,7 @@ pub struct ListAlertsParams {
     pub order: Option<Order>,
     /// Filter by the derived status.
     pub status: Option<AlertStatus>,
-    /// Exact severity match, in the vocabulary the response uses (critical | high | medium | low | info). The legacy Spanish values (critico, alto, medio, bajo, info) are still accepted and mean the same; they are documented as accepted until 2027-01-14, so move to the English ones.
+    /// Exact severity match, in the vocabulary the response uses (critical | high | medium | low | info). The legacy Spanish values (critico, alto, medio, bajo, info) are still accepted and mean the same; they are documented as accepted until 2027-01-14, so move to the English ones. Any other value is matched exactly and matches nothing, and the answer then carries a `meta.warnings` entry and the `X-HS-Unknown-Filter` header.
     pub severity: Option<String>,
     /// Only alerts about this vendor.
     pub vendor_id: Option<String>,
@@ -1280,9 +1608,9 @@ pub struct ListRisksParams {
     pub sort: Option<RiskSort>,
     /// Sort direction. Defaults to desc.
     pub order: Option<Order>,
-    /// Exact status match. Known values: identified, assessed, treatment_planned, treatment_implemented, closed. Open vocabulary: any other value is matched exactly and matches nothing.
+    /// Exact status match. Known values: identified, assessed, treatment_planned, treatment_implemented, closed. Open vocabulary: any other value is matched exactly and matches nothing, and the answer then carries a `meta.warnings` entry and the `X-HS-Unknown-Filter` header.
     pub status: Option<String>,
-    /// Exact domain match. Known values: vendor, cyber, data, operational, compliance, concentration, strategic, legal, financial, reputational. Open vocabulary: any other value is matched exactly and matches nothing.
+    /// Exact domain match. Known values: vendor, cyber, data, operational, compliance, concentration, strategic, legal, financial, reputational. Open vocabulary: any other value is matched exactly and matches nothing, and the answer then carries a `meta.warnings` entry and the `X-HS-Unknown-Filter` header.
     pub domain: Option<String>,
     /// Only risks linked to this vendor.
     pub vendor_id: Option<String>,
@@ -1336,7 +1664,7 @@ pub struct ListComplianceControlsParams {
     pub order: Option<Order>,
     /// Framework slug. One of: nis2, ens, iso27001, dora, gdpr, soc2, iso42001, nistcsf, pcidss, euaiact, hipaa, cmmc, cyberessentials, uaeia, sama, saudiecc, ndpa.
     pub framework: String,
-    /// Exact status match. Known values: covered, partial, missing. Open vocabulary: any other value is matched exactly and matches nothing.
+    /// Exact status match. Known values: covered, partial, missing. Open vocabulary: any other value is matched exactly and matches nothing, and the answer then carries a `meta.warnings` entry and the `X-HS-Unknown-Filter` header.
     pub status: Option<String>,
 }
 
@@ -1583,6 +1911,65 @@ impl DownloadReportParams {
     }
 }
 
+/// Query parameters of `listChanges`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ListChangesParams {
+    /// 1-based page number. Defaults to 1.
+    pub page: Option<i64>,
+    /// Items per page, 1..200. Defaults to 50.
+    pub per_page: Option<i64>,
+    /// Field to order by. One of: created_at, planned_start_at, implemented_at.
+    pub sort: Option<ChangeSort>,
+    /// Sort direction. Defaults to desc.
+    pub order: Option<Order>,
+    /// Exact status match.
+    pub status: Option<ChangeStatus>,
+    /// Exact type match.
+    pub change_type: Option<ChangeType>,
+    /// Exact category match.
+    pub category: Option<ChangeCategory>,
+    /// Only changes created on or after this `YYYY-MM-DD` (UTC).
+    pub created_from: Option<String>,
+    /// Only changes created on or before this `YYYY-MM-DD` (UTC).
+    pub created_to: Option<String>,
+}
+
+impl ListChangesParams {
+    /// The query string, in document order, without the parameters that are unset.
+    #[must_use]
+    pub fn query_pairs(&self) -> Vec<(&'static str, String)> {
+        let mut pairs = Vec::new();
+        if let Some(value) = &self.page {
+            pairs.push(("page", value.to_string()));
+        }
+        if let Some(value) = &self.per_page {
+            pairs.push(("per_page", value.to_string()));
+        }
+        if let Some(value) = &self.sort {
+            pairs.push(("sort", value.as_str().to_owned()));
+        }
+        if let Some(value) = &self.order {
+            pairs.push(("order", value.as_str().to_owned()));
+        }
+        if let Some(value) = &self.status {
+            pairs.push(("status", value.as_str().to_owned()));
+        }
+        if let Some(value) = &self.change_type {
+            pairs.push(("change_type", value.as_str().to_owned()));
+        }
+        if let Some(value) = &self.category {
+            pairs.push(("category", value.as_str().to_owned()));
+        }
+        if let Some(value) = &self.created_from {
+            pairs.push(("created_from", value.clone()));
+        }
+        if let Some(value) = &self.created_to {
+            pairs.push(("created_to", value.clone()));
+        }
+        pairs
+    }
+}
+
 /// Every `/v1` operation, as the OpenAPI document describes it.
 pub mod operations {
     use crate::Operation;
@@ -1824,6 +2211,18 @@ pub mod operations {
         tenant_scoped: true,
     };
 
+    /// `GET /v1/changes`: List change requests.
+    pub const LIST_CHANGES: Operation = Operation {
+        id: "listChanges",
+        method: "GET",
+        path: "/v1/changes",
+        summary: "List change requests",
+        scopes: &["changes:read"],
+        known_values: &[],
+        deprecated_values: &[],
+        tenant_scoped: true,
+    };
+
     /// All operations, in document order.
     pub const ALL: &[Operation] = &[
         LIST_VENDORS,
@@ -1842,6 +2241,7 @@ pub mod operations {
         LIST_REPORTS,
         GET_REPORT,
         DOWNLOAD_REPORT,
+        LIST_CHANGES,
     ];
 }
 
@@ -2170,5 +2570,26 @@ impl crate::Client {
         params: &DownloadReportParams,
     ) -> Result<crate::Download, crate::Error> {
         self.get_binary(&operations::DOWNLOAD_REPORT, format!("/v1/reports/{}/download", crate::encode_path_segment(id)?), params.query_pairs(), "application/pdf, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/json")
+    }
+
+    /// List change requests.
+    ///
+    /// The tenant's change-management register: status, type, risk, planned and carried-out dates, the review outcome and how many approval decisions each change holds. Read only; free text and people are not published.
+    ///
+    /// Required scope: `changes:read`. Published in `/v1` since 2026-10-27.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error`] when the request cannot be sent, the API answers with an error, or the
+    /// body does not match the document.
+    pub fn list_changes(
+        &self,
+        params: &ListChangesParams,
+    ) -> Result<crate::ApiResponse<ListChangesResponse>, crate::Error> {
+        self.get(
+            &operations::LIST_CHANGES,
+            "/v1/changes".to_owned(),
+            params.query_pairs(),
+        )
     }
 }
