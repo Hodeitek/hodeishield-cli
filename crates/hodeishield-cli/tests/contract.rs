@@ -247,7 +247,7 @@ struct Resource {
     csv_header: &'static str,
 }
 
-const RESOURCES: [Resource; 6] = [
+const RESOURCES: [Resource; 7] = [
     Resource {
         command: &["vendors"],
         list_args: &[],
@@ -289,6 +289,13 @@ const RESOURCES: [Resource; 6] = [
         path: "/v1/endpoints",
         item: r#"{"id":"n1","producer":"agent","producer_kind":"edr","status":"active","signature_alg":"ed25519","agent_version":"1.2.3","hostname":"host.example.test","enrolled_at":"2026-01-01T00:00:00Z","last_seen_at":null,"revoked_at":null,"added_later":null}"#,
         csv_header: "id,producer,producer_kind,status,signature_alg,agent_version,hostname,enrolled_at,last_seen_at,revoked_at,added_later",
+    },
+    Resource {
+        command: &["changes"],
+        list_args: &[],
+        path: "/v1/changes",
+        item: r#"{"id":"c1","ref":"CHG-2026-0007","title":"Rotate the database credentials","status":"scheduled","change_type":"normal","category":"access","risk_level":"medium","planned_start_at":"2026-11-10T08:00:00Z","planned_end_at":"2026-11-10T09:00:00Z","implemented_at":null,"closed_at":null,"outcome":null,"approved_without_second_person":false,"external_ref":null,"approvals":{"approved":2,"rejected":0},"created_at":"2026-11-01T00:00:00Z","added_later":[1]}"#,
+        csv_header: "id,ref,title,status,change_type,category,risk_level,planned_start_at,planned_end_at,implemented_at,closed_at,outcome,approved_without_second_person,external_ref,approvals,created_at,added_later",
     },
 ];
 

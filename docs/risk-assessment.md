@@ -15,7 +15,7 @@ For what users need to know to use the CLI securely, see
 ## Intended purpose and conditions of use
 
 `hodeishield` is a read-only command-line client for the public `/v1` API of HodeiShield. It reads
-one organisation's third-party inventory, alerts, risk register, compliance posture, evidence,
+one organisation's third-party inventory, alerts, risk register, change requests, compliance posture, evidence,
 endpoint agents and reports ([user-information.md](user-information.md#intended-purpose)). It runs as a short-lived
 process on the user's own machine, started by a person or a script, and has no server part, daemon
 or plug-in interface.

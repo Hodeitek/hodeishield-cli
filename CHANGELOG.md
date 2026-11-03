@@ -6,6 +6,15 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ## [Unreleased]
 
+### Added
+
+- `hodeishield changes list` reads the change-management register (`GET /v1/changes`): reference,
+  title, status, type, category, risk level and planned and carried-out dates, with the published
+  filters (`--status`, `--type`, `--category`, `--created-from`, `--created-to`), `--sort`, `--order`
+  and paging like the other lists, and table, `--json` and `--csv` output. Sign-in now asks for the
+  `changes:read` scope when the app offers it; a credential without it exits with code 4.
+  ([#268](https://github.com/Hodeitek/hodeishield-cli/issues/268))
+
 ## [0.7.1] - 2026-11-03
 
 ### Changed

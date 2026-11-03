@@ -30,7 +30,7 @@ On a server, in a container or in CI there is usually no keychain and `login` st
 
 Verify the download before you run it: see [Install](#install) and [Verify a download](#verify-a-download).
 
-Read your third-party inventory, supply-chain alerts, risk register, compliance posture, evidence and
+Read your third-party inventory, supply-chain alerts, risk register, change requests, compliance posture, evidence and
 endpoint agents from a terminal or a script.
 
 - **Read-only.** Every command is a `GET` against the public `/v1` API. Nothing here can change data in
@@ -530,8 +530,8 @@ An MSSP reads its clients with one credential instead: see
 With `--device`, open the address the CLI prints on any device and **type the code by hand**: the app
 does not accept a link with the code filled in, on purpose.
 
-The CLI asks for the read scopes its commands need (vendors, alerts and risks; every compliance
-framework the app offers; evidence; endpoints; reports) and for a refresh token. To ask for fewer, set them:
+The CLI asks for the read scopes its commands need (vendors, alerts and risks; change requests; every
+compliance framework the app offers; evidence; endpoints; reports) and for a refresh token. To ask for fewer, set them:
 `hodeishield config set oauth_scopes "supply_risk:read offline_access"`.
 
 The token is kept in the system keychain (macOS Keychain, Windows Credential Manager, or the Secret
@@ -618,6 +618,7 @@ hodeishield vendors list --criticality critical
 hodeishield vendors get 0b8f2a52-6a0e-4d5c-9d3e-1f2a3b4c5d6e
 hodeishield alerts list --status open --since 2026-01-01T00:00:00Z
 hodeishield risks list --min-inherent-score 15 --sort inherent_score
+hodeishield changes list --status scheduled --created-from 2026-11-01
 hodeishield compliance posture nis2
 hodeishield compliance controls --framework nis2 --status failing
 hodeishield evidence list --expiring-before 2026-12-31T00:00:00Z
@@ -636,6 +637,20 @@ Lists show one page (50 items by default); `--page`, `--per-page` (up to 200) an
 rest. `--all` stops with an error past 100,000 items (or 1,000 pages); narrow the list with filters
 or walk it with `--page`. Every list takes `--sort` and `--order`; `--help` on any command lists
 what it accepts.
+
+### Change requests
+
+`changes list` shows the change-management register of the tenant: reference (`CHG-<year>-<number>`),
+title, status, type, category, risk level and the planned and carried-out dates. It is read only and
+needs the scope `changes:read`; without it the command exits with code 4 and names the scope. It
+takes `--status`, `--type` (`normal` or `emergency`), `--category`, `--created-from` and
+`--created-to` (dates, `YYYY-MM-DD`, UTC), `--sort` (`created_at`, `planned_start_at` or
+`implemented_at`), `--order`, `--page`, `--per-page`, `--all`, `--json` and `--csv`, like the other
+lists. The approval counts and the other fields are in the `--json` and `--csv` output.
+
+```sh
+hodeishield changes list --type emergency --sort planned_start_at --order asc
+```
 
 ### Reports
 

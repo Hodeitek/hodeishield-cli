@@ -9,8 +9,9 @@ use clap::{Args, CommandFactory, Parser, Subcommand};
 use hodeishield_api::ParseEnumError;
 use hodeishield_api::v1::operations;
 use hodeishield_api::v1::{
-    AlertSort, AlertStatus, BusinessCriticality, ComplianceControlSort, EndpointSort,
-    EndpointStatus, EvidenceSort, Format, Locale, Order, ReportSort, RiskSort, VendorSort,
+    AlertSort, AlertStatus, BusinessCriticality, ChangeCategory, ChangeSort, ChangeStatus,
+    ChangeType, ComplianceControlSort, EndpointSort, EndpointStatus, EvidenceSort, Format, Locale,
+    Order, ReportSort, RiskSort, VendorSort,
 };
 use std::io::IsTerminal;
 use std::path::PathBuf;
@@ -102,6 +103,9 @@ pub enum Command {
     /// Entries of the risk register.
     #[command(subcommand)]
     Risks(RisksCommand),
+    /// Change requests of the change-management register.
+    #[command(subcommand)]
+    Changes(ChangesCommand),
     /// Control status and posture per framework.
     #[command(subcommand)]
     Compliance(ComplianceCommand),
@@ -244,6 +248,7 @@ impl Command {
             Self::Vendors(_)
                 | Self::Alerts(_)
                 | Self::Risks(_)
+                | Self::Changes(_)
                 | Self::Compliance(_)
                 | Self::Evidence(_)
                 | Self::Endpoints(_)
@@ -262,6 +267,7 @@ impl Command {
             Self::Vendors(VendorsCommand::List(list)) => Some(&list.paging),
             Self::Alerts(AlertsCommand::List(list)) => Some(&list.paging),
             Self::Risks(RisksCommand::List(list)) => Some(&list.paging),
+            Self::Changes(ChangesCommand::List(list)) => Some(&list.paging),
             Self::Compliance(ComplianceCommand::Controls(list)) => Some(&list.paging),
             Self::Evidence(EvidenceCommand::List(list)) => Some(&list.paging),
             Self::Endpoints(EndpointsCommand::List(list)) => Some(&list.paging),
@@ -404,6 +410,36 @@ pub struct RisksList {
     /// Field to order by.
     #[arg(long, value_parser = choice::<RiskSort>(RiskSort::VALUES))]
     pub sort: Option<RiskSort>,
+    #[command(flatten)]
+    pub paging: Paging,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ChangesCommand {
+    /// List change requests.
+    List(ChangesList),
+}
+
+#[derive(Debug, Args)]
+pub struct ChangesList {
+    /// Exact status.
+    #[arg(long, value_parser = choice::<ChangeStatus>(ChangeStatus::VALUES))]
+    pub status: Option<ChangeStatus>,
+    /// Exact change type.
+    #[arg(long = "type", value_name = "TYPE", value_parser = choice::<ChangeType>(ChangeType::VALUES))]
+    pub change_type: Option<ChangeType>,
+    /// Exact category.
+    #[arg(long, value_parser = choice::<ChangeCategory>(ChangeCategory::VALUES))]
+    pub category: Option<ChangeCategory>,
+    /// Only changes created on or after this date (UTC), as YYYY-MM-DD.
+    #[arg(long, value_name = "DATE")]
+    pub created_from: Option<String>,
+    /// Only changes created on or before this date (UTC), as YYYY-MM-DD.
+    #[arg(long, value_name = "DATE")]
+    pub created_to: Option<String>,
+    /// Field to order by.
+    #[arg(long, value_parser = choice::<ChangeSort>(ChangeSort::VALUES))]
+    pub sort: Option<ChangeSort>,
     #[command(flatten)]
     pub paging: Paging,
 }

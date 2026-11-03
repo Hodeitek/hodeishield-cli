@@ -7,8 +7,8 @@ use super::Context;
 use super::save;
 use super::tenants::{Selection, Target};
 use crate::cli::{
-    AlertsCommand, ComplianceCommand, EndpointsCommand, EvidenceCommand, Paging, ReportsCommand,
-    ReportsDownload, RisksCommand, VendorsCommand,
+    AlertsCommand, ChangesCommand, ComplianceCommand, EndpointsCommand, EvidenceCommand, Paging,
+    ReportsCommand, ReportsDownload, RisksCommand, VendorsCommand,
 };
 use crate::failure::{ApiContext, CredentialSource, Failure, Kind, Result, from_api};
 use crate::filters::warn_unknown;
@@ -19,10 +19,10 @@ use crate::output::{
 use hodeishield_api::Client;
 use hodeishield_api::portfolio::Tenant;
 use hodeishield_api::v1::{
-    Alert, AlertsPagination, ComplianceControl, DownloadReportParams, Endpoint, Evidence, Format,
-    ListAlertsParams, ListComplianceControlsParams, ListEndpointsParams, ListEvidenceParams,
-    ListReportsParams, ListRisksParams, ListVendorsParams, Pagination, Report, Risk, Vendor,
-    operations,
+    Alert, AlertsPagination, Change, ComplianceControl, DownloadReportParams, Endpoint, Evidence,
+    Format, ListAlertsParams, ListChangesParams, ListComplianceControlsParams, ListEndpointsParams,
+    ListEvidenceParams, ListReportsParams, ListRisksParams, ListVendorsParams, Pagination, Report,
+    Risk, Vendor, operations,
 };
 use hodeishield_api::{ApiResponse, Error};
 use serde::Serialize;
@@ -572,6 +572,72 @@ fn risk_table(items: &[Risk]) -> Rows {
                     r.inherent_score.to_string(),
                     r.residual_score
                         .map_or_else(|| "-".to_owned(), |s| s.to_string()),
+                ]
+            })
+            .collect(),
+    )
+}
+
+pub fn changes(ctx: &Context, command: ChangesCommand, out: &mut dyn Write) -> Result<()> {
+    let settings = ctx.settings()?;
+    match command {
+        ChangesCommand::List(args) => {
+            let (targets, source) = ctx.targets(&settings)?;
+            let base = ListChangesParams {
+                status: args.status,
+                change_type: args.change_type,
+                category: args.category,
+                created_from: args.created_from,
+                created_to: args.created_to,
+                sort: args.sort,
+                order: args.paging.order,
+                ..ListChangesParams::default()
+            };
+            list(
+                ctx,
+                out,
+                &args.paging,
+                "changes",
+                plain(ctx, source),
+                &targets,
+                &mut |client, page, per_page| {
+                    client.list_changes(&ListChangesParams {
+                        page,
+                        per_page,
+                        ..base.clone()
+                    })
+                },
+                |r| (r.data, r.pagination.into()),
+                change_table,
+            )
+        }
+    }
+}
+
+fn change_table(items: &[Change]) -> Rows {
+    Rows::new(
+        &[
+            "REF",
+            "TITLE",
+            "STATUS",
+            "TYPE",
+            "CATEGORY",
+            "RISK",
+            "PLANNED START",
+            "IMPLEMENTED",
+        ],
+        items
+            .iter()
+            .map(|c| {
+                vec![
+                    clean(&c.r#ref),
+                    clean(&c.title),
+                    clean(&c.status),
+                    clean(&c.change_type),
+                    clean(&c.category),
+                    clean(&c.risk_level),
+                    short_time(c.planned_start_at.as_deref()),
+                    short_time(c.implemented_at.as_deref()),
                 ]
             })
             .collect(),
