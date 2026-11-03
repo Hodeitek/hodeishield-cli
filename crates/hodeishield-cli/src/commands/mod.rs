@@ -137,6 +137,7 @@ pub fn run(cli: Cli, out: &mut dyn Write) -> Result<()> {
         Command::Vendors(command) => resources::vendors(&ctx, command, out),
         Command::Alerts(command) => resources::alerts(&ctx, command, out),
         Command::Risks(command) => resources::risks(&ctx, command, out),
+        Command::Changes(command) => resources::changes(&ctx, command, out),
         Command::Compliance(command) => resources::compliance(&ctx, command, out),
         Command::Evidence(command) => resources::evidence(&ctx, command, out),
         Command::Endpoints(command) => resources::endpoints(&ctx, command, out),

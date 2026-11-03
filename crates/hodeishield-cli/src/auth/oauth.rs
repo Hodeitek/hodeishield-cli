@@ -63,6 +63,7 @@ const SIGNED_IN_OPERATIONS: &[Operation] = &[
     operations::LIST_REPORTS,
     operations::GET_REPORT,
     operations::DOWNLOAD_REPORT,
+    operations::LIST_CHANGES,
 ];
 
 /// The `/v1` operations whose scopes sign-in does not ask for.
@@ -70,8 +71,6 @@ const SIGNED_IN_OPERATIONS: &[Operation] = &[
 const NOT_SIGNED_IN_OPERATIONS: &[Operation] = &[
     // The tenant listing answers a portfolio key only, never a sign-in.
     operations::LIST_PORTFOLIO_TENANTS,
-    // No command calls it yet: `changes:read` is not asked for until a command uses it (#268).
-    operations::LIST_CHANGES,
 ];
 
 /// The scopes to ask for when the profile names none: the ones the operations in
@@ -911,6 +910,7 @@ mod tests {
                 "radar:read",
                 "evidence:read",
                 "endpoints:read",
+                "changes:read",
                 "management:read",
                 "offline_access",
             ]
@@ -925,6 +925,7 @@ mod tests {
                 "compliance.ens:read",
                 "evidence:read",
                 "endpoints:read",
+                "changes:read",
                 "offline_access",
             ]
         );
@@ -965,9 +966,9 @@ mod tests {
             ["supply_risk:read", "offline_access"]
         );
 
-        // An operation no command calls is not asked for, even when the app offers its scope.
-        let mut with_changes = metadata("https://app.example.test");
-        with_changes.scopes_supported = Some(
+        // A scope no command needs is not asked for, even when the app offers it.
+        let mut with_unused = metadata("https://app.example.test");
+        with_unused.scopes_supported = Some(
             [
                 "supply_risk:read",
                 "changes:read",
@@ -978,8 +979,8 @@ mod tests {
             .to_vec(),
         );
         assert_eq!(
-            default_scopes(&with_changes),
-            ["supply_risk:read", "offline_access"]
+            default_scopes(&with_unused),
+            ["supply_risk:read", "changes:read", "offline_access"]
         );
 
         // An app that does not publish its scopes gets the fixed ones; a template stands for none.
@@ -990,6 +991,7 @@ mod tests {
                 "evidence:read",
                 "endpoints:read",
                 "reports:read",
+                "changes:read",
                 "offline_access"
             ]
         );

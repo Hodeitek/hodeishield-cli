@@ -327,6 +327,116 @@ fn a_missing_scope_exits_4_and_names_the_framework_scope() {
         .stderr(predicate::str::contains("request id: req_abc"));
 }
 
+const CHANGE: &str = r#"{"id":"c1","ref":"CHG-2026-0007","title":"Rotate the database credentials","status":"scheduled","change_type":"normal","category":"access","risk_level":"medium","planned_start_at":"2026-11-10T08:00:00Z","planned_end_at":"2026-11-10T09:00:00Z","implemented_at":null,"closed_at":null,"outcome":null,"approved_without_second_person":false,"external_ref":null,"approvals":{"approved":2,"rejected":0},"created_at":"2026-11-01T00:00:00Z","added_later":1}"#;
+
+#[test]
+fn changes_list_prints_a_table_and_sends_the_published_filters() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    let mock = server
+        .mock("GET", "/v1/changes")
+        .match_header("authorization", format!("Bearer {KEY}").as_str())
+        .match_query(mockito::Matcher::AllOf(vec![
+            mockito::Matcher::UrlEncoded("status".into(), "scheduled".into()),
+            mockito::Matcher::UrlEncoded("change_type".into(), "normal".into()),
+            mockito::Matcher::UrlEncoded("category".into(), "access".into()),
+            mockito::Matcher::UrlEncoded("created_from".into(), "2026-11-01".into()),
+            mockito::Matcher::UrlEncoded("created_to".into(), "2026-11-30".into()),
+            mockito::Matcher::UrlEncoded("sort".into(), "planned_start_at".into()),
+            mockito::Matcher::UrlEncoded("order".into(), "asc".into()),
+            mockito::Matcher::UrlEncoded("per_page".into(), "20".into()),
+        ]))
+        .with_body(page(&[CHANGE.to_owned()], 1, 1, 1))
+        .create();
+    let output = env
+        .api(&server)
+        .args([
+            "changes",
+            "list",
+            "--status",
+            "scheduled",
+            "--type",
+            "normal",
+            "--category",
+            "access",
+            "--created-from",
+            "2026-11-01",
+            "--created-to",
+            "2026-11-30",
+            "--sort",
+            "planned_start_at",
+            "--order",
+            "asc",
+            "--per-page",
+            "20",
+        ])
+        .output()
+        .expect("run");
+    assert!(output.status.success(), "{output:?}");
+    mock.assert();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.starts_with("REF"), "{stdout}");
+    assert!(
+        stdout.contains("CHG-2026-0007")
+            && stdout.contains("Rotate the database credentials")
+            && stdout.contains("2026-11-10 08:00Z"),
+        "{stdout}"
+    );
+    assert_no_key(&output);
+}
+
+#[test]
+fn changes_list_refuses_a_value_the_document_does_not_list() {
+    let env = Env::new();
+    let server = mockito::Server::new();
+    for args in [
+        ["changes", "list", "--status", "paused"],
+        ["changes", "list", "--type", "urgent"],
+        ["changes", "list", "--category", "people"],
+    ] {
+        env.api(&server).args(args).assert().code(2);
+    }
+}
+
+#[test]
+fn changes_list_json_is_the_api_body_unchanged() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    let body = page(&[CHANGE.to_owned()], 1, 1, 1);
+    server
+        .mock("GET", "/v1/changes")
+        .with_body(body.clone())
+        .create();
+    let output = env
+        .api(&server)
+        .args(["--json", "changes", "list"])
+        .output()
+        .expect("run");
+    assert!(output.status.success(), "{output:?}");
+    let printed: serde_json::Value = serde_json::from_slice(&output.stdout).expect("json");
+    let sent: serde_json::Value = serde_json::from_str(&body).expect("json");
+    assert_eq!(printed, sent);
+}
+
+#[test]
+fn a_missing_changes_scope_exits_4_and_names_it() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    server
+        .mock("GET", "/v1/changes")
+        .match_query(mockito::Matcher::Any)
+        .with_status(403)
+        .with_header("x-request-id", "req_abc")
+        .with_body(r#"{"error":{"code":"forbidden","message":"no","request_id":"req_abc"}}"#)
+        .create();
+    env.api(&server)
+        .args(["changes", "list"])
+        .assert()
+        .code(4)
+        .stderr(predicate::str::contains("changes:read"))
+        .stderr(predicate::str::contains("request id: req_abc"));
+}
+
 #[test]
 fn a_module_not_entitled_answer_exits_4_with_its_own_message() {
     let env = Env::new();
@@ -675,12 +785,13 @@ fn only_get_is_ever_sent() {
     let gets = server
         .mock("GET", mockito::Matcher::Any)
         .with_body(page(&[], 1, 0, 0))
-        .expect(7)
+        .expect(8)
         .create();
     for args in [
         vec!["vendors", "list"],
         vec!["alerts", "list"],
         vec!["risks", "list"],
+        vec!["changes", "list"],
         vec!["evidence", "list"],
         vec!["endpoints", "list"],
         vec!["reports", "list"],
