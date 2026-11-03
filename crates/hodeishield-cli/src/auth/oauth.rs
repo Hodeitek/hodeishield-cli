@@ -10,6 +10,7 @@
 use crate::failure::{Failure, Kind, Result, ca_hint, error_chain};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use hodeishield_api::Operation;
 use hodeishield_api::v1::operations;
 use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
@@ -43,8 +44,38 @@ const OFFLINE_ACCESS: &str = "offline_access";
 /// Lets the user's email address show in `whoami`. Asked for only when the app lists it.
 const EMAIL: &str = "email";
 
-/// The scopes to ask for when the profile names none: the ones the `/v1` operations this CLI calls
-/// need, with a template such as `compliance.<framework>:read` standing for every scope of that
+/// The `/v1` operations a command calls with a signed-in credential: sign-in asks for their scopes
+/// and no others. An operation the API document adds widens nothing until it is listed here or in
+/// `NOT_SIGNED_IN_OPERATIONS`; a test fails until it is.
+const SIGNED_IN_OPERATIONS: &[Operation] = &[
+    operations::LIST_VENDORS,
+    operations::GET_VENDOR,
+    operations::LIST_ALERTS,
+    operations::GET_ALERT,
+    operations::LIST_RISKS,
+    operations::GET_RISK,
+    operations::LIST_COMPLIANCE_CONTROLS,
+    operations::GET_FRAMEWORK_POSTURE,
+    operations::LIST_EVIDENCE,
+    operations::GET_EVIDENCE,
+    operations::LIST_ENDPOINTS,
+    operations::WHO_AM_I,
+    operations::LIST_REPORTS,
+    operations::GET_REPORT,
+    operations::DOWNLOAD_REPORT,
+];
+
+/// The `/v1` operations whose scopes sign-in does not ask for.
+#[cfg(test)]
+const NOT_SIGNED_IN_OPERATIONS: &[Operation] = &[
+    // The tenant listing answers a portfolio key only, never a sign-in.
+    operations::LIST_PORTFOLIO_TENANTS,
+    // No command calls it yet: `changes:read` is not asked for until a command uses it (#268).
+    operations::LIST_CHANGES,
+];
+
+/// The scopes to ask for when the profile names none: the ones the operations in
+/// [`SIGNED_IN_OPERATIONS`] need, with a template such as `compliance.<framework>:read` standing for every scope of that
 /// shape the app offers, plus a refresh token, plus `email` when the app lists it (so `whoami` can
 /// show the address). An app that publishes no list gets the fixed ones: it may reject a scope it
 /// does not know.
@@ -52,11 +83,8 @@ const EMAIL: &str = "email";
 pub fn default_scopes(metadata: &Metadata) -> Vec<String> {
     let offered = metadata.scopes_supported.as_deref();
     let mut scopes: Vec<String> = Vec::new();
-    let needed = operations::ALL
+    let needed = SIGNED_IN_OPERATIONS
         .iter()
-        // The tenant listing answers a portfolio key only, never a sign-in: its scope is not
-        // asked for.
-        .filter(|operation| operation.id != operations::LIST_PORTFOLIO_TENANTS.id)
         .flat_map(|operation| operation.scopes.iter().copied())
         .chain([OFFLINE_ACCESS]);
     for scope in needed {
@@ -856,6 +884,23 @@ mod tests {
     }
 
     #[test]
+    fn every_api_operation_is_either_asked_for_at_sign_in_or_not() {
+        // A new operation in the API document must be placed explicitly, so it cannot widen the
+        // sign-in request by itself.
+        for operation in operations::ALL {
+            let asked = SIGNED_IN_OPERATIONS.iter().any(|o| o.id == operation.id);
+            let not_asked = NOT_SIGNED_IN_OPERATIONS
+                .iter()
+                .any(|o| o.id == operation.id);
+            assert!(
+                asked ^ not_asked,
+                "`{}` must be in exactly one of SIGNED_IN_OPERATIONS and NOT_SIGNED_IN_OPERATIONS",
+                operation.id
+            );
+        }
+    }
+
+    #[test]
     fn default_scopes_are_what_the_commands_need_among_what_the_app_offers() {
         let mut offered = metadata("https://app.example.test");
         offered.scopes_supported = Some(
@@ -917,6 +962,23 @@ mod tests {
         );
         assert_eq!(
             default_scopes(&without_email),
+            ["supply_risk:read", "offline_access"]
+        );
+
+        // An operation no command calls is not asked for, even when the app offers its scope.
+        let mut with_changes = metadata("https://app.example.test");
+        with_changes.scopes_supported = Some(
+            [
+                "supply_risk:read",
+                "changes:read",
+                "portfolio:read",
+                "offline_access",
+            ]
+            .map(str::to_owned)
+            .to_vec(),
+        );
+        assert_eq!(
+            default_scopes(&with_changes),
             ["supply_risk:read", "offline_access"]
         );
 

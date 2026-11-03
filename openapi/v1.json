@@ -2,9 +2,9 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Hodei-Shield API",
-    "version": "2026-10-26",
+    "version": "2026-10-29",
     "summary": "Third-party risk and compliance posture, for your own systems.",
-    "description": "## Versioning\n\n`/v1` is frozen. These changes are **compatible** and will happen inside it\nwithout notice:\n\n- a new operation;\n- a new **optional** query parameter;\n- a new field in a response object;\n- a new value in a field documented as an open vocabulary (`status`,\n  `severity`, `evidence_type`, the keys of `by_status`);\n- a new `error.code`, always with the HTTP status its siblings already use;\n- anything under `error.details`, which is diagnostic and not part of the\n  contract — except `error.details.code` and the keys the error table of\n  the operation names (`missing`, `licence`, `parameter`, `scope`,\n  `limit`, `window_seconds`, `retry_after_seconds`, `status`,\n  `formats`, `limit_bytes`): those are contract.\n  `error.details.code` is an OPEN vocabulary: a value, once published, keeps\n  its meaning and the HTTP status it is sent with; new values may be added.\n\nWrite your client so those do not break it: ignore unknown fields, do not\nswitch exhaustively on a documented-open vocabulary, and treat an unknown\n`error.code` as \"an error of this HTTP status\".\n\nThese changes are **incompatible** and will NOT happen inside `/v1`. They go\nto `/v2`, and `/v1` keeps serving:\n\n- removing or renaming an operation, a parameter or a field;\n- changing the type, the unit or the meaning of a field;\n- making an optional parameter required, or narrowing what one accepts;\n- changing which scope an operation requires;\n- changing the HTTP status an existing `error.code` is sent with.\n\n## Read-only\n\n`/v1` only reads. Every operation is a `GET`. Any other method (`POST`, `PUT`,\n`PATCH`, `DELETE`) on a path that exists answers **405** with `Allow: GET`, and on\na path that does not exist answers **404**: neither changes any state. A write\nwill be offered only as a new operation, which is a compatible change, once a\ncustomer asks for a concrete one.\n\n## Downloads\n\nAn operation whose success is a FILE (`GET /v1/reports/{id}/download`) answers\n**200** with the bytes, the `Content-Type` of the format asked for and\n`Content-Disposition: attachment; filename=\"…\"`; it never answers a URL to fetch\nthem from. Its errors are the same JSON envelope as everywhere else. A file that\ncannot be served as asked is a **409** with `error.details.code`: the report is\nnot ready yet (`REPORT_NOT_READY`), its content has no renderer for that format\n(`FORMAT_UNSUPPORTED`) or the file exceeds the size the operation serves\n(`FILE_TOO_LARGE`, with `limit_bytes`). Every file delivered is recorded in the\ntenant's audit trail with the credential that received it.\n\n## Authentication\n\nEvery operation takes `Authorization: Bearer <credential>`. Three credentials\nexist:\n\n- a **tenant API key** (`hsk_…`): belongs to ONE tenant and carries an\n  explicit list of scopes; it can read nothing outside that tenant, whatever it\n  asks for;\n- a user's **OAuth access token** (`hs_at_…`): one user, ONE tenant chosen\n  at consent, read scopes only;\n- an MSSP **portfolio key** (`hsp_…`): held by a managed security service\n  provider, it reads ANY of its client tenants, ONE per request, selected with\n  the request header `X-HS-Tenant: <tenant id>` (a UUID, never a slug).\n  `GET /v1/portfolio/tenants` lists the tenants it may select. Read-only, with\n  a mandatory expiry. A tenant outside the key's portfolio answers **404**\n  (`error.details.code: \"TENANT_NOT_FOUND\"`), exactly as one that does not\n  exist.\n\nEvery successful (2xx) answer of a data operation carries `X-HS-Tenant` with\nthe id of the tenant whose data the body holds, for every credential; no error\ncarries it. A tenant API key or OAuth token may send `X-HS-Tenant` only with\nits own tenant's id; any other value is a **400**\n(`TENANT_SELECTOR_NOT_SUPPORTED`).\n\nEach operation below declares the scope it requires. A credential that\nauthenticates but lacks the scope is answered **403**\n(`error.details.code: \"INSUFFICIENT_SCOPE\"`), never 404: you are told what you\nare missing, not that the resource does not exist.\n\n## Errors\n\nEvery error has the same body:\n\n```json\n{ \"error\": { \"code\": \"forbidden\", \"message\": \"…\", \"request_id\": \"…\" } }\n```\n\nBranch on `code`, log `request_id`, show `message` to nobody but yourself.\n`request_id` is also the `X-Request-Id` response header, and it is what\nsupport will ask you for.\n\n## Rate limits\n\nEvery response that got past authentication carries the limit that is closest\nto being exhausted:\n\n- `RateLimit-Limit` — requests allowed in the window;\n- `RateLimit-Remaining` — requests left in the current window;\n- `RateLimit-Reset` — **seconds** until the window renews;\n- `RateLimit-Policy` — `<limit>;w=<window seconds>`.\n\nThree limits apply, each per one-minute window: per API key, per organisation\n(all of its keys together) and per service. The first two come from the licence\nof the organisation the key belongs to: a higher licence tier has more room, and\nan MSSP partner has more than a direct customer of the same tier. Read the\ncurrent limit from `RateLimit-Limit` and `RateLimit-Policy` rather than\nhard-coding it. When one is exhausted the answer is\n**429** with `error.code: \"rate_limited\"`, `Retry-After` (seconds) and\n`error.details.scope` (`key`, `tenant` or `service`) saying which. A\nportfolio key is limited per key (`portfolio_key`), per provider across all\nits portfolio keys (`portfolio_org`) and per service; once the selected tenant\nis known to be in its portfolio, the client tenant's own limit (`tenant`) and\nthe provider's share of it (`portfolio_tenant`) apply too. Your\norganisation's usage never counts against another's. Windows are fixed, so a\nclient can burst up to twice the limit across a window boundary: back off on\n`Retry-After` rather than pacing to the second. The limits are part of the\nservice, not of the frozen contract: they may be raised without notice.\n\n## Pagination, filtering and ordering\n\nEvery collection takes `page` and `per_page` (max 200) and answers with a\n`pagination` object carrying `total` and `total_pages`. Every collection\ntakes `sort` (an enum of the fields THAT collection can order by) and\n`order` (`asc`/`desc`, default `desc`). Filters are exact matches unless\nthe parameter says otherwise. A parameter or field with a known vocabulary lists\nit in `x-hs-known-values` (an OpenAPI extension, not a JSON Schema `enum`: the\nserver still accepts what it accepted before). Values retired from a parameter\nare listed in `x-hs-deprecated-values`, with the date until which the server is\ndocumented to accept them in `x-hs-deprecated-values-sunset`.\n\n## Contract changes\n\nCorrections and additions to the published contract, newest first. They ship\nwith the contract version (`info.version`) named in each entry. Detect a\ncapability by the operation, not by this string: the portfolio contract is\npresent when `GET /v1` lists `listPortfolioTenants`.\n\n- **2026-10-26 — change: `user.email` on `GET /v1/me` needs the `email` scope.**\n  The OAuth scope `email` is new. `user.email` is returned only to an access\n  token that carries it, and is omitted otherwise: `user` still names the\n  signed-in user by `id` and `name`. A client that shows the email asks for\n  `email` at authorization; the consent screen lists it. The call is never refused\n  for a missing `email` scope. A client that decoded `user.email` as required\n  must treat it as optional.\n\n- **2026-10-24 — correction: `beta` on `GET /v1/me` is the tenant's own.** For\n  a client tenant of an MSSP whose own organisation is not in a running beta, `beta`\n  is `active`, `running: true` and `ends_at: null` while the MSSP's beta runs\n  (it is what lifts the client's access), and `null` otherwise: the MSSP's end date\n  and whether its beta ended or converted are not the client's to read. The tenant's\n  own organisation's beta is described as before. No field was added or removed.\n\n- **2026-10-21 — addition: `user` on `GET /v1/me`.** The `whoAmI` answer gains\n  a nullable `user` object (`id`, `name`, `email`): the signed-in user of an\n  OAuth access token (`hs_at_…`), so a client can show who is logged in. It is the\n  caller's own data only, never another user's. It is `null` for a tenant API key\n  and for a portfolio key. Nothing existing was removed, renamed or re-statused.\n\n- **2026-10-20 — addition: `beta` on `GET /v1/me`.** The `whoAmI` answer gains\n  a nullable `beta` object (`status`, `running`, `ends_at`): the beta of the\n  tenant's own organisation, so a client can show when it ends. It is `null` for an\n  organisation that never joined the beta and for a portfolio key; a beta inherited\n  from a parent MSSP is not described. Nothing existing was removed, renamed or\n  re-statused.\n\n- **2026-10-19 — addition: reports.** `GET /v1/reports` (`listReports`),\n  `GET /v1/reports/{id}` (`getReport`) and\n  `GET /v1/reports/{id}/download` (`downloadReport`), all under the scope\n  `reports:read`. The download is the contract's first non-JSON success: a\n  PDF or XLSX file as an attachment (see Downloads). A new `error.code`,\n  `conflict` (**409**), answered only by the download, with three new\n  `error.details.code` values (`REPORT_NOT_READY`, `FORMAT_UNSUPPORTED`,\n  `FILE_TOO_LARGE`). Nothing existing was removed, renamed or re-statused.\n\n- **2026-10-18 — addition: known values for four filters.** `GET /v1/risks`\n  `domain` and `status`, `GET /v1/compliance/controls` `status` and the\n  `vendor_type` field of `GET /v1/vendors` now list their vocabulary in\n  `x-hs-known-values`, taken from the lists the platform validates against.\n  They stay open: a value outside the list is still accepted and matches exactly,\n  as before. `GET /v1/vendors` `category` is free text with no closed\n  vocabulary, and its description now says so. Nothing existing was removed,\n  renamed or re-statused.\n\n- **2026-10-17 — addition: `GET /v1/me`.** The operation `whoAmI` describes the\n  calling credential: its type and scopes, the tenant (id, name) and organisation it\n  reads, or, for a portfolio key, the MSSP organisation and how many tenants it can\n  reach. Any valid credential may call it and it requires no scope; it uses the same\n  authentication and rate limits as every other operation, and refuses\n  `X-HS-Tenant`. Nothing existing was removed, renamed or re-statused.\n\n- **2026-10-16 — addition: MSSP portfolio keys.** A third credential, the\n  portfolio key (`hsp_…`); the operation `GET /v1/portfolio/tenants`\n  (`listPortfolioTenants`, scope `portfolio:read`); the optional request\n  header `X-HS-Tenant` on every data operation, echoed on every 2xx answer of\n  them for every credential, with `Vary: X-HS-Tenant`;\n  `error.details.code` becomes contract (`TENANT_HEADER_INVALID`,\n  `TENANT_REQUIRED`, `TENANT_SELECTOR_NOT_SUPPORTED`, `TENANT_NOT_FOUND`,\n  `INSUFFICIENT_SCOPE`, `LICENCE_INACTIVE`), and every scope 403 now carries\n  `INSUFFICIENT_SCOPE`; three new 429 `details.scope` values\n  (`portfolio_key`, `portfolio_org`, `portfolio_tenant`). Nothing existing\n  was removed, renamed or re-statused.\n\n- **2026-10-16 — correction: alert `severity` is English.** `GET /v1/alerts`\n  and `GET /v1/alerts/{id}` returned `severity` as stored, in Spanish\n  (`critico`, `alto`, `medio`, `bajo`, `info`), while this document\n  promised `critical | high | medium | low`. They now return `critical`,\n  `high`, `medium`, `low` and `info` (`info` is added to the documented\n  values). **This changes what an integrator who adapted to the Spanish values\n  receives.** The `severity` filter accepts both the English values and the\n  Spanish ones; the Spanish ones are documented as accepted until\n  **2027-01-14** (90 days after this version), so switch to the English ones\n  before then. A value outside both lists is still matched exactly and matches\n  nothing. `GET /v1/risks`: the descriptions of `domain` and `status` named\n  values that do not exist; they now list the real ones (no value changed).",
+    "description": "## Versioning\n\n`/v1` is frozen. These changes are **compatible** and will happen inside it\nwithout notice:\n\n- a new operation;\n- a new **optional** query parameter;\n- a new field in a response object;\n- a new value in a field documented as an open vocabulary (`status`,\n  `severity`, `evidence_type`, the keys of `by_status`);\n- a new `error.code`, always with the HTTP status its siblings already use;\n- anything under `error.details`, which is diagnostic and not part of the\n  contract — except `error.details.code` and the keys the error table of\n  the operation names (`missing`, `licence`, `parameter`, `scope`,\n  `limit`, `window_seconds`, `retry_after_seconds`, `status`,\n  `formats`, `limit_bytes`): those are contract.\n  `error.details.code` is an OPEN vocabulary: a value, once published, keeps\n  its meaning and the HTTP status it is sent with; new values may be added.\n\nWrite your client so those do not break it: ignore unknown fields, do not\nswitch exhaustively on a documented-open vocabulary, and treat an unknown\n`error.code` as \"an error of this HTTP status\".\n\nThese changes are **incompatible** and will NOT happen inside `/v1`. They go\nto `/v2`, and `/v1` keeps serving:\n\n- removing or renaming an operation, a parameter or a field;\n- changing the type, the unit or the meaning of a field;\n- making an optional parameter required, or narrowing what one accepts;\n- changing which scope an operation requires;\n- changing the HTTP status an existing `error.code` is sent with.\n\n## Read-only\n\n`/v1` only reads. Every operation is a `GET`. Any other method (`POST`, `PUT`,\n`PATCH`, `DELETE`) on a path that exists answers **405** with `Allow: GET`, and on\na path that does not exist answers **404**: neither changes any state. A write\nwill be offered only as a new operation, which is a compatible change, once a\ncustomer asks for a concrete one.\n\n## Downloads\n\nAn operation whose success is a FILE (`GET /v1/reports/{id}/download`) answers\n**200** with the bytes, the `Content-Type` of the format asked for and\n`Content-Disposition: attachment; filename=\"…\"`; it never answers a URL to fetch\nthem from. Its errors are the same JSON envelope as everywhere else. A file that\ncannot be served as asked is a **409** with `error.details.code`: the report is\nnot ready yet (`REPORT_NOT_READY`), its content has no renderer for that format\n(`FORMAT_UNSUPPORTED`) or the file exceeds the size the operation serves\n(`FILE_TOO_LARGE`, with `limit_bytes`). Every file delivered is recorded in the\ntenant's audit trail with the credential that received it.\n\n## Authentication\n\nEvery operation takes `Authorization: Bearer <credential>`. Three credentials\nexist:\n\n- a **tenant API key** (`hsk_…`): belongs to ONE tenant and carries an\n  explicit list of scopes; it can read nothing outside that tenant, whatever it\n  asks for;\n- a user's **OAuth access token** (`hs_at_…`): one user, ONE tenant chosen\n  at consent, read scopes only;\n- an MSSP **portfolio key** (`hsp_…`): held by a managed security service\n  provider, it reads ANY of its client tenants, ONE per request, selected with\n  the request header `X-HS-Tenant: <tenant id>` (a UUID, never a slug).\n  `GET /v1/portfolio/tenants` lists the tenants it may select. Read-only, with\n  a mandatory expiry. A tenant outside the key's portfolio answers **404**\n  (`error.details.code: \"TENANT_NOT_FOUND\"`), exactly as one that does not\n  exist.\n\nEvery successful (2xx) answer of a data operation carries `X-HS-Tenant` with\nthe id of the tenant whose data the body holds, for every credential; no error\ncarries it. A tenant API key or OAuth token may send `X-HS-Tenant` only with\nits own tenant's id; any other value is a **400**\n(`TENANT_SELECTOR_NOT_SUPPORTED`).\n\nEach operation below declares the scope it requires. A credential that\nauthenticates but lacks the scope is answered **403**\n(`error.details.code: \"INSUFFICIENT_SCOPE\"`), never 404: you are told what you\nare missing, not that the resource does not exist.\n\nA scope is not enough on its own: the module it names (`supply_risk`,\n`compliance.nis2`, `endpoints`, …) must also be active for the tenant read\n— the credential's own, or the one a portfolio key selected — at the time of the\nrequest; a compliance framework (`compliance.<framework>`) must also be\nactivated for the tenant, as in the console. When it is not (the plan changed,\nthe module was turned off, or the framework was never activated) the\nanswer is **403** with `error.details.code: \"MODULE_NOT_ENTITLED\"`,\n`error.details.scopes` naming the scopes concerned and `error.details.modules`\nthe modules the tenant lacks, for every credential; when the module is in the\nplan but a compliance framework is not activated, `error.details.frameworks`\nnames those frameworks (`nis2`, …). A new key does not help; the module has to\nbe active again.\n\n## Errors\n\nEvery error has the same body:\n\n```json\n{ \"error\": { \"code\": \"forbidden\", \"message\": \"…\", \"request_id\": \"…\" } }\n```\n\nBranch on `code`, log `request_id`, show `message` to nobody but yourself.\n`request_id` is also the `X-Request-Id` response header, and it is what\nsupport will ask you for.\n\n## Rate limits\n\nEvery response that got past authentication carries the limit that is closest\nto being exhausted:\n\n- `RateLimit-Limit` — requests allowed in the window;\n- `RateLimit-Remaining` — requests left in the current window;\n- `RateLimit-Reset` — **seconds** until the window renews;\n- `RateLimit-Policy` — `<limit>;w=<window seconds>`.\n\nThree limits apply, each per one-minute window: per API key, per organisation\n(all of its keys together) and per service. The first two come from the licence\nof the organisation the key belongs to: a higher licence tier has more room, and\nan MSSP partner has more than a direct customer of the same tier. Read the\ncurrent limit from `RateLimit-Limit` and `RateLimit-Policy` rather than\nhard-coding it. When one is exhausted the answer is\n**429** with `error.code: \"rate_limited\"`, `Retry-After` (seconds) and\n`error.details.scope` (`key`, `tenant` or `service`) saying which. A\nportfolio key is limited per key (`portfolio_key`), per provider across all\nits portfolio keys (`portfolio_org`) and per service; once the selected tenant\nis known to be in its portfolio, the client tenant's own limit (`tenant`) and\nthe provider's share of it (`portfolio_tenant`) apply too. Your\norganisation's usage never counts against another's. Windows are fixed, so a\nclient can burst up to twice the limit across a window boundary: back off on\n`Retry-After` rather than pacing to the second. The limits are part of the\nservice, not of the frozen contract: they may be raised without notice.\n\n## Pagination, filtering and ordering\n\nEvery collection takes `page` and `per_page` (max 200) and answers with a\n`pagination` object carrying `total` and `total_pages`. Every collection\ntakes `sort` (an enum of the fields THAT collection can order by) and\n`order` (`asc`/`desc`, default `desc`). Filters are exact matches unless\nthe parameter says otherwise. A parameter or field with a known vocabulary lists\nit in `x-hs-known-values` (an OpenAPI extension, not a JSON Schema `enum`: the\nserver still accepts what it accepted before; a value outside the list is served as sent and flagged by `meta.warnings` and the `X-HS-Unknown-Filter` header). Values retired from a parameter\nare listed in `x-hs-deprecated-values`, with the date until which the server is\ndocumented to accept them in `x-hs-deprecated-values-sunset`.\n\n## Contract changes\n\nCorrections and additions to the published contract, newest first. They ship\nwith the contract version (`info.version`) named in each entry. Detect a\ncapability by the operation, not by this string: the portfolio contract is\npresent when `GET /v1` lists `listPortfolioTenants`.\n\n- **2026-10-29 — addition: a warning when a filter value is not a published one.**\n  `GET /v1/alerts` `severity`, `GET /v1/risks` `domain` and `status` and\n  `GET /v1/compliance/controls` `status` match exactly, so a mistyped value\n  (`severity=critcal`) used to return an empty list that looked like \"no results\".\n  The request is still served as sent, with status **200** and the same items: no\n  parameter is narrowed. When the value is outside the parameter's\n  `x-hs-known-values`, the answer now also carries the optional body key\n  `meta.warnings[]` (`param`, `value`, `known`) and the response header\n  `X-HS-Unknown-Filter`, which names the parameter(s). Both are absent when\n  every filter value is a published one, and the retired Spanish `severity`\n  values inside their notice window raise no warning. `GET /v1/vendors`\n  `category` is free text with no vocabulary and is not checked. Nothing\n  existing was removed, renamed or re-statused.\n\n- **2026-10-27 — correction: a scope needs its module active.** A tenant API key\n  or a portfolio key was served on its scope alone, even when the tenant read no\n  longer had that scope's module active; an OAuth access token already was not.\n  Every credential now gets **403** with `error.details.code`\n  `MODULE_NOT_ENTITLED`, `error.details.scopes` and `error.details.modules`\n  (the module ids the tenant lacks) in that case (a new `error.details.code`\n  value), plus `error.details.frameworks` when a compliance framework is\n  entitled but not activated. A `compliance.<framework>` scope also needs\n  the framework ACTIVATED for the tenant, not only included in its plan; an OAuth\n  token no longer carries a compliance scope whose framework is not activated. **This changes what such a request receives:**\n  it was a 200. `GET /v1/me` needs no scope and is unaffected. The same version\n  adds the operation `listChanges` (`GET /v1/changes`, scope `changes:read`,\n  read-only), the change-management register, served once at least one compliance\n  framework is ACTIVATED for the tenant. Nothing else was removed, renamed or\n  re-statused.\n\n- **2026-10-26 — change: `user.email` on `GET /v1/me` needs the `email` scope.**\n  The OAuth scope `email` is new. `user.email` is returned only to an access\n  token that carries it, and is omitted otherwise: `user` still names the\n  signed-in user by `id` and `name`. A client that shows the email asks for\n  `email` at authorization; the consent screen lists it. The call is never refused\n  for a missing `email` scope. A client that decoded `user.email` as required\n  must treat it as optional.\n\n- **2026-10-24 — correction: `beta` on `GET /v1/me` is the tenant's own.** For\n  a client tenant of an MSSP whose own organisation is not in a running beta, `beta`\n  is `active`, `running: true` and `ends_at: null` while the MSSP's beta runs\n  (it is what lifts the client's access), and `null` otherwise: the MSSP's end date\n  and whether its beta ended or converted are not the client's to read. The tenant's\n  own organisation's beta is described as before. No field was added or removed.\n\n- **2026-10-21 — addition: `user` on `GET /v1/me`.** The `whoAmI` answer gains\n  a nullable `user` object (`id`, `name`, `email`): the signed-in user of an\n  OAuth access token (`hs_at_…`), so a client can show who is logged in. It is the\n  caller's own data only, never another user's. It is `null` for a tenant API key\n  and for a portfolio key. Nothing existing was removed, renamed or re-statused.\n\n- **2026-10-20 — addition: `beta` on `GET /v1/me`.** The `whoAmI` answer gains\n  a nullable `beta` object (`status`, `running`, `ends_at`): the beta of the\n  tenant's own organisation, so a client can show when it ends. It is `null` for an\n  organisation that never joined the beta and for a portfolio key; a beta inherited\n  from a parent MSSP is not described. Nothing existing was removed, renamed or\n  re-statused.\n\n- **2026-10-19 — addition: reports.** `GET /v1/reports` (`listReports`),\n  `GET /v1/reports/{id}` (`getReport`) and\n  `GET /v1/reports/{id}/download` (`downloadReport`), all under the scope\n  `reports:read`. The download is the contract's first non-JSON success: a\n  PDF or XLSX file as an attachment (see Downloads). A new `error.code`,\n  `conflict` (**409**), answered only by the download, with three new\n  `error.details.code` values (`REPORT_NOT_READY`, `FORMAT_UNSUPPORTED`,\n  `FILE_TOO_LARGE`). Nothing existing was removed, renamed or re-statused.\n\n- **2026-10-18 — addition: known values for four filters.** `GET /v1/risks`\n  `domain` and `status`, `GET /v1/compliance/controls` `status` and the\n  `vendor_type` field of `GET /v1/vendors` now list their vocabulary in\n  `x-hs-known-values`, taken from the lists the platform validates against.\n  They stay open: a value outside the list is still accepted and matches exactly,\n  as before. `GET /v1/vendors` `category` is free text with no closed\n  vocabulary, and its description now says so. Nothing existing was removed,\n  renamed or re-statused.\n\n- **2026-10-17 — addition: `GET /v1/me`.** The operation `whoAmI` describes the\n  calling credential: its type and scopes, the tenant (id, name) and organisation it\n  reads, or, for a portfolio key, the MSSP organisation and how many tenants it can\n  reach. Any valid credential may call it and it requires no scope; it uses the same\n  authentication and rate limits as every other operation, and refuses\n  `X-HS-Tenant`. Nothing existing was removed, renamed or re-statused.\n\n- **2026-10-16 — addition: MSSP portfolio keys.** A third credential, the\n  portfolio key (`hsp_…`); the operation `GET /v1/portfolio/tenants`\n  (`listPortfolioTenants`, scope `portfolio:read`); the optional request\n  header `X-HS-Tenant` on every data operation, echoed on every 2xx answer of\n  them for every credential, with `Vary: X-HS-Tenant`;\n  `error.details.code` becomes contract (`TENANT_HEADER_INVALID`,\n  `TENANT_REQUIRED`, `TENANT_SELECTOR_NOT_SUPPORTED`, `TENANT_NOT_FOUND`,\n  `INSUFFICIENT_SCOPE`, `LICENCE_INACTIVE`), and every scope 403 now carries\n  `INSUFFICIENT_SCOPE`; three new 429 `details.scope` values\n  (`portfolio_key`, `portfolio_org`, `portfolio_tenant`). Nothing existing\n  was removed, renamed or re-statused.\n\n- **2026-10-16 — correction: alert `severity` is English.** `GET /v1/alerts`\n  and `GET /v1/alerts/{id}` returned `severity` as stored, in Spanish\n  (`critico`, `alto`, `medio`, `bajo`, `info`), while this document\n  promised `critical | high | medium | low`. They now return `critical`,\n  `high`, `medium`, `low` and `info` (`info` is added to the documented\n  values). **This changes what an integrator who adapted to the Spanish values\n  receives.** The `severity` filter accepts both the English values and the\n  Spanish ones; the Spanish ones are documented as accepted until\n  **2027-01-14** (90 days after this version), so switch to the English ones\n  before then. A value outside both lists is still matched exactly and matches\n  nothing. `GET /v1/risks`: the descriptions of `domain` and `status` named\n  values that do not exist; they now list the real ones (no value changed).",
     "contact": {
       "name": "Hodeitek S.L.",
       "url": "https://hodeishield.com"
@@ -42,6 +42,9 @@
     },
     {
       "name": "reports"
+    },
+    {
+      "name": "changes"
     }
   ],
   "paths": {
@@ -417,7 +420,7 @@
             }
           },
           "403": {
-            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which). Re-authenticating does not help with the second.",
+            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which). Re-authenticating does not help with the last two.",
             "content": {
               "application/json": {
                 "schema": {
@@ -767,7 +770,7 @@
             }
           },
           "403": {
-            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which). Re-authenticating does not help with the second.",
+            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which). Re-authenticating does not help with the last two.",
             "content": {
               "application/json": {
                 "schema": {
@@ -962,7 +965,7 @@
             "name": "severity",
             "in": "query",
             "required": false,
-            "description": "Exact severity match, in the vocabulary the response uses (critical | high | medium | low | info). The legacy Spanish values (critico, alto, medio, bajo, info) are still accepted and mean the same; they are documented as accepted until 2027-01-14, so move to the English ones.",
+            "description": "Exact severity match, in the vocabulary the response uses (critical | high | medium | low | info). The legacy Spanish values (critico, alto, medio, bajo, info) are still accepted and mean the same; they are documented as accepted until 2027-01-14, so move to the English ones. Any other value is matched exactly and matches nothing, and the answer then carries a `meta.warnings` entry and the `X-HS-Unknown-Filter` header.",
             "schema": {
               "x-hs-known-values": [
                 "critical",
@@ -1063,6 +1066,12 @@
                 "schema": {
                   "type": "string",
                   "format": "uuid"
+                }
+              },
+              "X-HS-Unknown-Filter": {
+                "description": "Present only when a filter value is outside the parameter’s published `x-hs-known-values`: the name(s) of the parameter(s), comma-separated (for example `severity, status`). The request was served as sent, so the list is usually empty; the same entries are in `meta.warnings`. Absent when every filter value is a published one.",
+                "schema": {
+                  "type": "string"
                 }
               }
             },
@@ -1227,6 +1236,47 @@
                         "next_cursor"
                       ],
                       "additionalProperties": false
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "warnings": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "param": {
+                                "type": "string",
+                                "description": "The query parameter whose value is not in the published list."
+                              },
+                              "value": {
+                                "type": "string",
+                                "description": "The value as sent."
+                              },
+                              "known": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                },
+                                "description": "The published values of the parameter (its `x-hs-known-values`)."
+                              }
+                            },
+                            "required": [
+                              "param",
+                              "value",
+                              "known"
+                            ],
+                            "additionalProperties": false,
+                            "description": "A filter value outside the published vocabulary. The request was served as sent."
+                          },
+                          "description": "One entry per filter whose value is not a published value. The list is still filtered by the value as sent (so it is usually empty); the same parameters are named in the `X-HS-Unknown-Filter` response header."
+                        }
+                      },
+                      "required": [
+                        "warnings"
+                      ],
+                      "additionalProperties": false,
+                      "description": "Present only when at least one filter value is outside its published list; omitted otherwise."
                     }
                   },
                   "required": [
@@ -1259,7 +1309,7 @@
             }
           },
           "403": {
-            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which). Re-authenticating does not help with the second.",
+            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which). Re-authenticating does not help with the last two.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1583,7 +1633,7 @@
             }
           },
           "403": {
-            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which). Re-authenticating does not help with the second.",
+            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which). Re-authenticating does not help with the last two.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1756,7 +1806,7 @@
             "name": "status",
             "in": "query",
             "required": false,
-            "description": "Exact status match. Known values: identified, assessed, treatment_planned, treatment_implemented, closed. Open vocabulary: any other value is matched exactly and matches nothing.",
+            "description": "Exact status match. Known values: identified, assessed, treatment_planned, treatment_implemented, closed. Open vocabulary: any other value is matched exactly and matches nothing, and the answer then carries a `meta.warnings` entry and the `X-HS-Unknown-Filter` header.",
             "schema": {
               "x-hs-known-values": [
                 "identified",
@@ -1774,7 +1824,7 @@
             "name": "domain",
             "in": "query",
             "required": false,
-            "description": "Exact domain match. Known values: vendor, cyber, data, operational, compliance, concentration, strategic, legal, financial, reputational. Open vocabulary: any other value is matched exactly and matches nothing.",
+            "description": "Exact domain match. Known values: vendor, cyber, data, operational, compliance, concentration, strategic, legal, financial, reputational. Open vocabulary: any other value is matched exactly and matches nothing, and the answer then carries a `meta.warnings` entry and the `X-HS-Unknown-Filter` header.",
             "schema": {
               "x-hs-known-values": [
                 "vendor",
@@ -1862,6 +1912,12 @@
                 "schema": {
                   "type": "string",
                   "format": "uuid"
+                }
+              },
+              "X-HS-Unknown-Filter": {
+                "description": "Present only when a filter value is outside the parameter’s published `x-hs-known-values`: the name(s) of the parameter(s), comma-separated (for example `severity, status`). The request was served as sent, so the list is usually empty; the same entries are in `meta.warnings`. Absent when every filter value is a published one.",
+                "schema": {
+                  "type": "string"
                 }
               }
             },
@@ -2109,6 +2165,47 @@
                         "total_pages"
                       ],
                       "additionalProperties": false
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "warnings": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "param": {
+                                "type": "string",
+                                "description": "The query parameter whose value is not in the published list."
+                              },
+                              "value": {
+                                "type": "string",
+                                "description": "The value as sent."
+                              },
+                              "known": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                },
+                                "description": "The published values of the parameter (its `x-hs-known-values`)."
+                              }
+                            },
+                            "required": [
+                              "param",
+                              "value",
+                              "known"
+                            ],
+                            "additionalProperties": false,
+                            "description": "A filter value outside the published vocabulary. The request was served as sent."
+                          },
+                          "description": "One entry per filter whose value is not a published value. The list is still filtered by the value as sent (so it is usually empty); the same parameters are named in the `X-HS-Unknown-Filter` response header."
+                        }
+                      },
+                      "required": [
+                        "warnings"
+                      ],
+                      "additionalProperties": false,
+                      "description": "Present only when at least one filter value is outside its published list; omitted otherwise."
                     }
                   },
                   "required": [
@@ -2141,7 +2238,7 @@
             }
           },
           "403": {
-            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which). Re-authenticating does not help with the second.",
+            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which). Re-authenticating does not help with the last two.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2553,7 +2650,7 @@
             }
           },
           "403": {
-            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which). Re-authenticating does not help with the second.",
+            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which). Re-authenticating does not help with the last two.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2733,7 +2830,7 @@
             "name": "status",
             "in": "query",
             "required": false,
-            "description": "Exact status match. Known values: covered, partial, missing. Open vocabulary: any other value is matched exactly and matches nothing.",
+            "description": "Exact status match. Known values: covered, partial, missing. Open vocabulary: any other value is matched exactly and matches nothing, and the answer then carries a `meta.warnings` entry and the `X-HS-Unknown-Filter` header.",
             "schema": {
               "x-hs-known-values": [
                 "covered",
@@ -2792,6 +2889,12 @@
                 "schema": {
                   "type": "string",
                   "format": "uuid"
+                }
+              },
+              "X-HS-Unknown-Filter": {
+                "description": "Present only when a filter value is outside the parameter’s published `x-hs-known-values`: the name(s) of the parameter(s), comma-separated (for example `severity, status`). The request was served as sent, so the list is usually empty; the same entries are in `meta.warnings`. Absent when every filter value is a published one.",
+                "schema": {
+                  "type": "string"
                 }
               }
             },
@@ -2883,6 +2986,47 @@
                         "total_pages"
                       ],
                       "additionalProperties": false
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "warnings": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "param": {
+                                "type": "string",
+                                "description": "The query parameter whose value is not in the published list."
+                              },
+                              "value": {
+                                "type": "string",
+                                "description": "The value as sent."
+                              },
+                              "known": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                },
+                                "description": "The published values of the parameter (its `x-hs-known-values`)."
+                              }
+                            },
+                            "required": [
+                              "param",
+                              "value",
+                              "known"
+                            ],
+                            "additionalProperties": false,
+                            "description": "A filter value outside the published vocabulary. The request was served as sent."
+                          },
+                          "description": "One entry per filter whose value is not a published value. The list is still filtered by the value as sent (so it is usually empty); the same parameters are named in the `X-HS-Unknown-Filter` response header."
+                        }
+                      },
+                      "required": [
+                        "warnings"
+                      ],
+                      "additionalProperties": false,
+                      "description": "Present only when at least one filter value is outside its published list; omitted otherwise."
                     }
                   },
                   "required": [
@@ -2915,7 +3059,7 @@
             }
           },
           "403": {
-            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which). Re-authenticating does not help with the second.",
+            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which). Re-authenticating does not help with the last two.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3169,7 +3313,7 @@
             }
           },
           "403": {
-            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which). Re-authenticating does not help with the second.",
+            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which). Re-authenticating does not help with the last two.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3589,7 +3733,7 @@
             }
           },
           "403": {
-            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which). Re-authenticating does not help with the second.",
+            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which). Re-authenticating does not help with the last two.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3888,7 +4032,7 @@
             }
           },
           "403": {
-            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which). Re-authenticating does not help with the second.",
+            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which). Re-authenticating does not help with the last two.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4277,7 +4421,7 @@
             }
           },
           "403": {
-            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which). Re-authenticating does not help with the second.",
+            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which). Re-authenticating does not help with the last two.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4619,7 +4763,7 @@
             }
           },
           "403": {
-            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which). Re-authenticating does not help with the second.",
+            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which). Re-authenticating does not help with the last two.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5002,7 +5146,7 @@
             }
           },
           "403": {
-            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which). Re-authenticating does not help with the second.",
+            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which). Re-authenticating does not help with the last two.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5388,7 +5532,7 @@
             }
           },
           "403": {
-            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which). Re-authenticating does not help with the second.",
+            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which). Re-authenticating does not help with the last two.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5672,7 +5816,7 @@
             }
           },
           "403": {
-            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which). Re-authenticating does not help with the second.",
+            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which). Re-authenticating does not help with the last two.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5929,7 +6073,7 @@
             }
           },
           "403": {
-            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which). Re-authenticating does not help with the second.",
+            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which). Re-authenticating does not help with the last two.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6044,6 +6188,536 @@
           ]
         }
       }
+    },
+    "/v1/changes": {
+      "get": {
+        "operationId": "listChanges",
+        "summary": "List change requests",
+        "description": "The tenant's change-management register: status, type, risk, planned and carried-out dates, the review outcome and how many approval decisions each change holds. Read only; free text and people are not published.\n\nRequired scope: `changes:read`. Published in `/v1` since 2026-10-27.",
+        "tags": [
+          "changes"
+        ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "description": "1-based page number. Defaults to 1.",
+            "schema": {
+              "default": 1,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "required": false,
+            "description": "Items per page, 1..200. Defaults to 50.",
+            "schema": {
+              "default": 50,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "description": "Field to order by. One of: created_at, planned_start_at, implemented_at.",
+            "schema": {
+              "default": "created_at",
+              "type": "string",
+              "enum": [
+                "created_at",
+                "planned_start_at",
+                "implemented_at"
+              ]
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "required": false,
+            "description": "Sort direction. Defaults to desc.",
+            "schema": {
+              "default": "desc",
+              "type": "string",
+              "enum": [
+                "asc",
+                "desc"
+              ]
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "description": "Exact status match.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "draft",
+                "submitted",
+                "approved",
+                "rejected",
+                "scheduled",
+                "implementing",
+                "implemented",
+                "failed",
+                "rolled_back",
+                "in_review",
+                "closed",
+                "cancelled"
+              ]
+            }
+          },
+          {
+            "name": "change_type",
+            "in": "query",
+            "required": false,
+            "description": "Exact type match.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "normal",
+                "emergency"
+              ]
+            }
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "required": false,
+            "description": "Exact category match.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "infrastructure",
+                "application",
+                "configuration",
+                "access",
+                "vendor",
+                "other"
+              ]
+            }
+          },
+          {
+            "name": "created_from",
+            "in": "query",
+            "required": false,
+            "description": "Only changes created on or after this `YYYY-MM-DD` (UTC).",
+            "schema": {
+              "type": "string",
+              "format": "date",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+            }
+          },
+          {
+            "name": "created_to",
+            "in": "query",
+            "required": false,
+            "description": "Only changes created on or before this `YYYY-MM-DD` (UTC).",
+            "schema": {
+              "type": "string",
+              "format": "date",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+            }
+          },
+          {
+            "name": "X-HS-Tenant",
+            "in": "header",
+            "required": false,
+            "description": "The tenant to read, as its id (a UUID, any case). REQUIRED with a portfolio key (`hsp_…`); with a tenant API key or an OAuth token, optional and accepted only when it equals the credential’s own tenant. Never a slug.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "headers": {
+              "RateLimit-Limit": {
+                "description": "Requests allowed in the window that is closest to being exhausted.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              },
+              "RateLimit-Remaining": {
+                "description": "Requests left in that window.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "RateLimit-Reset": {
+                "description": "Seconds until that window renews.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "`<limit>;w=<window seconds>`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-HS-Tenant": {
+                "description": "The id (lowercase UUID) of the tenant whose data this body holds, for every credential. Present on every 2xx answer of a data operation and on no error. A client that selected a tenant must refuse a 2xx whose echo is missing or different.",
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$schema": "https://json-schema.org/draft/2020-12/schema",
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "format": "uuid",
+                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                          },
+                          "ref": {
+                            "type": "string",
+                            "description": "Human reference, `CHG-<year>-<number>`, unique per tenant."
+                          },
+                          "title": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "draft",
+                              "submitted",
+                              "approved",
+                              "rejected",
+                              "scheduled",
+                              "implementing",
+                              "implemented",
+                              "failed",
+                              "rolled_back",
+                              "in_review",
+                              "closed",
+                              "cancelled"
+                            ]
+                          },
+                          "change_type": {
+                            "type": "string",
+                            "enum": [
+                              "normal",
+                              "emergency"
+                            ],
+                            "description": "`emergency` may be carried out before approval."
+                          },
+                          "category": {
+                            "type": "string",
+                            "enum": [
+                              "infrastructure",
+                              "application",
+                              "configuration",
+                              "access",
+                              "vendor",
+                              "other"
+                            ]
+                          },
+                          "risk_level": {
+                            "type": "string",
+                            "enum": [
+                              "low",
+                              "medium",
+                              "high"
+                            ]
+                          },
+                          "planned_start_at": {
+                            "description": "RFC 3339, UTC.",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "planned_end_at": {
+                            "description": "RFC 3339, UTC.",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "implemented_at": {
+                            "description": "RFC 3339, UTC.",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "closed_at": {
+                            "description": "RFC 3339, UTC.",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "outcome": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": [
+                                  "successful",
+                                  "failed",
+                                  "rolled_back"
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ],
+                            "description": "Set by the post-change review."
+                          },
+                          "approved_without_second_person": {
+                            "type": "boolean",
+                            "description": "True when four-eyes approval was waived because the tenant has a single administrator."
+                          },
+                          "external_ref": {
+                            "description": "Reference in an external ITSM, when linked.",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "approvals": {
+                            "type": "object",
+                            "properties": {
+                              "approved": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "rejected": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              }
+                            },
+                            "required": [
+                              "approved",
+                              "rejected"
+                            ],
+                            "additionalProperties": false,
+                            "description": "How many decisions the change holds."
+                          },
+                          "created_at": {
+                            "type": "string",
+                            "description": "RFC 3339, UTC."
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "ref",
+                          "title",
+                          "status",
+                          "change_type",
+                          "category",
+                          "risk_level",
+                          "planned_start_at",
+                          "planned_end_at",
+                          "implemented_at",
+                          "closed_at",
+                          "outcome",
+                          "approved_without_second_person",
+                          "external_ref",
+                          "approvals",
+                          "created_at"
+                        ],
+                        "additionalProperties": false,
+                        "description": "One change request of the register."
+                      }
+                    },
+                    "pagination": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991,
+                          "description": "The page that was served."
+                        },
+                        "per_page": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991,
+                          "description": "Items per page in effect."
+                        },
+                        "total": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991,
+                          "description": "Total items matching the filters, across all pages."
+                        },
+                        "total_pages": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991,
+                          "description": "Number of pages at this `per_page`."
+                        }
+                      },
+                      "required": [
+                        "page",
+                        "per_page",
+                        "total",
+                        "total_pages"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "pagination"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A parameter is missing, malformed or out of range: `error.details.issues` names it. Or the `X-HS-Tenant` header was refused (`error.details.parameter` is `X-HS-Tenant`): `TENANT_HEADER_INVALID` (not exactly one UUID), `TENANT_REQUIRED` (a portfolio key on a data operation without it) or `TENANT_SELECTOR_NOT_SUPPORTED` (on `listPortfolioTenants`, or a tenant API key / OAuth token naming a tenant other than its own) in `error.details.code`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or one that is unknown, malformed, revoked or expired (a tenant API key, an OAuth access token or a portfolio key; the cases are not distinguished), a portfolio key whose organisation is no longer an active MSSP, or a portfolio key used from an address outside its allowed ranges. The `WWW-Authenticate` header carries `resource_metadata`, the RFC 9728 document that names the authorization server.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which). Re-authenticating does not help with the last two.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource in this tenant. With a portfolio key, also: the selected tenant does not exist or is not in this key’s portfolio (`error.details.code` is `TENANT_NOT_FOUND`; the two cases are one answer).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "A rate limit is exhausted. `Retry-After` says when to come back and `error.details.scope` which limit it was: `key`, `tenant` or `service`; with a portfolio key also `portfolio_key`, `portfolio_org` or `portfolio_tenant`.",
+            "headers": {
+              "RateLimit-Limit": {
+                "description": "Requests allowed in the window that is closest to being exhausted.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              },
+              "RateLimit-Remaining": {
+                "description": "Requests left in that window.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "RateLimit-Reset": {
+                "description": "Seconds until that window renews.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "`<limit>;w=<window seconds>`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Something failed on our side. `error.request_id` is what support needs.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The service cannot verify credentials right now. Retry with backoff.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "oauth2": [
+              "changes:read"
+            ]
+          },
+          {
+            "portfolioKey": []
+          }
+        ],
+        "x-hs-scope": {
+          "scopes": [
+            "changes:read"
+          ]
+        }
+      }
     }
   },
   "components": {
@@ -6093,18 +6767,40 @@
                 "properties": {
                   "code": {
                     "type": "string",
-                    "description": "OPEN vocabulary (a value keeps its meaning and its HTTP status; new values may be added): `TENANT_HEADER_INVALID`, `TENANT_REQUIRED`, `TENANT_SELECTOR_NOT_SUPPORTED` (400), `INSUFFICIENT_SCOPE`, `LICENCE_INACTIVE` (403), `TENANT_NOT_FOUND` (404), `REPORT_NOT_READY`, `FORMAT_UNSUPPORTED`, `FILE_TOO_LARGE` (409).",
+                    "description": "OPEN vocabulary (a value keeps its meaning and its HTTP status; new values may be added): `TENANT_HEADER_INVALID`, `TENANT_REQUIRED`, `TENANT_SELECTOR_NOT_SUPPORTED` (400), `INSUFFICIENT_SCOPE`, `MODULE_NOT_ENTITLED`, `LICENCE_INACTIVE` (403), `TENANT_NOT_FOUND` (404), `REPORT_NOT_READY`, `FORMAT_UNSUPPORTED`, `FILE_TOO_LARGE` (409).",
                     "x-hs-known-values": [
                       "TENANT_HEADER_INVALID",
                       "TENANT_REQUIRED",
                       "TENANT_SELECTOR_NOT_SUPPORTED",
                       "INSUFFICIENT_SCOPE",
+                      "MODULE_NOT_ENTITLED",
                       "LICENCE_INACTIVE",
                       "TENANT_NOT_FOUND",
                       "REPORT_NOT_READY",
                       "FORMAT_UNSUPPORTED",
                       "FILE_TOO_LARGE"
                     ]
+                  },
+                  "scopes": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "With `MODULE_NOT_ENTITLED`: the scopes the credential carries whose module is not active for the tenant read."
+                  },
+                  "modules": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "With `MODULE_NOT_ENTITLED`: the module ids the tenant read lacks, one per module, in the order of `scopes` (`supply_risk`, `compliance.nis2`, …; `compliance` for `changes:read`, which needs any activated compliance framework)."
+                  },
+                  "frameworks": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "With `MODULE_NOT_ENTITLED`, present only when it applies: the compliance framework ids (`nis2`, …) the tenant read is entitled to but has not activated."
                   }
                 }
               }
@@ -6161,6 +6857,7 @@
               "reports:read": "Read reports data of the tenant the token is bound to.",
               "ai_governance:read": "Read ai_governance data of the tenant the token is bound to.",
               "management:read": "Read management data of the tenant the token is bound to.",
+              "changes:read": "Read changes data of the tenant the token is bound to.",
               "email": "Read the email address of the signed-in user (`user.email` on `GET /v1/me`).",
               "offline_access": "Issue a refresh token (30 days, rotated on every use)."
             }
