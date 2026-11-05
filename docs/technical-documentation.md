@@ -72,8 +72,8 @@ first one that contains this file were published before this documentation exist
   [attack surface](risk-assessment.md#attack-surface) and
   [data minimisation](risk-assessment.md#data-minimisation).
 - **Design decisions.** [docs/decisions](decisions) and the decisions in
-  [risk-assessment.md](risk-assessment.md#decisions). Decision record 0001 is a proposal: nothing in
-  it is decided or implemented.
+  [risk-assessment.md](risk-assessment.md#decisions). Decision record 0001 (signing in on a machine
+  without a keychain) is accepted and implemented as the opt-in plain-text token store.
 - **Development rules.** [CONTRIBUTING.md](../CONTRIBUTING.md#development): the Rust toolchain is
   pinned in `rust-toolchain.toml`, `unsafe` code is denied in the workspace (`Cargo.toml`,
   `[workspace.lints.rust]`) and allowed only in `std_handles.rs` (Windows), changes reach `main`
