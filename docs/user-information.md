@@ -101,8 +101,8 @@ Known limitations:
   ([#50](https://github.com/Hodeitek/hodeishield-cli/issues/50)); the Sigstore signature is the
   proof that it is genuine (see
   [If macOS or Windows blocks the binary](../README.md#if-macos-or-windows-blocks-the-binary)).
-- Use behind a TLS-inspecting proxy is verified on Linux only; macOS and Windows have not been
-  verified yet.
+- Use behind a TLS-inspecting proxy is verified in CI on Linux, macOS and Windows
+  ([Networking](../README.md#networking-proxies-and-tls-inspection)).
 - The [new-version notice](../README.md#new-version-notice) makes at most one unauthenticated
   request a day to GitHub's public API, so GitHub sees your IP address. It can be turned off (see
   [Updating](#updating)).
