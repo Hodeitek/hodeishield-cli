@@ -919,9 +919,11 @@ It never updates anything. Privacy, in full:
   The time of the last attempt, and the version it found, are kept in `update-check.json` next to
   the configuration file (see `hodeishield config path`). A failed attempt (offline, timeout,
   GitHub unavailable) is silent, is not repeated before the next day, and never changes a command's
-  output or exit code. Add `--verbose` to see why nothing was shown.
-- **Where it is silent.** When standard error is not a terminal, with `--json` and `--csv`, for
-  `completions`, and whenever the `CI` environment variable is set, to any value. The notice goes to
+  output or exit code. Add `--verbose` to see why a check failed or was skipped as made less than
+  24 hours ago; the other cases below log nothing.
+- **Where it is silent.** When standard error is not a terminal, with `--json`, `--csv` and
+  `reports download --output -`, for `completions`, when the configuration file cannot be read,
+  and whenever the `CI` environment variable is set, to any value. The notice goes to
   standard error, so a terminal on standard error is what decides, not whether standard output is
   piped.
 - **Turning it off.** `export HODEISHIELD_NO_UPDATE_CHECK=1`, or once for all profiles
