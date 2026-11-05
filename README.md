@@ -621,7 +621,7 @@ hodeishield alerts list --status open --since 2026-01-01T00:00:00Z
 hodeishield risks list --min-inherent-score 15 --sort inherent_score
 hodeishield changes list --status scheduled --created-from 2026-11-01
 hodeishield compliance posture nis2
-hodeishield compliance controls --framework nis2 --status failing
+hodeishield compliance controls --framework nis2 --status missing
 hodeishield evidence list --expiring-before 2026-12-31T00:00:00Z
 hodeishield endpoints list --status active
 hodeishield reports list --type monthly --status completed
@@ -636,7 +636,7 @@ ID                                    NAME             DOMAIN               CRIT
 
 Lists show one page (50 items by default); `--page`, `--per-page` (up to 200) and `--all` walk the
 rest. `--all` stops with an error past 100,000 items (or 1,000 pages); narrow the list with filters
-or walk it with `--page`. Every list takes `--sort` and `--order`; `--help` on any command lists
+or walk it with `--page`. Every list except `tenants list` takes `--sort` and `--order`; `--help` on any command lists
 what it accepts.
 
 ### Change requests
@@ -724,7 +724,8 @@ acme    Acme S.L.   Acme Group    client  active  in_force  11111111-1111-4111-8
 beta    Beta Corp   Beta Group    client  active  grace     22222222-2222-4222-8222-222222222222
 ```
 
-It takes `--json`, `--csv`, `--page` and `--all` like any list, sorted by name. It includes your
+It takes `--json`, `--csv`, `--page`, `--per-page` and `--all` like any list, and is always sorted
+by name: it has no `--sort`, and `--order` has no effect. It includes your
 own organisation's tenants (`TYPE` `own` for the internal one) and clients that are inactive or have
 no licence in force, which the `STATUS` and `LICENCE` columns tell apart. A key that was limited to
 some tenants when it was created lists and reads only those. The list is read from the API each
