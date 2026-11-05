@@ -190,7 +190,7 @@ requests to the API.
 | Starting a program | The user's browser, to open the sign-in page; `--no-browser` skips it | `commands/session.rs`, `webbrowser::open` |
 | Keychain | The platform store through `keyring-core`; entry `hodeishield-cli`, one account per profile | `auth/store.rs` |
 | Configuration file | `config.toml`, read at start, written by `config set`; path from `HODEISHIELD_CONFIG` or the platform's directory | `config.rs` |
-| Environment variables | `HODEISHIELD_API_KEY`, `_PROFILE`, `_API_URL`, `_APP_URL`, `_CONFIG`, `_OAUTH_CLIENT_ID`, `_NO_UPDATE_CHECK`, and the standard proxy and certificate variables. Two more exist for the tests: the update-check URL, honoured only for a loopback address, and a stand-in for a terminal | `config.rs`, `auth/mod.rs`, `update_check.rs`, README "Configure" |
+| Environment variables | `HODEISHIELD_API_KEY`, `_PROFILE`, `_API_URL`, `_APP_URL`, `_CONFIG`, `_OAUTH_CLIENT_ID`, `_TOKEN_STORE`, `_NO_UPDATE_CHECK`, `CI`, and the standard proxy and certificate variables. Two more exist for the tests: the update-check URL, honoured only for a loopback address, and a stand-in for a terminal | `config.rs`, `auth/mod.rs`, `update_check.rs`, README "Configure" |
 | Command line | Parsed with `clap`; the CLI reads no file other than its configuration and update-check record, and runs no command taken from the server | `cli.rs`, `config.rs`, `update_check.rs` |
 | Proxy and certificates | The system's, with no option to disable verification | README "Networking" |
 
