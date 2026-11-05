@@ -637,7 +637,8 @@ ID                                    NAME             DOMAIN               CRIT
 Lists show one page (50 items by default); `--page`, `--per-page` (up to 200) and `--all` walk the
 rest. `--all` stops with an error past 100,000 items (or 1,000 pages); narrow the list with filters
 or walk it with `--page`. Every list except `tenants list` takes `--sort` and `--order`; `--help` on any command lists
-what it accepts.
+what it accepts. Short forms: `-v` for `--verbose`, `-q` for `vendors list --query`, `-f` for
+`compliance controls --framework` and `-o` for `reports download --output`.
 
 ### Change requests
 
@@ -862,7 +863,8 @@ parse tables or messages.
 ## Configure
 
 Settings come from, in order: flags, environment variables, the profile in the configuration file,
-and the defaults (`https://api.hodeishield.com`, `https://app.hodeishield.com`).
+and the defaults (`https://api.hodeishield.com`, `https://app.hodeishield.com`). The flags are the
+global `--profile <NAME>` and `--api-url <URL>`, which apply to one command only.
 
 ```sh
 hodeishield config show                      # the settings in effect
@@ -876,10 +878,11 @@ hodeishield --profile default vendors list   # or pick one per command
 
 | Variable | Purpose |
 |---|---|
-| `HODEISHIELD_API_KEY` | Tenant API key; takes precedence over a sign-in |
-| `HODEISHIELD_PROFILE` | Profile to use |
-| `HODEISHIELD_API_URL` | API base URL |
+| `HODEISHIELD_API_KEY` | Tenant API key, or an MSSP [portfolio key](#several-tenants-mssp) (`hsp_…`); takes precedence over a sign-in |
+| `HODEISHIELD_PROFILE` | Profile to use (`--profile` takes precedence) |
+| `HODEISHIELD_API_URL` | API base URL (`--api-url` takes precedence) |
 | `HODEISHIELD_APP_URL` | App base URL (sign-in) |
+| `HODEISHIELD_OAUTH_CLIENT_ID` | OAuth client id used to sign in; takes precedence over `oauth_client_id` in the profile |
 | `HODEISHIELD_CONFIG` | Path of the configuration file |
 | `HODEISHIELD_TOKEN_STORE` | Where sign-in tokens are kept: `keychain` (the default) or `plaintext-file`, an [opt-in](#servers-containers-and-remote-sessions); takes precedence over `token_store` in the configuration file |
 | `HODEISHIELD_NO_UPDATE_CHECK` | Any non-empty value turns off the [new-version notice](#new-version-notice) |
