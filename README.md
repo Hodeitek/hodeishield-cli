@@ -673,14 +673,16 @@ Saved monthly-2026-09.xlsx (48213 bytes).
 - `--format` is `pdf` (the default) or `xlsx`, and `--locale` one of `es`, `en` (the default), `de`,
   `fr`, `it` and `eu`. `reports get` lists the formats a report can be downloaded in.
 - Without `--output`, the file is saved in the current directory under the name the API suggests,
-  reduced to a plain stem: only its last part is kept, every character other than a letter, a
-  digit, `.`, `_` and `-` becomes `_`, leading dots are dropped and everything from the first `.`
-  on is cut. The extension is always that of the format (`.pdf` or `.xlsx`), never the one the API
-  suggested, so `conftest.py` is saved as `conftest.pdf`. When nothing usable is left, the name is
+  reduced to a plain stem: only its last part is kept, every character other than an ASCII letter,
+  a digit, `.`, `_` and `-` becomes `_`, leading dots and dashes and trailing dots are dropped and
+  everything from the first `.` on is cut. The extension is always that of the format (`.pdf` or
+  `.xlsx`), never the one the API suggested, so `conftest.py` is saved as `conftest.pdf`. When
+  nothing usable is left, or the name is too long or a reserved Windows device name, the name is
   `report-<id>.<format>`. The name is never used as a path.
 - `--output <PATH>` saves it there instead; a directory saves it there under the suggested name.
   `--output -` writes the file to standard output, and is refused (exit code 2) when standard
-  output is a terminal.
+  output is a terminal; the note `Wrote <size> to standard output.` then goes to standard error
+  (not with `--json`).
 - An existing file is never replaced unless `--force` is given. The file is written next to its
   destination and then put in place, so the path never holds part of a file. On Unix, the saved
   file is readable only by you (mode 0600); `--force` keeps the permissions of the file it replaces.
