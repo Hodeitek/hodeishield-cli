@@ -102,7 +102,7 @@ tap", run `brew trust --formula hodeitek/hodeishield/hodeishield` once. There is
 the whole tap or to turn tap trust off.
 
 The [Homebrew tap](https://github.com/Hodeitek/homebrew-hodeishield) and the
-[Scoop bucket](https://github.com/Hodeitek/scoop-hodeishield) are updated from each release's own
+[Scoop bucket](https://github.com/Hodeitek/scoop-hodeishield) are updated from each stable release's own
 files and `SHA256SUMS` when it is published, and both check those hashes when installing. Homebrew
 also installs the man pages and shell completions. Scoop picks the arm64 build on Windows on Arm
 automatically. A winget package has been submitted and is waiting for review by the winget community
@@ -236,7 +236,8 @@ sudo apt install ./hodeishield_<version>-1_amd64.deb      # Debian, Ubuntu (arm6
 sudo dnf install ./hodeishield-<version>-1.x86_64.rpm     # Fedora, RHEL (arm64: .aarch64.rpm)
 ```
 
-Upgrading is the same command with the newer package.
+Upgrading is the same command with the newer package. For a pre-release, the package file names
+write the `-` of the version as `~` (as `deb` and `rpm` require).
 
 ### Uninstall an archive or install.sh install
 
@@ -335,7 +336,7 @@ the options (`--dir`, `--no-man`).
 
 From 0.4.0, each stable release also publishes a multi-architecture (`linux/amd64`, `linux/arm64`)
 image at `ghcr.io/hodeitek/hodeishield-cli`, for CI jobs and container pipelines. It holds only the
-release's own `hodeishield` binary on a
+release's own `hodeishield` binary (plus `LICENSE` and `NOTICE` in `/licenses/`) on a
 [distroless](https://github.com/GoogleContainerTools/distroless) static base (no shell, no package
 manager, CA certificates included) and runs as a non-root user. There is no `latest` tag: use the
 exact version, or better its digest. The image carries no documentation: the
@@ -389,8 +390,8 @@ man hodeishield-vendors-list
 
 ## Verify a download
 
-Each release has a `SHA256SUMS` file, a Sigstore bundle (`*.sigstore.json`) for every archive and for
-`SHA256SUMS`, and SLSA provenance (`hodeishield.intoto.jsonl`). In short:
+Each release has a `SHA256SUMS` file, a Sigstore bundle (`*.sigstore.json`) for every file listed in
+`SHA256SUMS` and for `SHA256SUMS` itself, and SLSA provenance (`hodeishield.intoto.jsonl`). In short:
 
 ```sh
 grep hodeishield-0.7.1-x86_64-unknown-linux-musl.tar.gz SHA256SUMS | sha256sum -c -
