@@ -143,7 +143,8 @@ To stop using `hodeishield` on a machine and leave nothing behind:
 
 1. **Sign out of every profile you signed in to**: `hodeishield logout`, and
    `hodeishield logout --profile <name>` for each other profile. This revokes the token at the app
-   and removes it from the system keychain. If the CLI warns that the app did not confirm the
+   and removes it from the system keychain, or deletes the plain-text token file if you opted in
+   to it. If the CLI warns that the app did not confirm the
    revocation, revoke the CLI's access in the app under **Account → Applications**.
 2. **Revoke the tenant API keys** the machine used, in the app, and remove them from the
    environment and secret stores that held them.
@@ -177,6 +178,12 @@ If the CLI is already gone and a sign-in was left in the keychain, revoke the ac
 `security delete-generic-password -s hodeishield-cli -a <profile>`, on Windows in Credential Manager
 (*Windows Credentials*, named `<profile>.hodeishield-cli`), and on Linux with
 `secret-tool clear service hodeishield-cli username <profile>`.
+
+If the CLI is already gone and you had opted in to the plain-text token file, revoke the access in
+the app the same way, then delete the sessions directory: `$XDG_STATE_HOME/hodeishield/sessions/`
+(by default `~/.local/state/hodeishield/sessions/`) on Linux, and
+`~/Library/Application Support/com.Hodeitek.HodeiShield.sessions/` on macOS. Deleting the files
+does not end the sessions; only revoking does.
 
 ## Software bill of materials
 
