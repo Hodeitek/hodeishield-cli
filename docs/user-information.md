@@ -64,8 +64,8 @@ key.
 
 ## Security properties and secure use
 
-What the CLI guarantees (read only, credentials never written to disk in clear text, printed or
-logged, HTTPS only, no redirects followed, signed releases) is in
+What the CLI guarantees (read only, credentials never printed or logged and never written to disk
+in clear text unless you opt in to the plain-text token file, HTTPS only, no redirects followed, signed releases) is in
 [SECURITY.md](../SECURITY.md#what-the-cli-guarantees), and the risk assessment behind them is in
 [risk-assessment.md](risk-assessment.md). To use it securely:
 
@@ -73,7 +73,10 @@ logged, HTTPS only, no redirects followed, signed releases) is in
   and [docs/verifying-releases.md](verifying-releases.md). For the container image, verify it and
   pin its digest ([Container image](../README.md#container-image)).
 - **Pick the right credential** ([Authenticate](../README.md#authenticate)). People sign in with
-  `hodeishield login`: the token is kept in the system keychain, covers one tenant and only reads.
+  `hodeishield login`: the token is kept in the system keychain (or, only if you opt in, in a
+  plain-text file; see
+  [Servers, containers and remote sessions](../README.md#servers-containers-and-remote-sessions)),
+  covers one tenant and only reads.
   Scripts, CI and servers use a tenant API key with only the read scopes they need, kept in the CI's
   secret store and passed in the environment, not on a command line. When
   `HODEISHIELD_API_KEY` is set, it is used for every call, whatever else is configured.

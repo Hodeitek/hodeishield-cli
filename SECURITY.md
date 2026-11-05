@@ -174,8 +174,10 @@ them to the right team.
 ## What the CLI guarantees
 
 - It only reads. The generated API client has no method other than `GET`.
-- Credentials are never written to disk in clear text, printed, or logged (`--verbose` logs method,
-  URL, status and request id only).
+- Credentials are never printed or logged (`--verbose` logs method, URL, status and request id
+  only), and never written to disk in clear text unless you opt in to the plain-text token file
+  (`HODEISHIELD_TOKEN_STORE=plaintext-file` or `token_store = plaintext-file`, Linux and macOS only;
+  see [Servers, containers and remote sessions](README.md#servers-containers-and-remote-sessions)).
 - Credentials are sent only over HTTPS (plain HTTP is accepted only for `localhost`), and redirects
   are never followed.
 - Releases are signed keylessly with Sigstore from GitHub Actions and carry SLSA provenance; no
