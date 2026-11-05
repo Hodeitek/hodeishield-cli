@@ -505,10 +505,12 @@ hodeishield logout           # revokes the token at the app and removes it from 
 
 You sign in to [app.hodeishield.com](https://app.hodeishield.com) as usual (2FA, passkey or SSO), and
 on the consent screen you choose **the one tenant** the CLI may read. A sign-in token never covers
-more than that tenant, and it only reads. To use an unrelated tenant, define another profile and sign in
-to it:
+more than that tenant, and it only reads.
+
 When the sign-in ends, the browser shows a short page in the language of the browser (English, Spanish,
 German, French, Italian or Basque; English otherwise) that says whether it worked and that you can close the tab.
+
+To use an unrelated tenant, define another profile and sign in to it:
 
 ```sh
 hodeishield config set --profile client-b api_url https://api.hodeishield.com
