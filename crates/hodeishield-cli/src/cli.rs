@@ -181,6 +181,9 @@ impl Cli {
                 .error(clap::error::ErrorKind::ArgumentConflict, message)
                 .exit();
         }
+        if let Some((kind, message)) = cli.command.framework_error() {
+            Self::command().error(kind, message).exit();
+        }
         if cli.command.downloads_to_stdout() && std::io::stdout().is_terminal() {
             Self::command()
                 .error(
@@ -259,6 +262,15 @@ impl Command {
     /// Whether this is a download whose file goes to standard output (`--output -`).
     fn downloads_to_stdout(&self) -> bool {
         matches!(self, Self::Reports(ReportsCommand::Download(download)) if download.to_stdout())
+    }
+
+    /// The usage error of a compliance command whose framework is missing or given twice differently.
+    fn framework_error(&self) -> Option<(clap::error::ErrorKind, String)> {
+        match self {
+            Self::Compliance(ComplianceCommand::Controls(list)) => list.framework.check().err(),
+            Self::Compliance(ComplianceCommand::Posture(args)) => args.framework.check().err(),
+            _ => None,
+        }
     }
 
     /// The paging options, for the commands that list.
@@ -449,17 +461,53 @@ pub enum ComplianceCommand {
     /// List the status of each control of a framework.
     Controls(ControlsList),
     /// Show the posture summary of a framework.
-    Posture {
-        /// Framework slug, e.g. nis2, ens, iso27001, dora.
-        framework: String,
-    },
+    Posture(PostureArgs),
+}
+
+/// The framework of a compliance command, given as a positional or as `--framework`.
+#[derive(Debug, Args)]
+pub struct FrameworkArg {
+    /// Framework slug, e.g. nis2, ens, iso27001, dora. Give it here or with `--framework`.
+    #[arg(value_name = "FRAMEWORK")]
+    positional: Option<String>,
+    /// Framework slug, the same as the positional form.
+    #[arg(long = "framework", short = 'f', value_name = "FRAMEWORK")]
+    flag: Option<String>,
+}
+
+impl FrameworkArg {
+    /// The framework slug, or the message of the usage error when it is missing or the two forms
+    /// disagree.
+    fn check(&self) -> Result<&str, (clap::error::ErrorKind, String)> {
+        match (self.positional.as_deref(), self.flag.as_deref()) {
+            (Some(a), Some(b)) if a != b => Err((
+                clap::error::ErrorKind::ArgumentConflict,
+                format!("the framework is given twice with different values ('{a}' and '--framework {b}'); give it once"),
+            )),
+            (Some(a), _) | (None, Some(a)) => Ok(a),
+            (None, None) => Err((
+                clap::error::ErrorKind::MissingRequiredArgument,
+                "the following required arguments were not provided:\n  <FRAMEWORK> or --framework <FRAMEWORK>".into(),
+            )),
+        }
+    }
+
+    /// The framework slug. `Cli::parse_checked` has already refused a missing one.
+    pub fn get(&self) -> &str {
+        self.check().unwrap_or_default()
+    }
+}
+
+#[derive(Debug, Args)]
+pub struct PostureArgs {
+    #[command(flatten)]
+    pub framework: FrameworkArg,
 }
 
 #[derive(Debug, Args)]
 pub struct ControlsList {
-    /// Framework slug, e.g. nis2, ens, iso27001, dora.
-    #[arg(long, short)]
-    pub framework: String,
+    #[command(flatten)]
+    pub framework: FrameworkArg,
     /// Exact control status.
     #[arg(
         long,

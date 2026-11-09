@@ -653,8 +653,8 @@ pub fn compliance(ctx: &Context, command: ComplianceCommand, out: &mut dyn Write
                 &[("status", args.status.as_deref())],
             );
             let (targets, source) = ctx.targets(&settings)?;
-            let api = ctx.call(source, Some(&args.framework));
-            let mut base = ListComplianceControlsParams::new(args.framework.clone());
+            let api = ctx.call(source, Some(args.framework.get()));
+            let mut base = ListComplianceControlsParams::new(args.framework.get().to_string());
             base.status = args.status;
             base.sort = args.sort;
             base.order = args.paging.order;
@@ -676,11 +676,12 @@ pub fn compliance(ctx: &Context, command: ComplianceCommand, out: &mut dyn Write
                 control_table,
             )
         }
-        ComplianceCommand::Posture { framework } => {
+        ComplianceCommand::Posture(args) => {
+            let framework = args.framework.get();
             let (client, source) = ctx.single(&settings)?;
-            let api = ctx.call(source, Some(&framework));
+            let api = ctx.call(source, Some(framework));
             let response = client
-                .get_framework_posture(&framework)
+                .get_framework_posture(framework)
                 .map_err(|e| from_api(e, &api))?;
             if ctx.json {
                 return Ok(print_json(out, &response.raw)?);
