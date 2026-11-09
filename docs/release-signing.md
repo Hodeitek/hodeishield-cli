@@ -229,6 +229,8 @@ The `release-integrity.yml` workflow runs every Monday, and on demand
 
 A mismatch, or anything the check cannot read, fails the run and opens an issue labelled
 `release-integrity`, or comments on the open one. The next run that passes closes it.
+If installing cosign fails, the workflow waits a minute and tries once more before it reports a
+failure, so a short outage of the download host does not open an issue.
 
 What the check cannot see:
 
