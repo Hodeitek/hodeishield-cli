@@ -48,7 +48,21 @@ jobs:
       - name: Test the check
         run: python3 -I .github/scripts/release-integrity-test.py
 
+      # A transient error while downloading cosign (for example a 504 from the release host) must not
+      # be reported as a release integrity failure: wait and install once more before giving up.
       - name: Install cosign
+        id: cosign
+        continue-on-error: true
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: "v3.1.3"
+
+      - name: Wait before installing cosign again
+        if: steps.cosign.outcome == 'failure'
+        run: sleep 60
+
+      - name: Install cosign (second attempt)
+        if: steps.cosign.outcome == 'failure'
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:
           cosign-release: "v3.1.3"
