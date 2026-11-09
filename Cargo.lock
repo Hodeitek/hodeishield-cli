@@ -2026,9 +2026,9 @@ dependencies = [
 
 [[package]]
 name = "rustix"
-version = "1.1.5"
+version = "1.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "891efababe418670775f199f0d233d84843c227a0949a883ce15b37c78d6629d"
+checksum = "e5e76742e5294153d4dde1207dbec5bdd81eef6fabdc0d2118babadabfd858aa"
 dependencies = [
  "bitflags",
  "errno",
@@ -2870,9 +2870,9 @@ dependencies = [
 
 [[package]]
 name = "webbrowser"
-version = "1.2.5"
+version = "1.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d2c8ddfbbf66e501434657400268cefe51b95140a0266236415cda7627732df7"
+checksum = "fe8d20d0214027baf11b8b0cc307c1da7657d8f4db9aa956f7de27a6fb1acbd5"
 dependencies = [
  "jni",
  "log",
