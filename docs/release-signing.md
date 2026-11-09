@@ -381,7 +381,8 @@ advisory, which names the tags not to trust.
    repository is renamed or transferred, for example to make a clean break after a compromise.
    Every place that pins it then changes in the same release:
    [verifying-releases.md](verifying-releases.md), [README.md](../README.md), `install.sh`, `.github/workflows/package-managers.yml`,
-   `.github/workflows/container-image.yml` and this document. The release notes and the advisory
+   `.github/workflows/container-image.yml`, `.github/workflows/package-resign.yml`,
+   `.github/scripts/release-integrity.py` and this document. The release notes and the advisory
    give the new identity and the first version signed with it. Earlier releases keep the identity
    they were signed with, and are verified with it.
 

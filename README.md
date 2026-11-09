@@ -102,7 +102,7 @@ tap", run `brew trust --formula hodeitek/hodeishield/hodeishield` once. There is
 the whole tap or to turn tap trust off.
 
 The [Homebrew tap](https://github.com/Hodeitek/homebrew-hodeishield) and the
-[Scoop bucket](https://github.com/Hodeitek/scoop-hodeishield) are updated from each release's own
+[Scoop bucket](https://github.com/Hodeitek/scoop-hodeishield) are updated from each stable release's own
 files and `SHA256SUMS` when it is published, and both check those hashes when installing. Homebrew
 also installs the man pages and shell completions. Scoop picks the arm64 build on Windows on Arm
 automatically. A winget package has been submitted and is waiting for review by the winget community
@@ -236,7 +236,8 @@ sudo apt install ./hodeishield_<version>-1_amd64.deb      # Debian, Ubuntu (arm6
 sudo dnf install ./hodeishield-<version>-1.x86_64.rpm     # Fedora, RHEL (arm64: .aarch64.rpm)
 ```
 
-Upgrading is the same command with the newer package.
+Upgrading is the same command with the newer package. For a pre-release, the package file names
+write the `-` of the version as `~` (as `deb` and `rpm` require).
 
 ### Uninstall an archive or install.sh install
 
@@ -335,7 +336,7 @@ the options (`--dir`, `--no-man`).
 
 From 0.4.0, each stable release also publishes a multi-architecture (`linux/amd64`, `linux/arm64`)
 image at `ghcr.io/hodeitek/hodeishield-cli`, for CI jobs and container pipelines. It holds only the
-release's own `hodeishield` binary on a
+release's own `hodeishield` binary (plus `LICENSE` and `NOTICE` in `/licenses/`) on a
 [distroless](https://github.com/GoogleContainerTools/distroless) static base (no shell, no package
 manager, CA certificates included) and runs as a non-root user. There is no `latest` tag: use the
 exact version, or better its digest. The image carries no documentation: the
@@ -389,8 +390,8 @@ man hodeishield-vendors-list
 
 ## Verify a download
 
-Each release has a `SHA256SUMS` file, a Sigstore bundle (`*.sigstore.json`) for every archive and for
-`SHA256SUMS`, and SLSA provenance (`hodeishield.intoto.jsonl`). In short:
+Each release has a `SHA256SUMS` file, a Sigstore bundle (`*.sigstore.json`) for every file listed in
+`SHA256SUMS` and for `SHA256SUMS` itself, and SLSA provenance (`hodeishield.intoto.jsonl`). In short:
 
 ```sh
 grep hodeishield-0.7.1-x86_64-unknown-linux-musl.tar.gz SHA256SUMS | sha256sum -c -
@@ -504,10 +505,12 @@ hodeishield logout           # revokes the token at the app and removes it from 
 
 You sign in to [app.hodeishield.com](https://app.hodeishield.com) as usual (2FA, passkey or SSO), and
 on the consent screen you choose **the one tenant** the CLI may read. A sign-in token never covers
-more than that tenant, and it only reads. To use an unrelated tenant, define another profile and sign in
-to it:
+more than that tenant, and it only reads.
+
 When the sign-in ends, the browser shows a short page in the language of the browser (English, Spanish,
 German, French, Italian or Basque; English otherwise) that says whether it worked and that you can close the tab.
+
+To use an unrelated tenant, define another profile and sign in to it:
 
 ```sh
 hodeishield config set --profile client-b api_url https://api.hodeishield.com
@@ -620,8 +623,8 @@ hodeishield alerts list --status open --since 2026-01-01T00:00:00Z
 hodeishield risks list --min-inherent-score 15 --sort inherent_score
 hodeishield changes list --status scheduled --created-from 2026-11-01
 hodeishield compliance posture nis2
-hodeishield compliance controls --framework nis2 --status failing
-hodeishield compliance controls nis2 --status failing   # the framework as a positional works on both commands
+hodeishield compliance controls --framework nis2 --status missing
+hodeishield compliance controls nis2 --status missing   # the framework as a positional works on both commands
 hodeishield compliance posture --framework nis2          # ...and as --framework / -f
 hodeishield evidence list --expiring-before 2026-12-31T00:00:00Z
 hodeishield endpoints list --status active
@@ -637,8 +640,9 @@ ID                                    NAME             DOMAIN               CRIT
 
 Lists show one page (50 items by default); `--page`, `--per-page` (up to 200) and `--all` walk the
 rest. `--all` stops with an error past 100,000 items (or 1,000 pages); narrow the list with filters
-or walk it with `--page`. Every list takes `--sort` and `--order`; `--help` on any command lists
-what it accepts.
+or walk it with `--page`. Every list except `tenants list` takes `--sort` and `--order`; `--help` on any command lists
+what it accepts. Short forms: `-v` for `--verbose`, `-q` for `vendors list --query`, `-f` for
+`compliance controls --framework` and `-o` for `reports download --output`.
 
 ### Change requests
 
@@ -673,14 +677,16 @@ Saved monthly-2026-09.xlsx (48213 bytes).
 - `--format` is `pdf` (the default) or `xlsx`, and `--locale` one of `es`, `en` (the default), `de`,
   `fr`, `it` and `eu`. `reports get` lists the formats a report can be downloaded in.
 - Without `--output`, the file is saved in the current directory under the name the API suggests,
-  reduced to a plain stem: only its last part is kept, every character other than a letter, a
-  digit, `.`, `_` and `-` becomes `_`, leading dots are dropped and everything from the first `.`
-  on is cut. The extension is always that of the format (`.pdf` or `.xlsx`), never the one the API
-  suggested, so `conftest.py` is saved as `conftest.pdf`. When nothing usable is left, the name is
+  reduced to a plain stem: only its last part is kept, every character other than an ASCII letter,
+  a digit, `.`, `_` and `-` becomes `_`, leading dots and dashes and trailing dots are dropped and
+  everything from the first `.` on is cut. The extension is always that of the format (`.pdf` or
+  `.xlsx`), never the one the API suggested, so `conftest.py` is saved as `conftest.pdf`. When
+  nothing usable is left, or the name is too long or a reserved Windows device name, the name is
   `report-<id>.<format>`. The name is never used as a path.
 - `--output <PATH>` saves it there instead; a directory saves it there under the suggested name.
   `--output -` writes the file to standard output, and is refused (exit code 2) when standard
-  output is a terminal.
+  output is a terminal; the note `Wrote <size> to standard output.` then goes to standard error
+  (not with `--json`).
 - An existing file is never replaced unless `--force` is given. The file is written next to its
   destination and then put in place, so the path never holds part of a file. On Unix, the saved
   file is readable only by you (mode 0600); `--force` keeps the permissions of the file it replaces.
@@ -725,7 +731,8 @@ acme    Acme S.L.   Acme Group    client  active  in_force  11111111-1111-4111-8
 beta    Beta Corp   Beta Group    client  active  grace     22222222-2222-4222-8222-222222222222
 ```
 
-It takes `--json`, `--csv`, `--page` and `--all` like any list, sorted by name. It includes your
+It takes `--json`, `--csv`, `--page`, `--per-page` and `--all` like any list, and is always sorted
+by name: it has no `--sort`, and `--order` has no effect. It includes your
 own organisation's tenants (`TYPE` `own` for the internal one) and clients that are inactive or have
 no licence in force, which the `STATUS` and `LICENCE` columns tell apart. A key that was limited to
 some tenants when it was created lists and reads only those. The list is read from the API each
@@ -862,7 +869,8 @@ parse tables or messages.
 ## Configure
 
 Settings come from, in order: flags, environment variables, the profile in the configuration file,
-and the defaults (`https://api.hodeishield.com`, `https://app.hodeishield.com`).
+and the defaults (`https://api.hodeishield.com`, `https://app.hodeishield.com`). The flags are the
+global `--profile <NAME>` and `--api-url <URL>`, which apply to one command only.
 
 ```sh
 hodeishield config show                      # the settings in effect
@@ -876,10 +884,11 @@ hodeishield --profile default vendors list   # or pick one per command
 
 | Variable | Purpose |
 |---|---|
-| `HODEISHIELD_API_KEY` | Tenant API key; takes precedence over a sign-in |
-| `HODEISHIELD_PROFILE` | Profile to use |
-| `HODEISHIELD_API_URL` | API base URL |
+| `HODEISHIELD_API_KEY` | Tenant API key, or an MSSP [portfolio key](#several-tenants-mssp) (`hsp_…`); takes precedence over a sign-in |
+| `HODEISHIELD_PROFILE` | Profile to use (`--profile` takes precedence) |
+| `HODEISHIELD_API_URL` | API base URL (`--api-url` takes precedence) |
 | `HODEISHIELD_APP_URL` | App base URL (sign-in) |
+| `HODEISHIELD_OAUTH_CLIENT_ID` | OAuth client id used to sign in; takes precedence over `oauth_client_id` in the profile |
 | `HODEISHIELD_CONFIG` | Path of the configuration file |
 | `HODEISHIELD_TOKEN_STORE` | Where sign-in tokens are kept: `keychain` (the default) or `plaintext-file`, an [opt-in](#servers-containers-and-remote-sessions); takes precedence over `token_store` in the configuration file |
 | `HODEISHIELD_NO_UPDATE_CHECK` | Any non-empty value turns off the [new-version notice](#new-version-notice) |
@@ -914,9 +923,11 @@ It never updates anything. Privacy, in full:
   The time of the last attempt, and the version it found, are kept in `update-check.json` next to
   the configuration file (see `hodeishield config path`). A failed attempt (offline, timeout,
   GitHub unavailable) is silent, is not repeated before the next day, and never changes a command's
-  output or exit code. Add `--verbose` to see why nothing was shown.
-- **Where it is silent.** When standard error is not a terminal, with `--json` and `--csv`, for
-  `completions`, and whenever the `CI` environment variable is set, to any value. The notice goes to
+  output or exit code. Add `--verbose` to see why a check failed or was skipped as made less than
+  24 hours ago; the other cases below log nothing.
+- **Where it is silent.** When standard error is not a terminal, with `--json`, `--csv` and
+  `reports download --output -`, for `completions`, when the configuration file cannot be read,
+  and whenever the `CI` environment variable is set, to any value. The notice goes to
   standard error, so a terminal on standard error is what decides, not whether standard output is
   piped.
 - **Turning it off.** `export HODEISHIELD_NO_UPDATE_CHECK=1`, or once for all profiles

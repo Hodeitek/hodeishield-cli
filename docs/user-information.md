@@ -64,8 +64,8 @@ key.
 
 ## Security properties and secure use
 
-What the CLI guarantees (read only, credentials never written to disk in clear text, printed or
-logged, HTTPS only, no redirects followed, signed releases) is in
+What the CLI guarantees (read only, credentials never printed or logged and never written to disk
+in clear text unless you opt in to the plain-text token file, HTTPS only, no redirects followed, signed releases) is in
 [SECURITY.md](../SECURITY.md#what-the-cli-guarantees), and the risk assessment behind them is in
 [risk-assessment.md](risk-assessment.md). To use it securely:
 
@@ -73,7 +73,10 @@ logged, HTTPS only, no redirects followed, signed releases) is in
   and [docs/verifying-releases.md](verifying-releases.md). For the container image, verify it and
   pin its digest ([Container image](../README.md#container-image)).
 - **Pick the right credential** ([Authenticate](../README.md#authenticate)). People sign in with
-  `hodeishield login`: the token is kept in the system keychain, covers one tenant and only reads.
+  `hodeishield login`: the token is kept in the system keychain (or, only if you opt in, in a
+  plain-text file; see
+  [Servers, containers and remote sessions](../README.md#servers-containers-and-remote-sessions)),
+  covers one tenant and only reads.
   Scripts, CI and servers use a tenant API key with only the read scopes they need, kept in the CI's
   secret store and passed in the environment, not on a command line. When
   `HODEISHIELD_API_KEY` is set, it is used for every call, whatever else is configured.
@@ -98,8 +101,8 @@ Known limitations:
   ([#50](https://github.com/Hodeitek/hodeishield-cli/issues/50)); the Sigstore signature is the
   proof that it is genuine (see
   [If macOS or Windows blocks the binary](../README.md#if-macos-or-windows-blocks-the-binary)).
-- Use behind a TLS-inspecting proxy is verified on Linux only; macOS and Windows have not been
-  verified yet.
+- Use behind a TLS-inspecting proxy is verified in CI on Linux, macOS and Windows
+  ([Networking](../README.md#networking-proxies-and-tls-inspection)).
 - The [new-version notice](../README.md#new-version-notice) makes at most one unauthenticated
   request a day to GitHub's public API, so GitHub sees your IP address. It can be turned off (see
   [Updating](#updating)).
@@ -140,7 +143,8 @@ To stop using `hodeishield` on a machine and leave nothing behind:
 
 1. **Sign out of every profile you signed in to**: `hodeishield logout`, and
    `hodeishield logout --profile <name>` for each other profile. This revokes the token at the app
-   and removes it from the system keychain. If the CLI warns that the app did not confirm the
+   and removes it from the system keychain, or deletes the plain-text token file if you opted in
+   to it. If the CLI warns that the app did not confirm the
    revocation, revoke the CLI's access in the app under **Account → Applications**.
 2. **Revoke the tenant API keys** the machine used, in the app, and remove them from the
    environment and secret stores that held them.
@@ -174,6 +178,12 @@ If the CLI is already gone and a sign-in was left in the keychain, revoke the ac
 `security delete-generic-password -s hodeishield-cli -a <profile>`, on Windows in Credential Manager
 (*Windows Credentials*, named `<profile>.hodeishield-cli`), and on Linux with
 `secret-tool clear service hodeishield-cli username <profile>`.
+
+If the CLI is already gone and you had opted in to the plain-text token file, revoke the access in
+the app the same way, then delete the sessions directory: `$XDG_STATE_HOME/hodeishield/sessions/`
+(by default `~/.local/state/hodeishield/sessions/`) on Linux, and
+`~/Library/Application Support/com.Hodeitek.HodeiShield.sessions/` on macOS. Deleting the files
+does not end the sessions; only revoking does.
 
 ## Software bill of materials
 

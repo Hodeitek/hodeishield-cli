@@ -2,8 +2,10 @@
 
 Every release of `hodeishield-cli` publishes, for each platform archive:
 
-- `SHA256SUMS` — checksums of every archive.
-- `<archive>.sigstore.json` and `SHA256SUMS.sigstore.json` — Sigstore
+- `SHA256SUMS` — checksums of every release file: the archives, the `.deb` and `.rpm`
+  packages, the MSI and the macOS `.pkg` when the release has them, the SBOMs and `install.sh`. The
+  signature bundles and the provenance are not listed in it.
+- `<file>.sigstore.json` for each file listed in `SHA256SUMS`, and `SHA256SUMS.sigstore.json` — Sigstore
   "bundle" files produced by **keyless** `cosign sign-blob` (no private key:
   the workflow signs using its GitHub Actions OIDC identity, and the
   signature is recorded in the public Rekor transparency log).
@@ -14,6 +16,11 @@ Every release of `hodeishield-cli` publishes, for each platform archive:
 - `hodeishield-<version>-x86_64-pc-windows-msvc.msi` (from 0.3.0), with its own
   `.sigstore.json` and listed in `SHA256SUMS`. The MSI and the `hodeishield.exe` inside it are both
   signed with Authenticode (section 5); the exe is the same as in the `.zip`, whose SBOM describes it.
+- `install.sh` (from 0.3.0), the [install script](../README.md#install-script-linux-and-macos), with
+  its own `.sigstore.json` and listed in `SHA256SUMS`.
+- `hodeishield-<version>-universal-apple-darwin.pkg`, only for a release whose macOS files are
+  signed with an Apple Developer ID (section 5), with its own `.sigstore.json` and listed in
+  `SHA256SUMS`.
 - `.deb` and `.rpm` packages (from 0.3.0), each with its own `.sigstore.json` and
   listed in `SHA256SUMS`. They contain the binary and man pages of the Linux archive for the same
   architecture, so that archive's SBOM describes them; verify them the same way as the archives.
