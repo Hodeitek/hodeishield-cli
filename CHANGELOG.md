@@ -15,6 +15,12 @@ commands, `--json` output and exit codes. Each release's notes start with its se
   `changes:read` scope when the app offers it; a credential without it exits with code 4.
   ([#268](https://github.com/Hodeitek/hodeishield-cli/issues/268))
 
+- `hodeishield compliance posture` and `hodeishield compliance controls` now both take the framework
+  as a positional (`compliance posture nis2`, `compliance controls nis2`) or with `--framework`/`-f`
+  (`compliance posture -f nis2`, `compliance controls --framework nis2`). The existing forms keep
+  working. Giving two different values exits with code 2, like giving none.
+  ([#58](https://github.com/Hodeitek/hodeishield-cli/issues/58))
+
 ## [0.7.1] - 2026-11-03
 
 ### Changed

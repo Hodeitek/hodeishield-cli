@@ -624,6 +624,8 @@ hodeishield risks list --min-inherent-score 15 --sort inherent_score
 hodeishield changes list --status scheduled --created-from 2026-11-01
 hodeishield compliance posture nis2
 hodeishield compliance controls --framework nis2 --status missing
+hodeishield compliance controls nis2 --status missing   # the framework as a positional works on both commands
+hodeishield compliance posture --framework nis2          # ...and as --framework / -f
 hodeishield evidence list --expiring-before 2026-12-31T00:00:00Z
 hodeishield endpoints list --status active
 hodeishield reports list --type monthly --status completed

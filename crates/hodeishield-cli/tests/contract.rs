@@ -489,6 +489,54 @@ fn json_posture_is_the_api_body_with_unknown_fields_passed_through() {
     );
 }
 
+/// Both compliance commands take the framework as a positional or as `--framework`/`-f`; the same
+/// value twice is fine, two different values and no value are usage errors (exit code 2).
+#[test]
+fn compliance_framework_is_a_positional_or_a_flag_on_both_commands() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    server
+        .mock("GET", "/v1/compliance/frameworks/nis2")
+        .with_body(r#"{"data":{"framework":"nis2","controls_total":0,"by_status":{},"evidence_total":0,"last_evaluated_at":null}}"#)
+        .create();
+    server
+        .mock("GET", "/v1/compliance/controls")
+        .match_query(mockito::Matcher::UrlEncoded(
+            "framework".into(),
+            "nis2".into(),
+        ))
+        .with_body(r#"{"data":[],"pagination":{"page":1,"per_page":50,"total":0,"total_pages":1}}"#)
+        .create();
+    let url = server.url();
+    for command in ["posture", "controls"] {
+        for forms in [
+            vec!["nis2"],
+            vec!["--framework", "nis2"],
+            vec!["-f", "nis2"],
+            vec!["nis2", "--framework", "nis2"],
+            vec!["-f", "nis2", "nis2"],
+        ] {
+            let mut args = vec!["--json", "compliance", command];
+            args.extend(forms.iter().copied());
+            let output = env.api(&url, &args);
+            assert_eq!(output.status.code(), Some(0), "{args:?}: {output:?}");
+        }
+        let output = env.api(
+            &url,
+            &["compliance", command, "nis2", "--framework", "dora"],
+        );
+        assert_eq!(output.status.code(), Some(2), "{command}: {output:?}");
+        assert!(
+            err(&output).contains("different values"),
+            "{}",
+            err(&output)
+        );
+        let output = env.api(&url, &["compliance", command]);
+        assert_eq!(output.status.code(), Some(2), "{command}: {output:?}");
+        assert!(err(&output).contains("FRAMEWORK"), "{}", err(&output));
+    }
+}
+
 /// `whoami --json` is an object with these fields, in this order (an API key has no more). The last
 /// four come from `GET /v1/me` as the API sends them.
 #[test]
