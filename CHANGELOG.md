@@ -21,6 +21,13 @@ commands, `--json` output and exit codes. Each release's notes start with its se
   working. Giving two different values exits with code 2, like giving none.
   ([#58](https://github.com/Hodeitek/hodeishield-cli/issues/58))
 
+### Changed
+
+- The README's networking section now covers proxy precedence and `NO_PROXY` syntax, proxy
+  authentication in the URL, installing a corporate CA on Linux, macOS and Windows, the hosts to
+  allow (including the daily update check) and the common errors with their fix.
+  ([#25](https://github.com/Hodeitek/hodeishield-cli/issues/25))
+
 ## [0.7.1] - 2026-11-03
 
 ### Changed
