@@ -938,45 +938,121 @@ Shell completions: `hodeishield completions bash|zsh|fish|powershell|elvish`.
 
 ## Networking: proxies and TLS inspection
 
-The CLI reaches `api.hodeishield.com` and `app.hodeishield.com` over HTTPS (port 443). Behind a
-corporate proxy, nothing needs configuring in the CLI itself; it follows the proxy settings of the
-machine.
+The CLI reaches `api.hodeishield.com` (every command) and `app.hodeishield.com` (sign-in) over HTTPS
+on port 443. Once a day, from a terminal, it also asks `api.github.com` whether a newer release
+exists (see [New-version notice](#new-version-notice); `HODEISHIELD_NO_UPDATE_CHECK=1` turns it
+off). Behind a corporate proxy, nothing needs configuring in the CLI itself; it follows the proxy
+settings of the machine. Allow these hosts on the proxy.
 
-- **Proxy variables.** `HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY` and `NO_PROXY` are honoured, and so
-  are their lower-case forms. Since all traffic is HTTPS, `HTTPS_PROXY` (or `ALL_PROXY`) is the one
-  that matters; use `NO_PROXY` for hosts that must be reached directly.
+### Proxy variables
 
-  ```sh
-  export HTTPS_PROXY=http://proxy.example.com:3128
-  export NO_PROXY=localhost,127.0.0.1
-  hodeishield vendors list
-  ```
+`HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY` and `NO_PROXY` are honoured, and so are their lower-case
+forms. Since all traffic is HTTPS, `HTTPS_PROXY` (or `ALL_PROXY`) is the one that matters.
 
+```sh
+export HTTPS_PROXY=http://proxy.example.com:3128
+export NO_PROXY=localhost,127.0.0.1,.internal.example.com
+hodeishield vendors list
+```
+
+```powershell
+$env:HTTPS_PROXY = "http://proxy.example.com:3128"
+$env:NO_PROXY = "localhost,127.0.0.1,.internal.example.com"
+hodeishield vendors list
+```
+
+- **Precedence.** For each variable, the upper-case name is read first and the lower-case name only
+  when the upper-case one is not set (a variable that is set but empty counts as set, so
+  `HTTPS_PROXY=` switches the proxy off even if `https_proxy` has a value). `HTTPS_PROXY` wins over
+  `ALL_PROXY` for HTTPS requests. `NO_PROXY` always wins: a host it matches is reached directly.
+- **`NO_PROXY` syntax.** A comma-separated list of host names, IP addresses and CIDR ranges
+  (`192.168.1.0/24`). A name such as `example.com` or `.example.com` matches the domain and its
+  subdomains. `*` matches every host. Ports and URL schemes are not part of an entry.
+- **Proxy URL.** Use an `http://` URL. A URL without a scheme is read as `http://`. The proxy then
+  carries the HTTPS traffic with a `CONNECT` tunnel. SOCKS proxies are not supported.
+- **Proxy authentication.** Put the user name and password in the URL:
+  `http://user:password@proxy.example.com:3128`. Percent-encode special characters (`@` as `%40`,
+  `:` as `%3A`, `/` as `%2F`). Only Basic authentication is supported, not NTLM or Kerberos. A
+  password in an environment variable is visible to other processes of the same user, so prefer a
+  proxy that accepts the machine without one, or set the variable only for the command that needs it.
 - **Operating system settings.** On macOS and Windows the system proxy settings are read as well,
   next to the variables. On Linux only the variables are read.
-- **Certificates.** The CLI trusts the operating system's certificate store, not a bundled list. If
-  your organisation inspects TLS and its CA is installed in that store (the usual case on managed
-  Windows and macOS machines, or after `update-ca-certificates` / `update-ca-trust` on Linux), the
-  CLI trusts the proxy's certificates with no further setup. On Linux you can also point
-  `SSL_CERT_FILE` (a PEM file) or `SSL_CERT_DIR` at your CA certificates.
-- **What cannot be configured.** There is no CLI option to add a CA or to skip certificate
-  verification, and `SSL_CERT_FILE` / `SSL_CERT_DIR` have no effect on macOS and Windows: add the CA
-  to the system store there.
+- **Loopback.** The CLI never uses a proxy when its API or app URL is a loopback address.
 - **Sign-in on this machine.** `hodeishield login` waits for the browser on `127.0.0.1`; that
   redirect is made by your browser to the CLI, not by the CLI, so the CLI's proxy settings do not
-  apply to it (the CLI also never uses a proxy when its API or app URL is a loopback address). Your
-  browser's own proxy settings apply to the sign-in page. Where the browser cannot reach the
-  machine, use `hodeishield login --device`.
+  apply to it. Your browser's own proxy settings apply to the sign-in page. Where the browser cannot
+  reach the machine, use `hodeishield login --device`.
 
-To diagnose, add `--verbose`: each API request is logged to standard error with its URL, status,
-time and request id, followed by each retry and its reason. A failure to connect, including a proxy
-that refuses the connection or a certificate that is not trusted, ends with exit code 7 and a
-message that starts with `Could not reach the API:` (or `Could not reach the app` during sign-in)
-followed by the cause. A certificate error there usually means the proxy's CA is missing from the
-store described above.
+### TLS inspection and corporate CAs
 
-This behaviour comes from the CLI's HTTP library. It is verified in CI on Linux, macOS and Windows
-against a TLS-inspecting proxy whose CA is installed in the system store.
+The CLI trusts the operating system's certificate store, not a bundled list. If your organisation
+inspects TLS, the proxy presents certificates signed by the organisation's CA, and the CLI accepts
+them once that CA is in the store. There is no option to skip certificate verification, and a
+custom CA only changes which TLS certificates are trusted; it has no effect on how downloads are
+verified (checksums and signatures, see [Verify a download](#verify-a-download)).
+
+Get the CA certificate (PEM or DER) from your IT team, then install it:
+
+- **Windows.** Usually already installed on managed machines (by group policy). To add it by hand,
+  from an elevated PowerShell:
+
+  ```powershell
+  Import-Certificate -FilePath C:\path\to\corporate-ca.cer -CertStoreLocation Cert:\LocalMachine\Root
+  ```
+
+  A CA installed only for the current user (`Cert:\CurrentUser\Root`) is not guaranteed to be used;
+  use the machine store.
+- **macOS.** Usually already installed by device management. To add it by hand:
+
+  ```sh
+  sudo security add-trusted-cert -d -r trustRoot \
+    -k /Library/Keychains/System.keychain /path/to/corporate-ca.pem
+  ```
+
+- **Linux.** Install it in the system store, which the CLI reads:
+
+  ```sh
+  # Debian, Ubuntu (the file must end in .crt)
+  sudo cp corporate-ca.pem /usr/local/share/ca-certificates/corporate-ca.crt
+  sudo update-ca-certificates
+
+  # Fedora, RHEL and derivatives
+  sudo cp corporate-ca.pem /etc/pki/ca-trust/source/anchors/
+  sudo update-ca-trust
+  ```
+
+  Without administrator rights, set `SSL_CERT_FILE` to a PEM file with the CA certificate (or
+  `SSL_CERT_DIR` to a directory of hashed certificates) for the command:
+  `SSL_CERT_FILE=$HOME/corporate-ca.pem hodeishield vendors list`. The variable replaces the system
+  store for that process, so the file must hold every CA needed, not only the corporate one.
+  `SSL_CERT_FILE` and `SSL_CERT_DIR` have no effect on macOS and Windows: add the CA to the system
+  store there.
+
+### Check that it works
+
+Add `--verbose`: each API request is logged to standard error with its URL, status, time and request
+id, followed by each retry and its reason.
+
+```sh
+hodeishield --verbose vendors list
+```
+
+A failure to connect ends with exit code 7 and a message that starts with `Could not reach the API:`
+(or `Could not reach the app` during sign-in) followed by the cause.
+
+| Message or symptom | Likely cause and fix |
+| --- | --- |
+| `Could not reach the API: ... invalid peer certificate: UnknownIssuer` | The proxy re-signs HTTPS traffic and its CA is not in the system store. Install the CA as above. |
+| `Could not reach the API: ... tunnel error` or `connection refused` | The proxy address in `HTTPS_PROXY` is wrong or the proxy is down. Check the host and port, and that the machine reaches the proxy. |
+| `Could not reach the API: ... tunnel error: proxy authentication required` (HTTP 407) | The proxy needs credentials. Put them in the proxy URL (Basic only). |
+| The proxy works for other tools but not for the CLI | The tool may read a PAC file or the system settings on Linux, which the CLI does not. Set `HTTPS_PROXY` to the proxy the PAC file selects for `api.hodeishield.com`. |
+| Requests go through the proxy that should be bypassed | Add the host to `NO_PROXY`, using the syntax above. |
+| Same error with `SSL_CERT_FILE` set on macOS or Windows | Expected: those systems only use their own store. |
+
+A certificate error is not retried successfully by trying again; fix the trust first.
+
+This behaviour is verified in CI on Linux, macOS and Windows against a TLS-inspecting proxy whose CA
+is installed in the system store (the `proxy-tls` workflow).
 
 ## Repository layout
 
