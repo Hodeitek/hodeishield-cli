@@ -212,6 +212,39 @@ pub fn from_api(error: hodeishield_api::Error, context: &ApiContext<'_>) -> Fail
                         "{ask} Signing in again or using another key of this tenant will not help."
                     ))
                 }
+                403 if detail(&api, "code") == Some("IP_NOT_ALLOWED") => Failure::new(
+                    Kind::Forbidden,
+                    "The request comes from an IP address that is not allowed for this \
+                     credential or organisation.",
+                )
+                .hint(
+                    "Ask an administrator to add this machine's public IP address to the \
+                     allowlist, or run the command from an allowed network. Signing in again \
+                     will not help.",
+                ),
+                403 if detail(&api, "code") == Some("MFA_ENROLLMENT_REQUIRED") => Failure::new(
+                    Kind::Forbidden,
+                    "This account must enrol multi-factor authentication before it can use the API.",
+                )
+                .hint(
+                    "Sign in to the web app, enrol MFA in the account settings, then run \
+                     `hodeishield login` again.",
+                ),
+                // A reason code this CLI does not know (the vocabulary is open): the server's own
+                // message says what is wrong. The exit code stays the one of every 403.
+                403 if matches!(
+                    detail(&api, "code"),
+                    Some(reason) if reason != "INSUFFICIENT_SCOPE" && reason != "CREDENTIAL_NOT_ALLOWED"
+                ) =>
+                {
+                    Failure::new(
+                        Kind::Forbidden,
+                        format!(
+                            "The API refused the request: {}.",
+                            server_message.as_deref().map_or("forbidden", sentence_body)
+                        ),
+                    )
+                }
                 403 => {
                     let scopes: Vec<String> = api
                         .required_scopes

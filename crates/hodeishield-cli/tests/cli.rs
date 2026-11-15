@@ -469,6 +469,68 @@ fn a_module_not_entitled_answer_exits_4_with_its_own_message() {
     assert_no_key(&output);
 }
 
+/// A 403 with a reason code, run through `vendors list`: the exit code, and the words on stderr.
+fn forbidden_with_reason(reason_body: &str) -> (Option<i32>, String) {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    server
+        .mock("GET", "/v1/vendors")
+        .match_query(mockito::Matcher::Any)
+        .with_status(403)
+        .with_body(reason_body)
+        .expect(1)
+        .create();
+    let output = env
+        .api(&server)
+        .args(["vendors", "list"])
+        .output()
+        .expect("run");
+    assert_no_key(&output);
+    (
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
+}
+
+#[test]
+fn an_ip_not_allowed_answer_exits_4_and_says_what_to_do() {
+    let (code, stderr) = forbidden_with_reason(
+        r#"{"error":{"code":"forbidden","message":"Source address refused.","request_id":"req_ip","details":{"code":"IP_NOT_ALLOWED"}}}"#,
+    );
+    assert_eq!(code, Some(4), "{stderr}");
+    assert!(
+        stderr.contains("IP address that is not allowed"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("allowlist"), "{stderr}");
+    assert!(stderr.contains("request id: req_ip"), "{stderr}");
+    assert!(!stderr.contains("lacks the scope"), "{stderr}");
+}
+
+#[test]
+fn an_mfa_enrolment_answer_exits_4_and_points_to_the_web_app() {
+    let (code, stderr) = forbidden_with_reason(
+        r#"{"error":{"code":"forbidden","message":"MFA needed.","request_id":"req_mfa","details":{"code":"MFA_ENROLLMENT_REQUIRED"}}}"#,
+    );
+    assert_eq!(code, Some(4), "{stderr}");
+    assert!(
+        stderr.contains("must enrol multi-factor authentication"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("web app"), "{stderr}");
+    assert!(!stderr.contains("lacks the scope"), "{stderr}");
+}
+
+#[test]
+fn an_unknown_reason_code_shows_the_servers_message_and_keeps_exit_code_4() {
+    let (code, stderr) = forbidden_with_reason(
+        r#"{"error":{"code":"forbidden","message":"Device posture check failed.","request_id":"req_new","details":{"code":"SOMETHING_NEW"}}}"#,
+    );
+    assert_eq!(code, Some(4), "{stderr}");
+    assert!(stderr.contains("Device posture check failed"), "{stderr}");
+    assert!(!stderr.contains("lacks the scope"), "{stderr}");
+}
+
 #[test]
 fn an_api_message_that_says_broken_pipe_still_fails() {
     let env = Env::new();
