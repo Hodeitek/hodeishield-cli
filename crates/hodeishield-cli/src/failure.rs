@@ -332,6 +332,28 @@ pub fn from_api(error: hodeishield_api::Error, context: &ApiContext<'_>) -> Fail
                             "This credential reads one tenant only; leave out --tenant and \
                              --all-tenants.",
                         ),
+                        Some("UNKNOWN_QUERY_PARAMETER") => {
+                            let unknown = name_list(&api, "unknown", 10);
+                            let allowed = name_list(&api, "allowed", 40);
+                            let mut failure = Failure::general(if unknown.is_empty() {
+                                "The API does not know a query parameter this command sent."
+                                    .to_owned()
+                            } else {
+                                format!(
+                                    "The API does not know the query {} {}.",
+                                    if unknown.len() == 1 { "parameter" } else { "parameters" },
+                                    unknown.join(", ")
+                                )
+                            });
+                            if !allowed.is_empty() {
+                                failure = failure.hint(format!(
+                                    "The API accepts: {}. Check for a newer release of the CLI; \
+                                     if it persists, please report it.",
+                                    allowed.join(", ")
+                                ));
+                            }
+                            failure
+                        }
                         Some("TENANT_HEADER_INVALID") => failure.hint(
                             "The CLI sent a tenant selection the API could not read. This is a \
                              bug: please report it.",
@@ -453,6 +475,31 @@ fn detail<'a>(api: &'a hodeishield_api::ApiError, key: &str) -> Option<&'a str> 
         .and_then(|b| b.details.as_ref())
         .and_then(|d| d.get(key))
         .and_then(|v| v.as_str())
+}
+
+/// A list of parameter names in `error.details` (`unknown`, `allowed`): at most `max` short
+/// names, anything else is dropped.
+fn name_list(api: &hodeishield_api::ApiError, key: &str, max: usize) -> Vec<String> {
+    api.body
+        .as_ref()
+        .and_then(|b| b.details.as_ref())
+        .and_then(|d| d.get(key))
+        .and_then(|v| v.as_array())
+        .map(|list| {
+            list.iter()
+                .filter_map(|v| v.as_str())
+                .filter(|s| {
+                    !s.is_empty()
+                        && s.len() <= 64
+                        && s.chars().all(|c| {
+                            c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '[' | ']')
+                        })
+                })
+                .take(max)
+                .map(|s| format!("`{s}`"))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// A list a `MODULE_NOT_ENTITLED` answer sends in `details` (`scopes`, `modules` or `frameworks`):

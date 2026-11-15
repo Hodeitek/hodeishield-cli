@@ -532,6 +532,31 @@ fn an_unknown_reason_code_shows_the_servers_message_and_keeps_exit_code_4() {
 }
 
 #[test]
+fn an_unknown_query_parameter_answer_names_the_unknown_and_the_allowed_names() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    server
+        .mock("GET", "/v1/vendors")
+        .match_query(mockito::Matcher::Any)
+        .with_status(400)
+        .with_body(
+            r#"{"error":{"code":"invalid_request","message":"Unknown query parameter.","request_id":"req_q","details":{"code":"UNKNOWN_QUERY_PARAMETER","unknown":["colour"],"allowed":["page","per_page","sort"]}}}"#,
+        )
+        .expect(1)
+        .create();
+    let output = env
+        .api(&server)
+        .args(["vendors", "list"])
+        .output()
+        .expect("run");
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("query parameter `colour`"), "{stderr}");
+    assert!(stderr.contains("`page`, `per_page`, `sort`"), "{stderr}");
+    assert!(stderr.contains("request id: req_q"), "{stderr}");
+}
+
+#[test]
 fn an_api_message_that_says_broken_pipe_still_fails() {
     let env = Env::new();
     let mut server = mockito::Server::new();
