@@ -488,7 +488,10 @@ your CI's secret store; the CLI never prints it.
 organisation and, for a key, its scopes; for a sign-in, also the signed-in user when the service
 provides it; for a portfolio key, the MSSP and how many client tenants it
 can select. With `--json` these are the `tenant`, `organization`, `portfolio` and
-`credential_scopes` fields. If the API cannot be reached or fails on its side, `whoami` still shows
+`credential_scopes` fields. For a tenant API key that expires, `whoami` also shows when (a `Key
+expires` line, and `credential_expires_at` in `--json`, null when there is no expiry or the API
+cannot say), and warns on standard error when the key expires within 14 days or has already expired.
+If the API cannot be reached or fails on its side, `whoami` still shows
 the local settings, leaves those fields null, says why on standard error and exits 0. If the API
 does not accept the credential (revoked, expired or mistyped), it does the same but exits 3, like
 every other command, so a script can tell that the profile is signed out.
@@ -832,7 +835,7 @@ hodeishield vendors list --all --csv > vendors.csv
 | 1 | Error (invalid input, configuration, unexpected answer) |
 | 2 | Invalid command line |
 | 3 | Not authenticated: no credential (also when the system keychain cannot be reached in this session, or the opt-in token file is refused as unsafe; `login` and `logout` exit 1 for that), or the API rejected it (`whoami` too, after showing the local details) |
-| 4 | The credential lacks the scope the command needs, or the tenant's plan does not include the module (or the compliance framework is not enabled) |
+| 4 | The credential lacks the scope the command needs, the tenant's plan does not include the module (or the compliance framework is not enabled), the request comes from an IP address that is not allowed, or the account must enrol multi-factor authentication in the web app first |
 | 5 | Not found (or not in your organisation) |
 | 6 | Rate limit exhausted (the CLI already retried short waits) |
 | 7 | The API could not be reached or failed, or does not offer portfolio access yet |

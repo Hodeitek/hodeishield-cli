@@ -21,8 +21,23 @@ commands, `--json` output and exit codes. Each release's notes start with its se
   working. Giving two different values exits with code 2, like giving none.
   ([#58](https://github.com/Hodeitek/hodeishield-cli/issues/58))
 
+- `hodeishield whoami` shows when a tenant API key expires (a `Key expires` line, and the new
+  `credential_expires_at` field in `--json`, null for no expiry) and warns on standard error when the
+  key expires within 14 days or has expired. The existing `--json` fields are unchanged.
+- A refusal because the request comes from an IP address that is not allowed, or because the account
+  must enrol multi-factor authentication first, now says so with what to do about it, and exits with
+  code 4. Any other reason the API gives for a refusal is shown with the API's own message, also with
+  exit code 4.
+- When the API refuses a request because of a query parameter it does not know, the message now names
+  the unknown parameter and the ones the API accepts.
+- A warning on standard error (once per run) when the API marks a request as deprecated, for example
+  by sending a severity value that is being retired.
+
 ### Changed
 
+- The generated `/v1` client follows version 2026-11-15 of the API document.
+- A new test checks that every query parameter the client can send is declared in the vendored API
+  document.
 - The README's networking section now covers proxy precedence and `NO_PROXY` syntax, proxy
   authentication in the URL, installing a corporate CA on Linux, macOS and Windows, the hosts to
   allow (including the daily update check) and the common errors with their fix.
