@@ -567,7 +567,7 @@ fn json_whoami_fields() {
         .mock("GET", "/v1/me")
         .match_header("x-hs-tenant", mockito::Matcher::Missing)
         .with_body(
-            r#"{"data":{"credential":{"type":"tenant","prefix":null,"scopes":["supply_risk:read"]},
+            r#"{"data":{"credential":{"type":"tenant","prefix":null,"scopes":["supply_risk:read"],"expires_at":null},
                 "tenant":{"id":"6f1c2d3e-4b5a-4c6d-8e7f-0a1b2c3d4e5f","name":"Acme S.L.","type":"direct"},
                 "organization":{"id":"7a1c2d3e-4b5a-4c6d-8e7f-0a1b2c3d4e5f","name":"Acme Group","type":"direct"},
                 "portfolio":null}}"#,
@@ -588,7 +588,8 @@ fn json_whoami_fields() {
             "tenant",
             "organization",
             "portfolio",
-            "credential_scopes"
+            "credential_scopes",
+            "credential_expires_at"
         ]
     );
     assert_eq!(printed["credential"], json!("api_key"));
@@ -600,7 +601,48 @@ fn json_whoami_fields() {
     assert_eq!(printed["organization"]["name"], json!("Acme Group"));
     assert_eq!(printed["portfolio"], Value::Null);
     assert_eq!(printed["credential_scopes"], json!(["supply_risk:read"]));
+    assert_eq!(printed["credential_expires_at"], Value::Null);
+    assert!(!err(&output).contains("expire"), "{}", err(&output));
     me.assert();
+}
+
+/// `whoami` shows when a key expires, in the table and as `credential_expires_at`, and warns on
+/// stderr when that is within 14 days or past; the data on stdout is the same either way.
+#[test]
+fn whoami_shows_the_expiry_of_a_key_and_warns_when_it_is_near_or_past() {
+    for (expires_at, warning) in [
+        ("2020-01-01T00:00:00Z", Some("expired on 2020-01-01")),
+        ("2999-01-01T00:00:00Z", None),
+    ] {
+        let env = Env::new();
+        let mut server = mockito::Server::new();
+        server
+            .mock("GET", "/v1/me")
+            .with_body(format!(
+                r#"{{"data":{{"credential":{{"type":"tenant","prefix":null,"scopes":[],"expires_at":"{expires_at}"}},
+                    "tenant":{{"id":"6f1c2d3e-4b5a-4c6d-8e7f-0a1b2c3d4e5f","name":"Acme S.L.","type":"direct"}},
+                    "organization":{{"id":"7a1c2d3e-4b5a-4c6d-8e7f-0a1b2c3d4e5f","name":"Acme Group","type":"direct"}},
+                    "portfolio":null}}}}"#
+            ))
+            .create();
+        let output = env.api(&server.url(), &["--json", "whoami"]);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        let printed: Value = serde_json::from_str(&out(&output)).expect("json");
+        assert_eq!(printed["credential_expires_at"], json!(expires_at));
+        assert_eq!(
+            err(&output).contains("warning: this credential"),
+            warning.is_some()
+        );
+        if let Some(text) = warning {
+            assert!(err(&output).contains(text), "{}", err(&output));
+        }
+        let table = env.api(&server.url(), &["whoami"]);
+        assert!(
+            out(&table).contains(&format!("Key expires {expires_at}")),
+            "{}",
+            out(&table)
+        );
+    }
 }
 
 /// A key has no user: whatever `user` the API sends in `GET /v1/me`, neither the table nor `--json`
@@ -612,7 +654,7 @@ fn whoami_with_a_key_ignores_a_user_in_the_answer() {
     server
         .mock("GET", "/v1/me")
         .with_body(
-            r#"{"data":{"credential":{"type":"tenant","prefix":null,"scopes":["supply_risk:read"]},
+            r#"{"data":{"credential":{"type":"tenant","prefix":null,"scopes":["supply_risk:read"],"expires_at":null},
                 "tenant":{"id":"6f1c2d3e-4b5a-4c6d-8e7f-0a1b2c3d4e5f","name":"Acme S.L.","type":"direct"},
                 "organization":{"id":"7a1c2d3e-4b5a-4c6d-8e7f-0a1b2c3d4e5f","name":"Acme Group","type":"direct"},
                 "portfolio":null,
@@ -646,7 +688,13 @@ fn whoami_with_a_rejected_credential_exits_3() {
     assert_eq!(output.status.code(), Some(3), "{output:?}");
     let printed: Value = serde_json::from_str(&out(&output)).expect("json");
     assert_eq!(printed["credential"], "api_key");
-    for key in ["tenant", "organization", "portfolio", "credential_scopes"] {
+    for key in [
+        "tenant",
+        "organization",
+        "portfolio",
+        "credential_scopes",
+        "credential_expires_at",
+    ] {
         assert_eq!(printed[key], Value::Null, "{key}");
     }
     let stderr = err(&output);
@@ -695,7 +743,13 @@ fn json_whoami_without_the_api() {
     let output = env.api(&server.url(), &["--json", "whoami"]);
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     let printed: Value = serde_json::from_str(&out(&output)).expect("json");
-    for key in ["tenant", "organization", "portfolio", "credential_scopes"] {
+    for key in [
+        "tenant",
+        "organization",
+        "portfolio",
+        "credential_scopes",
+        "credential_expires_at",
+    ] {
         assert_eq!(printed[key], Value::Null, "{key}");
     }
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1118,7 +1172,7 @@ fn json_whoami_field_types() {
     server
         .mock("GET", "/v1/me")
         .with_body(
-            r#"{"data":{"credential":{"type":"tenant","prefix":null,"scopes":["supply_risk:read"]},
+            r#"{"data":{"credential":{"type":"tenant","prefix":null,"scopes":["supply_risk:read"],"expires_at":null},
                 "tenant":{"id":"6f1c2d3e-4b5a-4c6d-8e7f-0a1b2c3d4e5f","name":"Acme S.L.","type":"direct"},
                 "organization":{"id":"7a1c2d3e-4b5a-4c6d-8e7f-0a1b2c3d4e5f","name":"Acme Group","type":"direct"},
                 "portfolio":null}}"#,
@@ -1130,7 +1184,7 @@ fn json_whoami_field_types() {
     assert_eq!(
         describe(&printed),
         "profile:string,api_url:string,app_url:string,credential:string,tenant:object,\
-         organization:object,portfolio:null,credential_scopes:array"
+         organization:object,portfolio:null,credential_scopes:array,credential_expires_at:null"
     );
     assert_eq!(
         describe(&printed["tenant"]),

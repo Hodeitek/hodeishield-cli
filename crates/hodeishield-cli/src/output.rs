@@ -370,9 +370,85 @@ pub fn unix_to_rfc3339(seconds: u64) -> String {
     )
 }
 
+/// Reads an RFC 3339 timestamp (`2026-12-01T00:00:00Z`, with optional fraction and offset) as Unix
+/// seconds, without a date library. `None` when it is not one.
+pub fn rfc3339_to_unix(text: &str) -> Option<i64> {
+    let b = text.trim().as_bytes();
+    let num = |from: usize, to: usize| -> Option<i64> {
+        let digits = b.get(from..to)?;
+        digits
+            .iter()
+            .all(u8::is_ascii_digit)
+            .then(|| digits.iter().fold(0, |n, d| n * 10 + i64::from(d - b'0')))
+    };
+    if b.len() < 20
+        || b[4] != b'-'
+        || b[7] != b'-'
+        || !matches!(b[10], b'T' | b't' | b' ')
+        || b[13] != b':'
+        || b[16] != b':'
+    {
+        return None;
+    }
+    let (year, month, day) = (num(0, 4)?, num(5, 7)?, num(8, 10)?);
+    let (hour, minute, second) = (num(11, 13)?, num(14, 16)?, num(17, 19)?);
+    if !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
+        || hour > 23
+        || minute > 59
+        || second > 60
+    {
+        return None;
+    }
+    let mut at = 19;
+    if b[at] == b'.' {
+        at += 1;
+        let start = at;
+        while b.get(at).is_some_and(u8::is_ascii_digit) {
+            at += 1;
+        }
+        if at == start {
+            return None;
+        }
+    }
+    let offset = match b.get(at)? {
+        b'Z' | b'z' if at + 1 == b.len() => 0,
+        sign @ (b'+' | b'-') if at + 6 == b.len() && b[at + 3] == b':' => {
+            let seconds = num(at + 1, at + 3)? * 3_600 + num(at + 4, at + 6)? * 60;
+            if *sign == b'+' { seconds } else { -seconds }
+        }
+        _ => return None,
+    };
+    // Howard Hinnant's days_from_civil.
+    let y = year - i64::from(month <= 2);
+    let era = y.div_euclid(400);
+    let yoe = y.rem_euclid(400);
+    let doy = (153 * (if month > 2 { month - 3 } else { month + 9 }) + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    Some(days * 86_400 + hour * 3_600 + minute * 60 + second - offset)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_rfc3339_timestamp_reads_back_as_unix_seconds() {
+        assert_eq!(rfc3339_to_unix("1970-01-01T00:00:00Z"), Some(0));
+        assert_eq!(rfc3339_to_unix("2026-09-21T14:13:20Z"), Some(1_790_000_000));
+        assert_eq!(
+            rfc3339_to_unix("2000-02-29T00:00:00.500Z"),
+            Some(951_782_400)
+        );
+        assert_eq!(
+            rfc3339_to_unix("2026-09-21T16:13:20+02:00"),
+            Some(1_790_000_000)
+        );
+        assert_eq!(rfc3339_to_unix("2026-09-21"), None);
+        assert_eq!(rfc3339_to_unix("soon"), None);
+        assert_eq!(rfc3339_to_unix("2026-13-21T14:13:20Z"), None);
+    }
 
     #[test]
     fn a_count_of_one_takes_the_singular() {
