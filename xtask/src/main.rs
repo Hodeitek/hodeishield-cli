@@ -32,7 +32,7 @@ use std::process::{Command, ExitCode, Stdio};
 const SPEC: &str = "openapi/v1.json";
 const OUT: &str = "crates/hodeishield-api/src/generated.rs";
 /// SHA-256 of `openapi/v1.json`. Updating the document means updating this and `openapi/README.md`.
-const EXPECTED_SHA256: &str = "8e54afa39a5d4a1543a79b9c0876da7afa2ffd32a3dc8de9a76c02f59019778e";
+const EXPECTED_SHA256: &str = "96eb7808965b38686d3df9c3295d0cb78ade9f17dc0d784bfd9ad002ef8ce7a3";
 
 /// Type names that the default naming rules would get wrong, keyed by the schema's location.
 const RENAMES: &[(&str, &str)] = &[
@@ -268,10 +268,10 @@ impl<'a> Generator<'a> {
         for (path, item) in paths {
             let item = item.as_object().ok_or("path item is not an object")?;
             for (method, operation) in item {
+                // The CLI only reads: an operation that writes is described by the document but
+                // gets no method in this client.
                 if method != "get" {
-                    return Err(format!(
-                        "{method} {path}: /v1 is read-only and this client only generates GET"
-                    ));
+                    continue;
                 }
                 self.operation(path, operation, &enum_names)?;
             }

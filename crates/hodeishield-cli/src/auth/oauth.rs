@@ -71,6 +71,8 @@ const SIGNED_IN_OPERATIONS: &[Operation] = &[
 const NOT_SIGNED_IN_OPERATIONS: &[Operation] = &[
     // The tenant listing answers a portfolio key only, never a sign-in.
     operations::LIST_PORTFOLIO_TENANTS,
+    // Reading a proposal needs the scope to make one, which no command asks for.
+    operations::GET_ACT_PROPOSAL,
 ];
 
 /// The scopes to ask for when the profile names none: the ones the operations in
