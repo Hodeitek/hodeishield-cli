@@ -557,6 +557,29 @@ fn an_unknown_query_parameter_answer_names_the_unknown_and_the_allowed_names() {
 }
 
 #[test]
+fn a_deprecation_header_prints_one_warning_on_stderr() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    server
+        .mock("GET", "/v1/vendors")
+        .match_query(mockito::Matcher::Any)
+        .with_status(200)
+        .with_header("deprecation", "true")
+        .with_header("sunset", "Thu, 14 Jan 2027 00:00:00 GMT")
+        .with_body(r#"{"data":[],"pagination":{"page":1,"per_page":50,"total":0,"total_pages":0}}"#)
+        .create();
+    let output = env
+        .api(&server)
+        .args(["vendors", "list"])
+        .output()
+        .expect("run");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(stderr.matches("deprecated").count(), 1, "{stderr}");
+    assert!(stderr.contains("sunset: Thu, 14 Jan 2027"), "{stderr}");
+}
+
+#[test]
 fn an_api_message_that_says_broken_pipe_still_fails() {
     let env = Env::new();
     let mut server = mockito::Server::new();
