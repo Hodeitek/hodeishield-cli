@@ -623,6 +623,7 @@ a code. You have two options, in this order of preference:
 hodeishield vendors list --criticality critical
 hodeishield vendors get 0b8f2a52-6a0e-4d5c-9d3e-1f2a3b4c5d6e
 hodeishield alerts list --status open --since 2026-01-01T00:00:00Z
+hodeishield alerts get 7c1e0a52-6a0e-4d5c-9d3e-1f2a3b4c5d6e   # includes the ATT&CK techniques
 hodeishield risks list --min-inherent-score 15 --sort inherent_score
 hodeishield changes list --status scheduled --created-from 2026-11-01
 hodeishield compliance posture nis2

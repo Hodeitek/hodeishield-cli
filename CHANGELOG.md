@@ -8,6 +8,15 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ### Added
 
+- `hodeishield alerts get` shows the MITRE ATT&CK techniques mapped to the alert in an "ATT&CK
+  techniques" section (id, name and tactic, plus the sub-technique when there is one). With no
+  techniques it says why: none mapped, not included in the current plan, or mapping not available.
+  `hodeishield alerts list` gains an `ATT&CK` column with the technique ids (the first three and a
+  count of the rest). `--json` and `--csv` already carried `mitre_techniques` and `mitre_mapping`.
+  There is no `--technique` filter: the API does not offer one on `GET /v1/alerts`, and filtering a
+  paginated list on the client would give wrong results across pages.
+  ([#57](https://github.com/Hodeitek/hodeishield-cli/issues/57))
+
 - `hodeishield changes list` reads the change-management register (`GET /v1/changes`): reference,
   title, status, type, category, risk level and planned and carried-out dates, with the published
   filters (`--status`, `--type`, `--category`, `--created-from`, `--created-to`), `--sort`, `--order`
