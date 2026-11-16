@@ -64,8 +64,9 @@ impl Context {
                 )
             })?;
         }
-        if self.verbose {
-            builder = builder.observer(|event| {
+        let verbose = self.verbose;
+        builder = builder.observer(move |event| {
+            if verbose {
                 eprintln!(
                     "{} {} → {} ({} ms{})",
                     event.method,
@@ -76,7 +77,12 @@ impl Context {
                         .request_id
                         .map_or_else(String::new, |id| format!(", request id {id}"))
                 );
-            });
+            }
+            if event.deprecated {
+                warn_deprecated(event.sunset);
+            }
+        });
+        if self.verbose {
             builder = builder.retry_observer(|event| {
                 eprintln!(
                     "retrying GET {} in {} ms ({}, retry {})",
@@ -153,4 +159,21 @@ pub fn run(cli: Cli, out: &mut dyn Write) -> Result<()> {
             Ok(())
         }
     }
+}
+
+/// Says once per run that the API marked a request as deprecated. The `Sunset` text comes from the
+/// network, so only a short printable date is shown.
+fn warn_deprecated(sunset: Option<&str>) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static WARNED: AtomicBool = AtomicBool::new(false);
+    if WARNED.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    let until = sunset
+        .filter(|s| s.len() <= 40 && s.chars().all(|c| c.is_ascii_graphic() || c == ' '))
+        .map_or_else(String::new, |s| format!(" (sunset: {s})"));
+    eprintln!(
+        "warning: the API marked part of this request as deprecated{until}. Update the CLI, and \
+         use the English severity values (critical, high, medium, low, info) if you pass --severity."
+    );
 }

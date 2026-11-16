@@ -8,7 +8,7 @@ use crate::auth::oauth::{self, Pkce, Revocation};
 use crate::auth::{self, StoredToken, loopback::Loopback};
 use crate::cli::LoginArgs;
 use crate::failure::{CredentialSource, Failure, Kind, Result};
-use crate::output::{clean, print_json, unix_to_rfc3339};
+use crate::output::{clean, print_json, rfc3339_to_unix, unix_to_rfc3339};
 use hodeishield_api::v1::WhoAmI;
 use serde_json::{Map, Value, json};
 use std::io::Write;
@@ -404,6 +404,13 @@ fn whoami_with(
         "credential_scopes".into(),
         json!(who.map(|me| &me.credential.scopes)),
     );
+    // When a tenant API key stops working; null for no expiry, for a sign-in (which renews itself)
+    // and when the API could not be asked.
+    let credential_expires_at = who.and_then(|me| me.credential.expires_at.as_deref());
+    info.insert("credential_expires_at".into(), json!(credential_expires_at));
+    if let Some(warning) = credential_expiry_warning(credential_expires_at, now_unix()) {
+        eprintln!("{warning}");
+    }
 
     if json {
         print_json(out, &Value::Object(info))?;
@@ -430,6 +437,9 @@ fn whoami_with(
                 rows.push((label, clean(value)));
             }
         }
+        if let Some(at) = credential_expires_at {
+            rows.push(("Key expires", clean(at)));
+        }
         if let Some(me) = who {
             rows.extend(me_rows(me, source == Some(CredentialSource::ApiKey)));
         }
@@ -441,6 +451,41 @@ fn whoami_with(
         (Some(_), None) => Ok(()),
         (Some(_), Some(failure)) => Err(failure),
         (None, _) => Err(auth::not_signed_in(settings)),
+    }
+}
+
+/// How long before a credential's expiry `whoami` starts to warn.
+const EXPIRY_WARNING_DAYS: i64 = 14;
+
+fn now_unix() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|d| i64::try_from(d.as_secs()).ok())
+        .unwrap_or(0)
+}
+
+/// The warning for a credential that has expired or expires within [`EXPIRY_WARNING_DAYS`] days.
+/// `None` for no expiry, a date further away, or text that is not a timestamp.
+fn credential_expiry_warning(expires_at: Option<&str>, now: i64) -> Option<String> {
+    let text = expires_at?;
+    let at = rfc3339_to_unix(text)?;
+    let shown = clean(text);
+    let left = at - now;
+    if left <= 0 {
+        Some(format!(
+            "warning: this credential expired on {shown}. Create a new API key or run \
+             `hodeishield login`."
+        ))
+    } else if left <= EXPIRY_WARNING_DAYS * 86_400 {
+        let days = (left + 86_399) / 86_400;
+        Some(format!(
+            "warning: this credential expires on {shown} (in {days} {}). Create a new API key \
+             before then.",
+            if days == 1 { "day" } else { "days" }
+        ))
+    } else {
+        None
     }
 }
 
@@ -552,6 +597,34 @@ fn user_label(info: &Map<String, Value>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_credential_warns_when_it_expires_within_14_days_or_has_expired() {
+        use super::credential_expiry_warning as warn;
+        // 2026-12-01T00:00:00Z
+        let now = 1_795_000_000 - 1_795_000_000 % 86_400;
+        let at = |secs: i64| {
+            crate::output::unix_to_rfc3339(u64::try_from(now + secs).expect("after 1970"))
+        };
+        assert_eq!(warn(None, now), None);
+        assert_eq!(warn(Some("not a date"), now), None);
+        assert_eq!(warn(Some(&at(15 * 86_400)), now), None);
+        assert!(
+            warn(Some(&at(14 * 86_400)), now)
+                .expect("a warning")
+                .contains("expires on")
+        );
+        assert!(
+            warn(Some(&at(3_600)), now)
+                .expect("a warning")
+                .contains("in 1 day)")
+        );
+        assert!(
+            warn(Some(&at(-1)), now)
+                .expect("a warning")
+                .contains("expired on")
+        );
+    }
+
     use super::*;
     use crate::auth::TokenStore;
     use crate::auth::store::MemoryStore;

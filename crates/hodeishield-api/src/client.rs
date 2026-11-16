@@ -195,6 +195,11 @@ pub struct RequestEvent<'a> {
     pub request_id: Option<&'a str>,
     /// Time to the response headers.
     pub elapsed: Duration,
+    /// Whether the answer carries a `Deprecation` header: the API still honoured the request but
+    /// marks something in it (a parameter value, say) as deprecated.
+    pub deprecated: bool,
+    /// `Sunset` of the answer (RFC 8594), as sent, when the answer is deprecated and carries it.
+    pub sunset: Option<&'a str>,
 }
 
 /// What the client reports before it sends a request again, for `--verbose`. It carries no header
@@ -566,6 +571,13 @@ impl Client {
                     status: meta.status,
                     request_id: meta.request_id.as_deref(),
                     elapsed: started.elapsed(),
+                    deprecated: response.headers().contains_key("deprecation"),
+                    sunset: response
+                        .headers()
+                        .get("sunset")
+                        .and_then(|v| v.to_str().ok())
+                        .map(str::trim)
+                        .filter(|v| !v.is_empty()),
                 });
             }
             // A scoped answer that does not carry the scope that was asked for is never decoded.

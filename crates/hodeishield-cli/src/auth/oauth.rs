@@ -71,6 +71,8 @@ const SIGNED_IN_OPERATIONS: &[Operation] = &[
 const NOT_SIGNED_IN_OPERATIONS: &[Operation] = &[
     // The tenant listing answers a portfolio key only, never a sign-in.
     operations::LIST_PORTFOLIO_TENANTS,
+    // Reading a proposal needs the scope to make one, which no command asks for.
+    operations::GET_ACT_PROPOSAL,
 ];
 
 /// The scopes to ask for when the profile names none: the ones the operations in
@@ -691,6 +693,14 @@ pub fn poll_device(
                 "slow_down" => {
                     interval = (interval + Duration::from_secs(5)).min(Duration::from_secs(60));
                 }
+                "access_denied"
+                    if error
+                        .error_description
+                        .as_deref()
+                        .is_some_and(|d| d.contains("plan_without_api")) =>
+                {
+                    return Err(crate::failure::plan_without_api(Kind::NotAuthenticated));
+                }
                 "access_denied" => {
                     return Err(Failure::new(
                         Kind::NotAuthenticated,
@@ -1147,6 +1157,35 @@ mod tests {
             assert!(err.message.contains(expected), "{}", err.message);
             mock.remove();
         }
+        // A plan without API access: the same message and hint as the API refusal.
+        let mock = server
+            .mock("POST", "/token")
+            .with_status(400)
+            .with_body(r#"{"error":"access_denied","error_description":"plan_without_api"}"#)
+            .create();
+        let clock = std::time::Instant::now();
+        let err = poll_device(
+            &http,
+            &metadata,
+            "cli",
+            &authorization,
+            &mut |_| {},
+            &|| clock,
+        )
+        .expect_err("fails");
+        assert_eq!(
+            err.message,
+            "This tenant's plan does not include API or CLI access."
+        );
+        assert!(
+            err.hint
+                .as_deref()
+                .is_some_and(|h| h.contains("from Comply up")),
+            "{:?}",
+            err.hint
+        );
+        assert_eq!(err.kind.exit_code(), Kind::NotAuthenticated.exit_code());
+        mock.remove();
         // A deadline already past: no request at all.
         let clock = std::time::Instant::now();
         let never = server.mock("POST", "/token").expect(0).create();

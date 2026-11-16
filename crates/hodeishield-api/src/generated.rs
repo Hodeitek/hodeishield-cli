@@ -13,7 +13,7 @@
 use serde::{Deserialize, Serialize};
 
 /// `info.version` of the OpenAPI document this client was generated from.
-pub const OPENAPI_VERSION: &str = "2026-10-29";
+pub const OPENAPI_VERSION: &str = "2026-11-15";
 
 /// The server the OpenAPI document declares.
 pub const DEFAULT_SERVER: &str = "https://api.hodeishield.com";
@@ -113,6 +113,45 @@ pub struct GetVendorResponse {
     pub data: Vendor,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MitreTechniques {
+    /// ATT&CK technique id, e.g. `T1059`; the parent of a sub-technique.
+    pub id: String,
+    pub name: String,
+    /// e.g. `TA0002`.
+    pub tactic_id: String,
+    pub tactic_name: String,
+    /// e.g. `T1059.001` when the technique is a sub-technique, otherwise null.
+    #[serde(default)]
+    pub subtechnique_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Source {
+    /// CTID Mappings Explorer dataset, e.g. `kev`.
+    pub framework: String,
+    pub framework_version: String,
+    /// MITRE ATT&CK release the techniques come from.
+    pub attack_version: String,
+    /// Commit of the CTID mappings that were imported.
+    pub upstream_commit: String,
+}
+
+/// Why `mitre_techniques` holds what it holds, and where the mapping comes from.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MitreMapping {
+    /// `mapped`: techniques found. `unmapped`: no mapping (a non-CVE alert, or a CVE outside the CISA KEV set). `not_in_plan`: the tenant plan does not include `supply_chain.mitre_mapping`. `unavailable`: the reference data is not loaded in this environment.
+    ///
+    /// Documented values: `mapped`, `unmapped`, `not_in_plan`, `unavailable`. Treat any other value as valid: the vocabulary may grow.
+    pub status: String,
+    /// Human-readable reason; «sin mapeo» when `unmapped`.
+    #[serde(default)]
+    pub note: Option<String>,
+    /// Source and version of the mapping; null unless the mapping was served.
+    #[serde(default)]
+    pub source: Option<Source>,
+}
+
 /// A supply-chain alert raised against one vendor.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Alert {
@@ -149,6 +188,11 @@ pub struct Alert {
     pub created_at: String,
     /// RFC 3339, UTC. Last change of severity, acknowledgement, resolution or CISA KEV status; equals the instant the service started tracking it for alerts older than that.
     pub updated_at: String,
+    /// MITRE ATT&CK techniques mapped to the alert CVE (CTID KEV mappings; one entry per technique and tactic). Empty array: the alert has no mapping (`mitre_mapping.status` is `unmapped`, «sin mapeo»). null: the mapping is not served (`not_in_plan` or `unavailable`).
+    #[serde(default)]
+    pub mitre_techniques: Option<Vec<MitreTechniques>>,
+    /// Why `mitre_techniques` holds what it holds, and where the mapping comes from.
+    pub mitre_mapping: MitreMapping,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -426,6 +470,9 @@ pub struct Credential {
     pub prefix: Option<String>,
     /// The scopes the credential carries.
     pub scopes: Vec<String>,
+    /// When a tenant API key (`hsk_…`) stops working, RFC 3339 UTC; null for a key with no expiry. Always null for an OAuth access token, which a client renews with its refresh token, and, for now, for a portfolio key (not reported).
+    #[serde(default)]
+    pub expires_at: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -609,6 +656,20 @@ pub struct Change {
 pub struct ListChangesResponse {
     pub data: Vec<Change>,
     pub pagination: Pagination,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GetActProposalResponse {
+    /// `proposed` (waiting for a person), `approved`, `executed`, `rejected` (a person said no), `refused` (the system did; `refusal_reason` says why) or `expired` (nobody decided within 7 days; reported as soon as `expires_at` passes).
+    ///
+    /// Documented values: `proposed`, `approved`, `rejected`, `executed`, `expired`, `refused`. Treat any other value as valid: the vocabulary may grow.
+    pub status: String,
+    /// Why the system refused it (`refused` only), from an open vocabulary: for example `grant_revoked` (this access was revoked before it ran), `mcp_not_open` (the plan no longer includes the MCP) or `approval_expired`. Null otherwise.
+    #[serde(default)]
+    pub refusal_reason: Option<String>,
+    /// RFC 3339, UTC, when it was executed; else null.
+    #[serde(default)]
+    pub executed_at: Option<String>,
 }
 
 /// Accepted values of a query parameter.
@@ -1548,7 +1609,7 @@ pub struct ListAlertsParams {
     pub order: Option<Order>,
     /// Filter by the derived status.
     pub status: Option<AlertStatus>,
-    /// Exact severity match, in the vocabulary the response uses (critical | high | medium | low | info). The legacy Spanish values (critico, alto, medio, bajo, info) are still accepted and mean the same; they are documented as accepted until 2027-01-14, so move to the English ones. Any other value is matched exactly and matches nothing, and the answer then carries a `meta.warnings` entry and the `X-HS-Unknown-Filter` header.
+    /// Exact severity match, in the vocabulary the response uses (critical | high | medium | low | info). The legacy Spanish values (critico, alto, medio, bajo, info) are still accepted and mean the same; they are documented as accepted until 2027-01-14, so move to the English ones; a request that uses one also gets the `Deprecation`, `Sunset` and `Link` (`rel="deprecation"`) response headers. Any other value is matched exactly and matches nothing, and the answer then carries a `meta.warnings` entry and the `X-HS-Unknown-Filter` header.
     pub severity: Option<String>,
     /// Only alerts about this vendor.
     pub vendor_id: Option<String>,
@@ -2223,6 +2284,18 @@ pub mod operations {
         tenant_scoped: true,
     };
 
+    /// `GET /v1/act/proposals/{id}`: Status of a proposal this application made.
+    pub const GET_ACT_PROPOSAL: Operation = Operation {
+        id: "getActProposal",
+        method: "GET",
+        path: "/v1/act/proposals/{id}",
+        summary: "Status of a proposal this application made",
+        scopes: &["act:propose"],
+        known_values: &[],
+        deprecated_values: &[],
+        tenant_scoped: true,
+    };
+
     /// All operations, in document order.
     pub const ALL: &[Operation] = &[
         LIST_VENDORS,
@@ -2242,6 +2315,7 @@ pub mod operations {
         GET_REPORT,
         DOWNLOAD_REPORT,
         LIST_CHANGES,
+        GET_ACT_PROPOSAL,
     ];
 }
 
@@ -2479,7 +2553,7 @@ impl crate::Client {
 
     /// List the client tenants of an MSSP portfolio.
     ///
-    /// Every tenant the presented PORTFOLIO key may select with `X-HS-Tenant`: the MSSP’s own tenants (its internal one included) and every tenant of its active client organisations, active or not, licensed or not, narrowed to the key’s client subset when it has one. Membership is evaluated live on every request. Only a portfolio key (`hsp_…`) can call this operation; this operation never takes `X-HS-Tenant`.
+    /// Every tenant the presented PORTFOLIO key may select with `X-HS-Tenant`: the MSSP’s own tenants (its internal one included) and every tenant of its active client organisations, active or not, licensed or not, narrowed to the key’s client subset when it has one, and to the tenants whose IP allowlist admits the address of this request (a tenant with an allowlist that excludes it is not listed and is not counted; if a client’s allowlist cannot be read the answer is 503, not a shorter list). Membership is evaluated live on every request. Only a portfolio key (`hsp_…`) can call this operation; this operation never takes `X-HS-Tenant`.
     ///
     /// Required scope: `portfolio:read`. Published in `/v1` since 2026-10-16.
     ///
@@ -2500,7 +2574,7 @@ impl crate::Client {
 
     /// Describe the calling credential.
     ///
-    /// Who the presented credential is: its type and scopes, and the tenant and organisation it reads (a tenant API key or an OAuth token), for an OAuth token also the signed-in user (`user`: its own id and name, and its email only when the token carries the `email` scope; never another user’s; null for any key), or the MSSP organisation it belongs to and how many tenants it can reach (a portfolio key; the tenants themselves are on `GET /v1/portfolio/tenants`). It describes the caller only: no other tenant, no secret, never the key or its hash. Any valid credential may call it: it requires NO scope, and it uses the same authentication and the same rate limits as every other operation. It never takes `X-HS-Tenant`.
+    /// Who the presented credential is: its type and scopes, and the tenant and organisation it reads (a tenant API key or an OAuth token), for an OAuth token also the signed-in user (`user`: its own id and name, and its email only when the token carries the `email` scope; never another user’s; null for any key), or the MSSP organisation it belongs to and how many tenants it can reach from this address (a portfolio key; tenants whose IP allowlist excludes the address are not counted; the tenants themselves are on `GET /v1/portfolio/tenants`). It describes the caller only: no other tenant, no secret, never the key or its hash. Any valid credential may call it: it requires NO scope, and it uses the same authentication and the same rate limits as every other operation. It never takes `X-HS-Tenant`.
     ///
     /// Required scope: `none (any valid credential)`. Published in `/v1` since 2026-10-17.
     ///
@@ -2590,6 +2664,27 @@ impl crate::Client {
             &operations::LIST_CHANGES,
             "/v1/changes".to_owned(),
             params.query_pairs(),
+        )
+    }
+
+    /// Status of a proposal this application made.
+    ///
+    /// The status of a proposal made by THIS grant (the same application, user and tenant). Never the payload and never who decided it. An id this grant did not propose answers 404, exactly as one that does not exist. Only an OAuth access token issued for the HodeiShield MCP server, carrying `act:propose`, may call it.
+    ///
+    /// Required scope: `act:propose`. Published in `/v1` since 2026-11-15.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error`] when the request cannot be sent, the API answers with an error, or the
+    /// body does not match the document.
+    pub fn get_act_proposal(
+        &self,
+        id: &str,
+    ) -> Result<crate::ApiResponse<GetActProposalResponse>, crate::Error> {
+        self.get(
+            &operations::GET_ACT_PROPOSAL,
+            format!("/v1/act/proposals/{}", crate::encode_path_segment(id)?),
+            Vec::new(),
         )
     }
 }

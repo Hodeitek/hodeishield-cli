@@ -237,7 +237,7 @@ fn all_walks_every_page() {
                 mockito::Matcher::UrlEncoded("per_page".into(), "200".into()),
             ]))
             .with_body(format!(
-                r#"{{"data":[{{"id":"a{n}","vendor_id":"v","type":"cve","severity":null,"title":"{name}","description":null,"source_url":null,"economic_impact":null,"status":"open","acknowledged_at":null,"resolved_at":null,"resolution_reason":null,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-02T00:00:00Z"}}],"pagination":{{"page":{n},"per_page":1,"total":2,"total_pages":2}}}}"#
+                r#"{{"data":[{{"id":"a{n}","vendor_id":"v","type":"cve","severity":null,"title":"{name}","description":null,"source_url":null,"economic_impact":null,"status":"open","acknowledged_at":null,"resolved_at":null,"resolution_reason":null,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-02T00:00:00Z","mitre_techniques":null,"mitre_mapping":{{"status":"unavailable","note":null,"source":null}}}}],"pagination":{{"page":{n},"per_page":1,"total":2,"total_pages":2}}}}"#
             ))
             .expect(1)
             .create();
@@ -262,7 +262,7 @@ fn all_walks_every_page() {
 fn cursor_page(n: i64, next_cursor: Option<&str>) -> String {
     let next = next_cursor.map_or("null".to_owned(), |c| format!(r#""{c}""#));
     format!(
-        r#"{{"data":[{{"id":"a{n}","vendor_id":"v","type":"cve","severity":null,"title":"T{n}","description":null,"source_url":null,"economic_impact":null,"status":"open","acknowledged_at":null,"resolved_at":null,"resolution_reason":null,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-02T00:00:00Z"}}],"pagination":{{"per_page":1,"next_cursor":{next}}}}}"#
+        r#"{{"data":[{{"id":"a{n}","vendor_id":"v","type":"cve","severity":null,"title":"T{n}","description":null,"source_url":null,"economic_impact":null,"status":"open","acknowledged_at":null,"resolved_at":null,"resolution_reason":null,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-02T00:00:00Z","mitre_techniques":null,"mitre_mapping":{{"status":"unavailable","note":null,"source":null}}}}],"pagination":{{"per_page":1,"next_cursor":{next}}}}}"#
     )
 }
 
@@ -467,6 +467,131 @@ fn a_module_not_entitled_answer_exits_4_with_its_own_message() {
     assert!(!stderr.contains("lacks the scope"), "{stderr}");
     mock.assert();
     assert_no_key(&output);
+}
+
+/// A 403 with a reason code, run through `vendors list`: the exit code, and the words on stderr.
+fn forbidden_with_reason(reason_body: &str) -> (Option<i32>, String) {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    server
+        .mock("GET", "/v1/vendors")
+        .match_query(mockito::Matcher::Any)
+        .with_status(403)
+        .with_body(reason_body)
+        .expect(1)
+        .create();
+    let output = env
+        .api(&server)
+        .args(["vendors", "list"])
+        .output()
+        .expect("run");
+    assert_no_key(&output);
+    (
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
+}
+
+#[test]
+fn an_ip_not_allowed_answer_exits_4_and_says_what_to_do() {
+    let (code, stderr) = forbidden_with_reason(
+        r#"{"error":{"code":"forbidden","message":"Source address refused.","request_id":"req_ip","details":{"code":"IP_NOT_ALLOWED"}}}"#,
+    );
+    assert_eq!(code, Some(4), "{stderr}");
+    assert!(
+        stderr.contains("IP address that is not allowed"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("allowlist"), "{stderr}");
+    assert!(stderr.contains("request id: req_ip"), "{stderr}");
+    assert!(!stderr.contains("lacks the scope"), "{stderr}");
+}
+
+#[test]
+fn a_plan_without_api_answer_exits_4_and_names_the_plan() {
+    let (code, stderr) = forbidden_with_reason(
+        r#"{"error":{"code":"forbidden","message":"Plan.","request_id":"req_plan","details":{"code":"PLAN_WITHOUT_API","deniedReason":"plan_without_api"}}}"#,
+    );
+    assert_eq!(code, Some(4), "{stderr}");
+    assert!(
+        stderr.contains("plan does not include API or CLI access"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("from Comply up"), "{stderr}");
+    assert!(stderr.contains("request id: req_plan"), "{stderr}");
+    assert!(!stderr.contains("lacks the scope"), "{stderr}");
+}
+
+#[test]
+fn an_mfa_enrolment_answer_exits_4_and_points_to_the_web_app() {
+    let (code, stderr) = forbidden_with_reason(
+        r#"{"error":{"code":"forbidden","message":"MFA needed.","request_id":"req_mfa","details":{"code":"MFA_ENROLLMENT_REQUIRED"}}}"#,
+    );
+    assert_eq!(code, Some(4), "{stderr}");
+    assert!(
+        stderr.contains("must enrol multi-factor authentication"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("web app"), "{stderr}");
+    assert!(!stderr.contains("lacks the scope"), "{stderr}");
+}
+
+#[test]
+fn an_unknown_reason_code_shows_the_servers_message_and_keeps_exit_code_4() {
+    let (code, stderr) = forbidden_with_reason(
+        r#"{"error":{"code":"forbidden","message":"Device posture check failed.","request_id":"req_new","details":{"code":"SOMETHING_NEW"}}}"#,
+    );
+    assert_eq!(code, Some(4), "{stderr}");
+    assert!(stderr.contains("Device posture check failed"), "{stderr}");
+    assert!(!stderr.contains("lacks the scope"), "{stderr}");
+}
+
+#[test]
+fn an_unknown_query_parameter_answer_names_the_unknown_and_the_allowed_names() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    server
+        .mock("GET", "/v1/vendors")
+        .match_query(mockito::Matcher::Any)
+        .with_status(400)
+        .with_body(
+            r#"{"error":{"code":"invalid_request","message":"Unknown query parameter.","request_id":"req_q","details":{"code":"UNKNOWN_QUERY_PARAMETER","unknown":["colour"],"allowed":["page","per_page","sort"]}}}"#,
+        )
+        .expect(1)
+        .create();
+    let output = env
+        .api(&server)
+        .args(["vendors", "list"])
+        .output()
+        .expect("run");
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("query parameter `colour`"), "{stderr}");
+    assert!(stderr.contains("`page`, `per_page`, `sort`"), "{stderr}");
+    assert!(stderr.contains("request id: req_q"), "{stderr}");
+}
+
+#[test]
+fn a_deprecation_header_prints_one_warning_on_stderr() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    server
+        .mock("GET", "/v1/vendors")
+        .match_query(mockito::Matcher::Any)
+        .with_status(200)
+        .with_header("deprecation", "true")
+        .with_header("sunset", "Thu, 14 Jan 2027 00:00:00 GMT")
+        .with_body(r#"{"data":[],"pagination":{"page":1,"per_page":50,"total":0,"total_pages":0}}"#)
+        .create();
+    let output = env
+        .api(&server)
+        .args(["vendors", "list"])
+        .output()
+        .expect("run");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(stderr.matches("deprecated").count(), 1, "{stderr}");
+    assert!(stderr.contains("sunset: Thu, 14 Jan 2027"), "{stderr}");
 }
 
 #[test]
@@ -917,7 +1042,7 @@ fn csv_with_all_prints_one_header_and_every_page() {
             .mock("GET", "/v1/alerts")
             .match_query(mockito::Matcher::UrlEncoded("page".into(), n.to_string()))
             .with_body(format!(
-                r#"{{"data":[{{"id":"a{n}","vendor_id":"v","type":"cve","severity":null,"title":"{title}","description":null,"source_url":null,"economic_impact":-5,"status":"open","acknowledged_at":null,"resolved_at":null,"resolution_reason":null,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-02T00:00:00Z"}}],"pagination":{{"page":{n},"per_page":1,"total":2,"total_pages":2}}}}"#
+                r#"{{"data":[{{"id":"a{n}","vendor_id":"v","type":"cve","severity":null,"title":"{title}","description":null,"source_url":null,"economic_impact":-5,"status":"open","acknowledged_at":null,"resolved_at":null,"resolution_reason":null,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-02T00:00:00Z","mitre_techniques":null,"mitre_mapping":{{"status":"unavailable","note":null,"source":null}}}}],"pagination":{{"page":{n},"per_page":1,"total":2,"total_pages":2}}}}"#
             ))
             .expect(1)
             .create();
@@ -931,9 +1056,12 @@ fn csv_with_all_prints_one_header_and_every_page() {
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
         "id,vendor_id,type,severity,title,description,source_url,economic_impact,status,\
-         acknowledged_at,resolved_at,resolution_reason,created_at,updated_at\r\n\
-         a1,v,cve,,'=cmd(),,,-5,open,,,,2026-01-01T00:00:00Z,2026-01-02T00:00:00Z\r\n\
-         a2,v,cve,,\"Second, with a comma\",,,-5,open,,,,2026-01-01T00:00:00Z,2026-01-02T00:00:00Z\r\n"
+         acknowledged_at,resolved_at,resolution_reason,created_at,updated_at,mitre_techniques,\
+         mitre_mapping\r\n\
+         a1,v,cve,,'=cmd(),,,-5,open,,,,2026-01-01T00:00:00Z,2026-01-02T00:00:00Z,,\
+         \"{\"\"status\"\":\"\"unavailable\"\",\"\"note\"\":null,\"\"source\"\":null}\"\r\n\
+         a2,v,cve,,\"Second, with a comma\",,,-5,open,,,,2026-01-01T00:00:00Z,2026-01-02T00:00:00Z,,\
+         \"{\"\"status\"\":\"\"unavailable\"\",\"\"note\"\":null,\"\"source\"\":null}\"\r\n"
     );
     assert!(String::from_utf8_lossy(&output.stderr).contains("2 alerts."));
 }

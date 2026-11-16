@@ -212,6 +212,42 @@ pub fn from_api(error: hodeishield_api::Error, context: &ApiContext<'_>) -> Fail
                         "{ask} Signing in again or using another key of this tenant will not help."
                     ))
                 }
+                403 if detail(&api, "code") == Some("IP_NOT_ALLOWED") => Failure::new(
+                    Kind::Forbidden,
+                    "The request comes from an IP address that is not allowed for this \
+                     credential or organisation.",
+                )
+                .hint(
+                    "Ask an administrator to add this machine's public IP address to the \
+                     allowlist, or run the command from an allowed network. Signing in again \
+                     will not help.",
+                ),
+                403 if detail(&api, "code") == Some("PLAN_WITHOUT_API") => {
+                    plan_without_api(Kind::Forbidden)
+                }
+                403 if detail(&api, "code") == Some("MFA_ENROLLMENT_REQUIRED") => Failure::new(
+                    Kind::Forbidden,
+                    "This account must enrol multi-factor authentication before it can use the API.",
+                )
+                .hint(
+                    "Sign in to the web app, enrol MFA in the account settings, then run \
+                     `hodeishield login` again.",
+                ),
+                // A reason code this CLI does not know (the vocabulary is open): the server's own
+                // message says what is wrong. The exit code stays the one of every 403.
+                403 if matches!(
+                    detail(&api, "code"),
+                    Some(reason) if reason != "INSUFFICIENT_SCOPE" && reason != "CREDENTIAL_NOT_ALLOWED"
+                ) =>
+                {
+                    Failure::new(
+                        Kind::Forbidden,
+                        format!(
+                            "The API refused the request: {}.",
+                            server_message.as_deref().map_or("forbidden", sentence_body)
+                        ),
+                    )
+                }
                 403 => {
                     let scopes: Vec<String> = api
                         .required_scopes
@@ -299,6 +335,28 @@ pub fn from_api(error: hodeishield_api::Error, context: &ApiContext<'_>) -> Fail
                             "This credential reads one tenant only; leave out --tenant and \
                              --all-tenants.",
                         ),
+                        Some("UNKNOWN_QUERY_PARAMETER") => {
+                            let unknown = name_list(&api, "unknown", 10);
+                            let allowed = name_list(&api, "allowed", 40);
+                            let mut failure = Failure::general(if unknown.is_empty() {
+                                "The API does not know a query parameter this command sent."
+                                    .to_owned()
+                            } else {
+                                format!(
+                                    "The API does not know the query {} {}.",
+                                    if unknown.len() == 1 { "parameter" } else { "parameters" },
+                                    unknown.join(", ")
+                                )
+                            });
+                            if !allowed.is_empty() {
+                                failure = failure.hint(format!(
+                                    "The API accepts: {}. Check for a newer release of the CLI; \
+                                     if it persists, please report it.",
+                                    allowed.join(", ")
+                                ));
+                            }
+                            failure
+                        }
                         Some("TENANT_HEADER_INVALID") => failure.hint(
                             "The CLI sent a tenant selection the API could not read. This is a \
                              bug: please report it.",
@@ -422,6 +480,31 @@ fn detail<'a>(api: &'a hodeishield_api::ApiError, key: &str) -> Option<&'a str> 
         .and_then(|v| v.as_str())
 }
 
+/// A list of parameter names in `error.details` (`unknown`, `allowed`): at most `max` short
+/// names, anything else is dropped.
+fn name_list(api: &hodeishield_api::ApiError, key: &str, max: usize) -> Vec<String> {
+    api.body
+        .as_ref()
+        .and_then(|b| b.details.as_ref())
+        .and_then(|d| d.get(key))
+        .and_then(|v| v.as_array())
+        .map(|list| {
+            list.iter()
+                .filter_map(|v| v.as_str())
+                .filter(|s| {
+                    !s.is_empty()
+                        && s.len() <= 64
+                        && s.chars().all(|c| {
+                            c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '[' | ']')
+                        })
+                })
+                .take(max)
+                .map(|s| format!("`{s}`"))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// A list a `MODULE_NOT_ENTITLED` answer sends in `details` (`scopes`, `modules` or `frameworks`):
 /// at most 5 short tokens, anything else is dropped.
 fn entitlement_list(api: &hodeishield_api::ApiError, key: &str) -> Vec<String> {
@@ -499,6 +582,19 @@ impl ApiContext<'_> {
             None => scope.to_owned(),
         }
     }
+}
+
+/// The tenant's plan has no API or CLI access (`PLAN_WITHOUT_API`). Shared by the API refusal (exit
+/// code 4) and the refused device sign-in, which keeps its own kind.
+pub fn plan_without_api(kind: Kind) -> Failure {
+    Failure::new(
+        kind,
+        "This tenant's plan does not include API or CLI access.",
+    )
+    .hint(
+        "API and CLI access is included in every plan from Comply up, except AI Governance, and \
+         also during a trial. The plan can be changed from the plan page in the web console.",
+    )
 }
 
 #[cfg(test)]
