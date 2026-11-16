@@ -4,7 +4,7 @@
     "title": "Hodei-Shield API",
     "version": "2026-11-15",
     "summary": "Third-party risk and compliance posture, for your own systems.",
-    "description": "## Versioning\n\n`/v1` is frozen. These changes are **compatible** and will happen inside it\nwithout notice:\n\n- a new operation;\n- a new **optional** query parameter;\n- a new field in a response object;\n- a new value in a field documented as an open vocabulary (`status`,\n  `severity`, `evidence_type`, the keys of `by_status`);\n- a new `error.code`, always with the HTTP status its siblings already use;\n- anything under `error.details`, which is diagnostic and not part of the\n  contract — except `error.details.code` and the keys the error table of\n  the operation names (`missing`, `licence`, `parameter`, `scope`,\n  `limit`, `window_seconds`, `retry_after_seconds`, `status`,\n  `formats`, `limit_bytes`): those are contract.\n  `error.details.code` is an OPEN vocabulary: a value, once published, keeps\n  its meaning and the HTTP status it is sent with; new values may be added.\n\nWrite your client so those do not break it: ignore unknown fields, do not\nswitch exhaustively on a documented-open vocabulary, and treat an unknown\n`error.code` as \"an error of this HTTP status\".\n\nThese changes are **incompatible** and will NOT happen inside `/v1`. They go\nto `/v2`, and `/v1` keeps serving:\n\n- removing or renaming an operation, a parameter or a field;\n- changing the type, the unit or the meaning of a field;\n- making an optional parameter required, or narrowing what one accepts;\n- changing which scope an operation requires;\n- changing the HTTP status an existing `error.code` is sent with.\n\n## Read-only\n\n`/v1` only reads, with ONE exception. Every operation is a `GET` but\n`POST /v1/act/proposals` (`createActProposal`), which RECORDS a proposal that a\nperson of the tenant approves in the console before anything changes; it is\nreachable only with a user's OAuth access token issued for the HodeiShield MCP\nserver that carries `act:propose`. Any other method (`POST`, `PUT`, `PATCH`,\n`DELETE`) on a path that exists answers **405** with `Allow` naming the one\nmethod it serves, and on a path that does not exist answers **404**: neither\nchanges any state. Another write will be offered only as a new operation, which\nis a compatible change, once a customer asks for a concrete one.\n\n## Downloads\n\nAn operation whose success is a FILE (`GET /v1/reports/{id}/download`) answers\n**200** with the bytes, the `Content-Type` of the format asked for and\n`Content-Disposition: attachment; filename=\"…\"`; it never answers a URL to fetch\nthem from. Its errors are the same JSON envelope as everywhere else. A file that\ncannot be served as asked is a **409** with `error.details.code`: the report is\nnot ready yet (`REPORT_NOT_READY`), its content has no renderer for that format\n(`FORMAT_UNSUPPORTED`) or the file exceeds the size the operation serves\n(`FILE_TOO_LARGE`, with `limit_bytes`). Every file delivered is recorded in the\ntenant's audit trail with the credential that received it.\n\n## Authentication\n\nEvery operation takes `Authorization: Bearer <credential>`. Three credentials\nexist:\n\n- a **tenant API key** (`hsk_…`): belongs to ONE tenant and carries an\n  explicit list of scopes; it can read nothing outside that tenant, whatever it\n  asks for;\n- a user's **OAuth access token** (`hs_at_…`): one user, ONE tenant chosen\n  at consent, read scopes only — plus, for a token issued for the HodeiShield\n  MCP server, the OAuth-only `act:propose`, which lets it record proposals\n  (`createActProposal`) and read their status (`getActProposal`);\n- an MSSP **portfolio key** (`hsp_…`): held by a managed security service\n  provider, it reads ANY of its client tenants, ONE per request, selected with\n  the request header `X-HS-Tenant: <tenant id>` (a UUID, never a slug).\n  `GET /v1/portfolio/tenants` lists the tenants it may select. Read-only, with\n  a mandatory expiry. A tenant outside the key's portfolio answers **404**\n  (`error.details.code: \"TENANT_NOT_FOUND\"`), exactly as one that does not\n  exist.\n\nEvery successful (2xx) answer of a data operation carries `X-HS-Tenant` with\nthe id of the tenant whose data the body holds, for every credential; no error\ncarries it. A tenant API key or OAuth token may send `X-HS-Tenant` only with\nits own tenant's id; any other value is a **400**\n(`TENANT_SELECTOR_NOT_SUPPORTED`).\n\nEach operation below declares the scope it requires. A credential that\nauthenticates but lacks the scope is answered **403**\n(`error.details.code: \"INSUFFICIENT_SCOPE\"`), never 404: you are told what you\nare missing, not that the resource does not exist.\n\nA scope is not enough on its own: the module it names (`supply_risk`,\n`compliance.nis2`, `endpoints`, …) must also be active for the tenant read\n— the credential's own, or the one a portfolio key selected — at the time of the\nrequest; a compliance framework (`compliance.<framework>`) must also be\nactivated for the tenant, as in the console. When it is not (the plan changed,\nthe module was turned off, or the framework was never activated) the\nanswer is **403** with `error.details.code: \"MODULE_NOT_ENTITLED\"`,\n`error.details.scopes` naming the scopes concerned and `error.details.modules`\nthe modules the tenant lacks, for every credential; when the module is in the\nplan but a compliance framework is not activated, `error.details.frameworks`\nnames those frameworks (`nis2`, …). A new key does not help; the module has to\nbe active again.\n\n## Errors\n\nEvery error has the same body:\n\n```json\n{ \"error\": { \"code\": \"forbidden\", \"message\": \"…\", \"request_id\": \"…\" } }\n```\n\nBranch on `code`, log `request_id`, show `message` to nobody but yourself.\n`request_id` is also the `X-Request-Id` response header, and it is what\nsupport will ask you for.\n\n## Rate limits\n\nEvery response that got past authentication carries the limit that is closest\nto being exhausted:\n\n- `RateLimit-Limit` — requests allowed in the window;\n- `RateLimit-Remaining` — requests left in the current window;\n- `RateLimit-Reset` — **seconds** until the window renews;\n- `RateLimit-Policy` — `<limit>;w=<window seconds>`.\n\nThree limits apply, each per one-minute window: per API key, per organisation\n(all of its keys together) and per service. The first two come from the licence\nof the organisation the key belongs to: a higher licence tier has more room, and\nan MSSP partner has more than a direct customer of the same tier. Read the\ncurrent limit from `RateLimit-Limit` and `RateLimit-Policy` rather than\nhard-coding it. When one is exhausted the answer is\n**429** with `error.code: \"rate_limited\"`, `Retry-After` (seconds) and\n`error.details.scope` (`key`, `tenant` or `service`) saying which. A\nportfolio key is limited per key (`portfolio_key`), per provider across all\nits portfolio keys (`portfolio_org`) and per service; once the selected tenant\nis known to be in its portfolio, the client tenant's own limit (`tenant`) and\nthe provider's share of it (`portfolio_tenant`) apply too. Your\norganisation's usage never counts against another's. Windows are fixed, so a\nclient can burst up to twice the limit across a window boundary: back off on\n`Retry-After` rather than pacing to the second. The limits are part of the\nservice, not of the frozen contract: they may be raised without notice.\n\n## Pagination, filtering and ordering\n\nEvery collection takes `page` and `per_page` (max 200) and answers with a\n`pagination` object carrying `total` and `total_pages`. Every collection\ntakes `sort` (an enum of the fields THAT collection can order by) and\n`order` (`asc`/`desc`, default `desc`). Filters are exact matches unless\nthe parameter says otherwise. A parameter or field with a known vocabulary lists\nit in `x-hs-known-values` (an OpenAPI extension, not a JSON Schema `enum`: the\nserver still accepts what it accepted before; a value outside the list is served as sent and flagged by `meta.warnings` and the `X-HS-Unknown-Filter` header). Values retired from a parameter\nare listed in `x-hs-deprecated-values`, with the date until which the server is\ndocumented to accept them in `x-hs-deprecated-values-sunset`. A 2xx answer to a\nrequest that uses one carries `Deprecation: @<unix seconds>` (RFC 9745, the day it was\nannounced), `Sunset: <HTTP-date>` (RFC 8594) and `Link: <…>; rel=\"deprecation\"`, the\ndeprecation policy; an answer to a request that uses none carries none of them.\n\n## Contract changes\n\nCorrections and additions to the published contract, newest first. They ship\nwith the contract version (`info.version`) named in each entry. Detect a\ncapability by the operation, not by this string: the portfolio contract is\npresent when `GET /v1` lists `listPortfolioTenants`.\n\n- **2026-11-15 — addition: proposals a person approves (`act:propose`).** The first\n  write: `POST /v1/act/proposals` (`createActProposal`) records a proposal of one\n  action class (`create_task`, `schedule_vendor_scan`, `request_vendor_evidence`)\n  that a person of the tenant approves in the console, which executes it with the\n  approver's role; `GET /v1/act/proposals/{id}` (`getActProposal`) reports its\n  status to the grant that made it, never its payload or approver. Both are reachable\n  only with a user's OAuth access token issued for the HodeiShield MCP server that\n  carries the new OAuth-only scope `act:propose` (never a tenant or portfolio key:\n  403 `CREDENTIAL_NOT_ALLOWED`). New detail codes: `CREDENTIAL_NOT_ALLOWED` (403),\n  `BODY_NOT_JSON`, `BODY_TOO_LARGE`, `VALIDATION_FAILED` (400), `DUPLICATE`,\n  `OPEN_PROPOSAL_CAP`, `ACTIONS_PAUSED` (409); two new 429 `details.scope` values,\n  `proposal_grant` (10 proposals per minute per grant) and `proposal_user` (10 per\n  minute per user across all their applications). Every other path still\n  answers 405 to a write. Also in this version: a 2xx answer to a request that uses a\n  deprecated parameter value now carries the response headers `Deprecation` (RFC 9745),\n  `Sunset` (RFC 8594) and `Link` with `rel=\"deprecation\"`; today only the Spanish\n  `severity` values of `GET /v1/alerts` (announced 2026-10-16, sunset 2027-01-14), which\n  are still accepted. A request that uses none gets none. Nothing existing was removed,\n  renamed or re-statused.\n\n- **2026-11-15 — addition: `credential.expires_at` on `GET /v1/me`.** The\n  credential block gains `expires_at`, an RFC 3339 UTC instant or null: when a tenant\n  API key stops working, so an integration can warn before the key does. It is null for a\n  key with no expiry, for an OAuth access token (renewed by its refresh token) and, for\n  now, for a portfolio key (not reported). The key itself answers 401 from that instant.\n  A compatible addition: a new key in a response object. Nothing existing was removed, renamed or re-statused.\n\n- **2026-11-15 — correction: an unknown query parameter name is refused.** A query\n  parameter whose NAME the operation does not declare (`GET /v1/alerts?stauts=open`)\n  was ignored and the request was served unfiltered, so a connector with a typo\n  ingested the whole table believing it had filtered. It is now refused with status\n  **400**, `error.code` `invalid_request` and `error.details.code`\n  `UNKNOWN_QUERY_PARAMETER`; `error.details.unknown` lists the names that are not\n  declared (at most 10, each cut to 64 characters; `error.details.unknown_omitted`\n  counts the rest) and `error.details.allowed` the names the operation accepts. An operation\n  without query parameters accepts none. A misspelt VALUE is unchanged (served as sent\n  and flagged, #1403). Nothing was removed, renamed or re-statused: a request that only\n  uses the declared names is unaffected.\n\n- **2026-11-12 — correction: the tenant's IP allowlist applies to API keys.** A\n  tenant that configured an IP allowlist in the console had it enforced on console\n  sessions and OAuth access tokens, but a tenant API key (`hsk_…`) was served from\n  any address. A key is now refused from an address outside its tenant's\n  allowlist with status **403**, `error.code` `forbidden` and\n  `error.details.code` `IP_NOT_ALLOWED`, the answer an OAuth access token already\n  got for the same reason. A portfolio key acting in a client tenant that has an\n  allowlist is refused from an address outside it with the same **404**\n  `TENANT_NOT_FOUND` as a tenant outside its portfolio, so the allowlist reveals\n  nothing about which tenants belong to the portfolio. The address is the one the\n  client connects from. A tenant without an allowlist is unaffected.\n  Re-authenticating does not help: the tenant's administrator adds the address to\n  the allowlist. Nothing existing was removed, renamed or re-statused.\n\n- **2026-11-12 — correction: the portfolio listing and `/v1/me` respect each client's IP\n  allowlist.** `GET /v1/portfolio/tenants` listed every client of the portfolio, and\n  `GET /v1/me` counted them, from any address. A client tenant that has an IP allowlist\n  excluding the address of the request is now left out of the listing and out of the count,\n  with no sign that it exists; a client without an allowlist is unaffected. If a client's allowlist cannot be read, both answer **503** `service_unavailable` instead of a shorter list. Nothing existing\n  was removed, renamed or re-statused.\n\n- **2026-11-12 — correction: `MFA_ENROLLMENT_REQUIRED` is published.** An OAuth\n  access token (the CLI, an MCP client) of an account without a second factor,\n  used against a tenant that requires one, has always been refused with status\n  **403**, `error.code` `forbidden` and `error.details.code`\n  `MFA_ENROLLMENT_REQUIRED`, but the contract did not list that code among the\n  detail codes every operation shares. It is listed now. Re-authenticating does\n  not help: the account enrols a second factor in the console. Nothing existing\n  was removed, renamed or re-statused.\n\n- **2026-10-29 — addition: a warning when a filter value is not a published one.**\n  `GET /v1/alerts` `severity`, `GET /v1/risks` `domain` and `status` and\n  `GET /v1/compliance/controls` `status` match exactly, so a mistyped value\n  (`severity=critcal`) used to return an empty list that looked like \"no results\".\n  The request is still served as sent, with status **200** and the same items: no\n  parameter is narrowed. When the value is outside the parameter's\n  `x-hs-known-values`, the answer now also carries the optional body key\n  `meta.warnings[]` (`param`, `value`, `known`) and the response header\n  `X-HS-Unknown-Filter`, which names the parameter(s). Both are absent when\n  every filter value is a published one, and the retired Spanish `severity`\n  values inside their notice window raise no warning. `GET /v1/vendors`\n  `category` is free text with no vocabulary and is not checked. Nothing\n  existing was removed, renamed or re-statused.\n\n- **2026-10-27 — correction: a scope needs its module active.** A tenant API key\n  or a portfolio key was served on its scope alone, even when the tenant read no\n  longer had that scope's module active; an OAuth access token already was not.\n  Every credential now gets **403** with `error.details.code`\n  `MODULE_NOT_ENTITLED`, `error.details.scopes` and `error.details.modules`\n  (the module ids the tenant lacks) in that case (a new `error.details.code`\n  value), plus `error.details.frameworks` when a compliance framework is\n  entitled but not activated. A `compliance.<framework>` scope also needs\n  the framework ACTIVATED for the tenant, not only included in its plan; an OAuth\n  token no longer carries a compliance scope whose framework is not activated. **This changes what such a request receives:**\n  it was a 200. `GET /v1/me` needs no scope and is unaffected. The same version\n  adds the operation `listChanges` (`GET /v1/changes`, scope `changes:read`,\n  read-only), the change-management register, served once at least one compliance\n  framework is ACTIVATED for the tenant. Nothing else was removed, renamed or\n  re-statused.\n\n- **2026-10-26 — change: `user.email` on `GET /v1/me` needs the `email` scope.**\n  The OAuth scope `email` is new. `user.email` is returned only to an access\n  token that carries it, and is omitted otherwise: `user` still names the\n  signed-in user by `id` and `name`. A client that shows the email asks for\n  `email` at authorization; the consent screen lists it. The call is never refused\n  for a missing `email` scope. A client that decoded `user.email` as required\n  must treat it as optional.\n\n- **2026-10-24 — correction: `beta` on `GET /v1/me` is the tenant's own.** For\n  a client tenant of an MSSP whose own organisation is not in a running beta, `beta`\n  is `active`, `running: true` and `ends_at: null` while the MSSP's beta runs\n  (it is what lifts the client's access), and `null` otherwise: the MSSP's end date\n  and whether its beta ended or converted are not the client's to read. The tenant's\n  own organisation's beta is described as before. No field was added or removed.\n\n- **2026-10-21 — addition: `user` on `GET /v1/me`.** The `whoAmI` answer gains\n  a nullable `user` object (`id`, `name`, `email`): the signed-in user of an\n  OAuth access token (`hs_at_…`), so a client can show who is logged in. It is the\n  caller's own data only, never another user's. It is `null` for a tenant API key\n  and for a portfolio key. Nothing existing was removed, renamed or re-statused.\n\n- **2026-10-20 — addition: `beta` on `GET /v1/me`.** The `whoAmI` answer gains\n  a nullable `beta` object (`status`, `running`, `ends_at`): the beta of the\n  tenant's own organisation, so a client can show when it ends. It is `null` for an\n  organisation that never joined the beta and for a portfolio key; a beta inherited\n  from a parent MSSP is not described. Nothing existing was removed, renamed or\n  re-statused.\n\n- **2026-10-19 — addition: reports.** `GET /v1/reports` (`listReports`),\n  `GET /v1/reports/{id}` (`getReport`) and\n  `GET /v1/reports/{id}/download` (`downloadReport`), all under the scope\n  `reports:read`. The download is the contract's first non-JSON success: a\n  PDF or XLSX file as an attachment (see Downloads). A new `error.code`,\n  `conflict` (**409**), answered only by the download, with three new\n  `error.details.code` values (`REPORT_NOT_READY`, `FORMAT_UNSUPPORTED`,\n  `FILE_TOO_LARGE`). Nothing existing was removed, renamed or re-statused.\n\n- **2026-10-18 — addition: known values for four filters.** `GET /v1/risks`\n  `domain` and `status`, `GET /v1/compliance/controls` `status` and the\n  `vendor_type` field of `GET /v1/vendors` now list their vocabulary in\n  `x-hs-known-values`, taken from the lists the platform validates against.\n  They stay open: a value outside the list is still accepted and matches exactly,\n  as before. `GET /v1/vendors` `category` is free text with no closed\n  vocabulary, and its description now says so. Nothing existing was removed,\n  renamed or re-statused.\n\n- **2026-10-17 — addition: `GET /v1/me`.** The operation `whoAmI` describes the\n  calling credential: its type and scopes, the tenant (id, name) and organisation it\n  reads, or, for a portfolio key, the MSSP organisation and how many tenants it can\n  reach. Any valid credential may call it and it requires no scope; it uses the same\n  authentication and rate limits as every other operation, and refuses\n  `X-HS-Tenant`. Nothing existing was removed, renamed or re-statused.\n\n- **2026-10-16 — addition: MSSP portfolio keys.** A third credential, the\n  portfolio key (`hsp_…`); the operation `GET /v1/portfolio/tenants`\n  (`listPortfolioTenants`, scope `portfolio:read`); the optional request\n  header `X-HS-Tenant` on every data operation, echoed on every 2xx answer of\n  them for every credential, with `Vary: X-HS-Tenant`;\n  `error.details.code` becomes contract (`TENANT_HEADER_INVALID`,\n  `TENANT_REQUIRED`, `TENANT_SELECTOR_NOT_SUPPORTED`, `TENANT_NOT_FOUND`,\n  `INSUFFICIENT_SCOPE`, `LICENCE_INACTIVE`), and every scope 403 now carries\n  `INSUFFICIENT_SCOPE`; three new 429 `details.scope` values\n  (`portfolio_key`, `portfolio_org`, `portfolio_tenant`). Nothing existing\n  was removed, renamed or re-statused.\n\n- **2026-10-16 — correction: alert `severity` is English.** `GET /v1/alerts`\n  and `GET /v1/alerts/{id}` returned `severity` as stored, in Spanish\n  (`critico`, `alto`, `medio`, `bajo`, `info`), while this document\n  promised `critical | high | medium | low`. They now return `critical`,\n  `high`, `medium`, `low` and `info` (`info` is added to the documented\n  values). **This changes what an integrator who adapted to the Spanish values\n  receives.** The `severity` filter accepts both the English values and the\n  Spanish ones; the Spanish ones are documented as accepted until\n  **2027-01-14** (90 days after this version), so switch to the English ones\n  before then. A value outside both lists is still matched exactly and matches\n  nothing. `GET /v1/risks`: the descriptions of `domain` and `status` named\n  values that do not exist; they now list the real ones (no value changed).",
+    "description": "## Versioning\n\n`/v1` is frozen. These changes are **compatible** and will happen inside it\nwithout notice:\n\n- a new operation;\n- a new **optional** query parameter;\n- a new field in a response object;\n- a new value in a field documented as an open vocabulary (`status`,\n  `severity`, `evidence_type`, the keys of `by_status`);\n- a new `error.code`, always with the HTTP status its siblings already use;\n- anything under `error.details`, which is diagnostic and not part of the\n  contract — except `error.details.code` and the keys the error table of\n  the operation names (`missing`, `licence`, `parameter`, `scope`,\n  `limit`, `window_seconds`, `retry_after_seconds`, `status`,\n  `formats`, `limit_bytes`): those are contract.\n  `error.details.code` is an OPEN vocabulary: a value, once published, keeps\n  its meaning and the HTTP status it is sent with; new values may be added.\n\nWrite your client so those do not break it: ignore unknown fields, do not\nswitch exhaustively on a documented-open vocabulary, and treat an unknown\n`error.code` as \"an error of this HTTP status\".\n\nThese changes are **incompatible** and will NOT happen inside `/v1`. They go\nto `/v2`, and `/v1` keeps serving:\n\n- removing or renaming an operation, a parameter or a field;\n- changing the type, the unit or the meaning of a field;\n- making an optional parameter required, or narrowing what one accepts;\n- changing which scope an operation requires;\n- changing the HTTP status an existing `error.code` is sent with.\n\n## Reads and writes\n\nEvery operation that reads is a `GET`. Two kinds of operation change state,\neach a `POST`: the two alert writes, `POST /v1/alerts/{id}/acknowledge` and\n`POST /v1/alerts/{id}/resolve`, under the write scope `alerts:write`; and\n`POST /v1/act/proposals` (`createActProposal`), which only RECORDS a proposal\nthat a person of the tenant approves in the console before anything changes,\nreachable only with a user's OAuth access token issued for the HodeiShield MCP\nserver that carries `act:propose`. Any other method on a path that exists\nanswers **405** with `Allow` naming the one method it serves, and on a path that\ndoes not exist answers **404**: neither changes any state. A new write is offered\nonly as a new operation, which is a compatible change.\n\nThe alert writes are authorised by an API key and its scope alone, with no interactive\nconfirmation, because the caller is an automation (a SOAR): a **tenant API key**\nin its own tenant, or an MSSP **portfolio key** in the client tenant it names\nwith `X-HS-Tenant`, exactly as on the reads (a tenant outside its client set\nanswers **404** `TENANT_NOT_FOUND`). The tenant's IP allowlist (`IP_NOT_ALLOWED`;\nfor a portfolio key, that same 404) and the module of the scope (`supply_risk`\nfor `alerts:write`, else `MODULE_NOT_ENTITLED`) apply to a write exactly as\nto a read. An OAuth access token cannot make them. No read\nscope implies `alerts:write`, `alerts:write` implies no read scope, existing\nkeys do not hold it, and only a user whose role may close alerts in the console\ncan grant it (on a portfolio key, an organisation administrator of the provider,\nwho may close alerts in every client). The key acts with the role of the **user\nwho created it**, read on every request: a creator who was demoted, suspended,\ndeleted or removed from the tenant (for a portfolio key: from the provider, or\nno longer reaching that client) takes the power away from the key (**403**,\n`WRITE_ACTOR_UNRESOLVED` or `ROLE_NOT_PERMITTED`). The console's\nrole-by-severity rule applies: an MSSP analyst's key closes medium and low\nalerts only. A write takes a JSON object body (an unknown key is a **400**), is\nrefused while the licence is in its grace period (**403** `LICENCE_INACTIVE`),\nand is idempotent: repeating a change already made answers the current state with\n`changed: false`, while a concurrent change between its read and its write\nanswers **409** (`ALERT_STATE_CHANGED`). Every change writes one entry in the\ntenant's audit trail with the key id, the acting user, the old and new status and\nthe reason.\n\n## Downloads\n\nAn operation whose success is a FILE (`GET /v1/reports/{id}/download`) answers\n**200** with the bytes, the `Content-Type` of the format asked for and\n`Content-Disposition: attachment; filename=\"…\"`; it never answers a URL to fetch\nthem from. Its errors are the same JSON envelope as everywhere else. A file that\ncannot be served as asked is a **409** with `error.details.code`: the report is\nnot ready yet (`REPORT_NOT_READY`), its content has no renderer for that format\n(`FORMAT_UNSUPPORTED`) or the file exceeds the size the operation serves\n(`FILE_TOO_LARGE`, with `limit_bytes`). Every file delivered is recorded in the\ntenant's audit trail with the credential that received it.\n\n## Authentication\n\nEvery operation takes `Authorization: Bearer <credential>`. Three credentials\nexist:\n\n- a **tenant API key** (`hsk_…`): belongs to ONE tenant and carries an\n  explicit list of scopes; it can read nothing outside that tenant, whatever it\n  asks for. It can hold the write scope `alerts:write`;\n- a user's **OAuth access token** (`hs_at_…`): one user, ONE tenant chosen\n  at consent, read scopes only — plus, for a token issued for the HodeiShield\n  MCP server, the OAuth-only `act:propose`, which lets it record proposals\n  (`createActProposal`) and read their status (`getActProposal`);\n- an MSSP **portfolio key** (`hsp_…`): held by a managed security service\n  provider, it reads ANY of its client tenants, ONE per request, selected with\n  the request header `X-HS-Tenant: <tenant id>` (a UUID, never a slug).\n  `GET /v1/portfolio/tenants` lists the tenants it may select. Read scopes,\n  plus at most the one write scope `alerts:write`, with a mandatory expiry. A\n  tenant outside the key's portfolio answers **404**\n  (`error.details.code: \"TENANT_NOT_FOUND\"`), exactly as one that does not\n  exist.\n\nEvery successful (2xx) answer of a data operation carries `X-HS-Tenant` with\nthe id of the tenant whose data the body holds, for every credential; no error\ncarries it. A tenant API key or OAuth token may send `X-HS-Tenant` only with\nits own tenant's id; any other value is a **400**\n(`TENANT_SELECTOR_NOT_SUPPORTED`).\n\nEach operation below declares the scope it requires. A credential that\nauthenticates but lacks the scope is answered **403**\n(`error.details.code: \"INSUFFICIENT_SCOPE\"`), never 404: you are told what you\nare missing, not that the resource does not exist.\n\nA scope is not enough on its own: the module it names (`supply_risk`,\n`compliance.nis2`, `endpoints`, …) must also be active for the tenant read\n— the credential's own, or the one a portfolio key selected — at the time of the\nrequest; a compliance framework (`compliance.<framework>`) must also be\nactivated for the tenant, as in the console. When it is not (the plan changed,\nthe module was turned off, or the framework was never activated) the\nanswer is **403** with `error.details.code: \"MODULE_NOT_ENTITLED\"`,\n`error.details.scopes` naming the scopes concerned and `error.details.modules`\nthe modules the tenant lacks, for every credential; when the module is in the\nplan but a compliance framework is not activated, `error.details.frameworks`\nnames those frameworks (`nis2`, …). A new key does not help; the module has to\nbe active again.\n\n## Errors\n\nEvery error has the same body:\n\n```json\n{ \"error\": { \"code\": \"forbidden\", \"message\": \"…\", \"request_id\": \"…\" } }\n```\n\nBranch on `code`, log `request_id`, show `message` to nobody but yourself.\n`request_id` is also the `X-Request-Id` response header, and it is what\nsupport will ask you for.\n\n## Rate limits\n\nEvery response that got past authentication carries the limit that is closest\nto being exhausted:\n\n- `RateLimit-Limit` — requests allowed in the window;\n- `RateLimit-Remaining` — requests left in the current window;\n- `RateLimit-Reset` — **seconds** until the window renews;\n- `RateLimit-Policy` — `<limit>;w=<window seconds>`.\n\nThree limits apply, each per one-minute window: per API key, per organisation\n(all of its keys together) and per service. The first two come from the licence\nof the organisation the key belongs to: a higher licence tier has more room, and\nan MSSP partner has more than a direct customer of the same tier. Read the\ncurrent limit from `RateLimit-Limit` and `RateLimit-Policy` rather than\nhard-coding it. When one is exhausted the answer is\n**429** with `error.code: \"rate_limited\"`, `Retry-After` (seconds) and\n`error.details.scope` (`key`, `tenant` or `service`) saying which. A\nwrite is not counted in those: it has its own budget per key (`write_key`),\nplus the service ceiling, so reads and writes never spend each other's room. A\nportfolio key is limited per key (`portfolio_key`), per provider across all\nits portfolio keys (`portfolio_org`) and per service; once the selected tenant\nis known to be in its portfolio, the client tenant's own limit (`tenant`) and\nthe provider's share of it (`portfolio_tenant`) apply too. Your\norganisation's usage never counts against another's. Windows are fixed, so a\nclient can burst up to twice the limit across a window boundary: back off on\n`Retry-After` rather than pacing to the second. The limits are part of the\nservice, not of the frozen contract: they may be raised without notice.\n\n## Pagination, filtering and ordering\n\nEvery collection takes `page` and `per_page` (max 200) and answers with a\n`pagination` object carrying `total` and `total_pages`. Every collection\ntakes `sort` (an enum of the fields THAT collection can order by) and\n`order` (`asc`/`desc`, default `desc`). Filters are exact matches unless\nthe parameter says otherwise. A parameter or field with a known vocabulary lists\nit in `x-hs-known-values` (an OpenAPI extension, not a JSON Schema `enum`: the\nserver still accepts what it accepted before; a value outside the list is served as sent and flagged by `meta.warnings` and the `X-HS-Unknown-Filter` header). Values retired from a parameter\nare listed in `x-hs-deprecated-values`, with the date until which the server is\ndocumented to accept them in `x-hs-deprecated-values-sunset`. A 2xx answer to a\nrequest that uses one carries `Deprecation: @<unix seconds>` (RFC 9745, the day it was\nannounced), `Sunset: <HTTP-date>` (RFC 8594) and `Link: <…>; rel=\"deprecation\"`, the\ndeprecation policy; an answer to a request that uses none carries none of them.\n\n## Contract changes\n\nCorrections and additions to the published contract, newest first. They ship\nwith the contract version (`info.version`) named in each entry. Detect a\ncapability by the operation, not by this string: the portfolio contract is\npresent when `GET /v1` lists `listPortfolioTenants`.\n\n- **2026-11-15 — correction: API access is a plan feature.** API and CLI access\n  belong to the plans from Comply up (Comply, Assure, Scale, Essentials, Automate,\n  Operate, Enterprise) and to the trial; Respond, Free, Supplier and AI Governance\n  have none. A tenant API key (`hsk_…`) or an OAuth access token not issued for\n  the HodeiShield MCP server, whose tenant is on a plan without API access, was\n  served; it is now refused on every request, reads and the alert writes\n  (`acknowledgeAlert`, `resolveAlert`) alike, with status **403**, `error.code`\n  `forbidden`, `error.details.code` `PLAN_WITHOUT_API` and\n  `error.details.deniedReason` `plan_without_api`. A key that already exists is\n  refused the same way, from the first request after its tenant moves to such a\n  plan. A portfolio key is judged on the plan of the client tenant it selects, with\n  the same answer. The plan is the effective one: a running beta counts. Re-authenticating\n  does not change this; the plan can be changed in the console. The owner of each refused\n  key is told once by email. Nothing existing was removed, renamed or re-statused.\n\n- **2026-11-15 — addition: proposals a person approves (`act:propose`).** A write of\n  another kind: `POST /v1/act/proposals` (`createActProposal`) records a proposal of one\n  action class (`create_task`, `schedule_vendor_scan`, `request_vendor_evidence`)\n  that a person of the tenant approves in the console, which executes it with the\n  approver's role; `GET /v1/act/proposals/{id}` (`getActProposal`) reports its\n  status to the grant that made it, never its payload or approver. Both are reachable\n  only with a user's OAuth access token issued for the HodeiShield MCP server that\n  carries the new OAuth-only scope `act:propose` (never a tenant or portfolio key:\n  403 `CREDENTIAL_NOT_ALLOWED`). New detail codes: `CREDENTIAL_NOT_ALLOWED` (403),\n  `BODY_NOT_JSON`, `BODY_TOO_LARGE`, `VALIDATION_FAILED` (400), `DUPLICATE`,\n  `OPEN_PROPOSAL_CAP`, `ACTIONS_PAUSED` (409); two new 429 `details.scope` values,\n  `proposal_grant` (10 proposals per minute per grant) and `proposal_user` (10 per\n  minute per user across all their applications). Every other path still\n  answers 405 to a write. Also in this version: a 2xx answer to a request that uses a\n  deprecated parameter value now carries the response headers `Deprecation` (RFC 9745),\n  `Sunset` (RFC 8594) and `Link` with `rel=\"deprecation\"`; today only the Spanish\n  `severity` values of `GET /v1/alerts` (announced 2026-10-16, sunset 2027-01-14), which\n  are still accepted. A request that uses none gets none. Nothing existing was removed,\n  renamed or re-statused.\n\n- **2026-11-15 — addition: `credential.expires_at` on `GET /v1/me`.** The\n  credential block gains `expires_at`, an RFC 3339 UTC instant or null: when a tenant\n  API key stops working, so an integration can warn before the key does. It is null for a\n  key with no expiry, for an OAuth access token (renewed by its refresh token) and, for\n  now, for a portfolio key (not reported). The key itself answers 401 from that instant.\n  A compatible addition: a new key in a response object. Nothing existing was removed, renamed or re-statused.\n\n- **2026-11-15 — correction: an unknown query parameter name is refused.** A query\n  parameter whose NAME the operation does not declare (`GET /v1/alerts?stauts=open`)\n  was ignored and the request was served unfiltered, so a connector with a typo\n  ingested the whole table believing it had filtered. It is now refused with status\n  **400**, `error.code` `invalid_request` and `error.details.code`\n  `UNKNOWN_QUERY_PARAMETER`; `error.details.unknown` lists the names that are not\n  declared (at most 10, each cut to 64 characters; `error.details.unknown_omitted`\n  counts the rest) and `error.details.allowed` the names the operation accepts. An operation\n  without query parameters accepts none. A misspelt VALUE is unchanged (served as sent\n  and flagged). Nothing was removed, renamed or re-statused: a request that only\n  uses the declared names is unaffected.\n\n- **2026-11-15 — correction: a key dies with its creator's role, and keys\n  expire.** A tenant API key (`hsk_…`) and a portfolio key (`hsp_…`) kept\n  working after the administrator who created it was removed, deactivated or\n  demoted. Such a key is now refused with status **401**, the answer a revoked or\n  expired key already got, unless another administrator of the tenant took the\n  tenant API key over before the change. Every tenant API key now has an expiry of\n  at most 365 days (`never` is no longer offered; a key that had none was given\n  one and its creator was told), and a portfolio key lives at most 90 days. The\n  descriptions of both security schemes say so. Re-authenticating does not help:\n  an administrator of the tenant creates a new key. Nothing existing was removed,\n  renamed or re-statused.\n- **2026-11-14 — addition: acknowledge and resolve an alert (the first writes).**\n  `POST /v1/alerts/{id}/acknowledge` (`acknowledgeAlert`) and\n  `POST /v1/alerts/{id}/resolve` (`resolveAlert`, a `reason` is required),\n  under the new write scope `alerts:write`, for a tenant API key or an MSSP\n  portfolio key (the client named with `X-HS-Tenant`). Both answer\n  `{ data, changed }`: the alert's state after the request (`status`, the\n  timestamps, `resolution_reason`; never its content) and whether this request\n  changed it. New `error.details.code` values: `ROLE_NOT_PERMITTED` and\n  `WRITE_ACTOR_UNRESOLVED` (403), `ALERT_RESOLVED` and\n  `ALERT_STATE_CHANGED` (409); new 429 `error.details.scope` value\n  `write_key`. See \"Reads and writes\". Nothing existing changed: every read\n  operation is still a `GET` and needs no new scope.\n- **2026-11-14 — addition: MITRE ATT&CK techniques on alerts.**\n  `GET /v1/alerts` and `GET /v1/alerts/{id}` gain two keys on the alert\n  object. `mitre_techniques` lists the techniques the CTID KEV mappings assign\n  to the alert's CVE (`id`, `name`, `tactic_id`, `tactic_name`,\n  `subtechnique_id`; one entry per technique and tactic). `mitre_mapping`\n  says why the list holds what it holds: `status` is `mapped`, `unmapped`\n  (an empty list and the note «sin mapeo»: a CVE outside the CISA KEV set, or an\n  alert that is not a CVE), `not_in_plan` or `unavailable`, and `source`\n  names the mapping dataset, its version, the ATT&CK release and the upstream\n  commit. The mapping is a feature of the tenant's plan\n  (`supply_chain.mitre_mapping`): without it `mitre_techniques` is `null` and\n  `status` is `not_in_plan`, and the alert is otherwise served in full (no 403).\n  Treat `null` as \"not served\", never as \"no mapping\". Nothing existing was\n  removed, renamed or re-statused.\n\n- **2026-11-12 — correction: the tenant's IP allowlist applies to API keys.** A\n  tenant that configured an IP allowlist in the console had it enforced on console\n  sessions and OAuth access tokens, but a tenant API key (`hsk_…`) was served from\n  any address. A key is now refused from an address outside its tenant's\n  allowlist with status **403**, `error.code` `forbidden` and\n  `error.details.code` `IP_NOT_ALLOWED`, the answer an OAuth access token already\n  got for the same reason. A portfolio key acting in a client tenant that has an\n  allowlist is refused from an address outside it with the same **404**\n  `TENANT_NOT_FOUND` as a tenant outside its portfolio, so the allowlist reveals\n  nothing about which tenants belong to the portfolio. The address is the one the\n  client connects from. A tenant without an allowlist is unaffected.\n  Re-authenticating does not help: the tenant's administrator adds the address to\n  the allowlist. Nothing existing was removed, renamed or re-statused.\n\n- **2026-11-12 — correction: the portfolio listing and `/v1/me` respect each client's IP\n  allowlist.** `GET /v1/portfolio/tenants` listed every client of the portfolio, and\n  `GET /v1/me` counted them, from any address. A client tenant that has an IP allowlist\n  excluding the address of the request is now left out of the listing and out of the count,\n  with no sign that it exists; a client without an allowlist is unaffected. If a client's allowlist cannot be read, both answer **503** `service_unavailable` instead of a shorter list. Nothing existing\n  was removed, renamed or re-statused.\n\n- **2026-11-12 — correction: `MFA_ENROLLMENT_REQUIRED` is published.** An OAuth\n  access token (the CLI, an MCP client) of an account without a second factor,\n  used against a tenant that requires one, has always been refused with status\n  **403**, `error.code` `forbidden` and `error.details.code`\n  `MFA_ENROLLMENT_REQUIRED`, but the contract did not list that code among the\n  detail codes every operation shares. It is listed now. Re-authenticating does\n  not help: the account enrols a second factor in the console. Nothing existing\n  was removed, renamed or re-statused.\n\n- **2026-10-29 — addition: a warning when a filter value is not a published one.**\n  `GET /v1/alerts` `severity`, `GET /v1/risks` `domain` and `status` and\n  `GET /v1/compliance/controls` `status` match exactly, so a mistyped value\n  (`severity=critcal`) used to return an empty list that looked like \"no results\".\n  The request is still served as sent, with status **200** and the same items: no\n  parameter is narrowed. When the value is outside the parameter's\n  `x-hs-known-values`, the answer now also carries the optional body key\n  `meta.warnings[]` (`param`, `value`, `known`) and the response header\n  `X-HS-Unknown-Filter`, which names the parameter(s). Both are absent when\n  every filter value is a published one, and the retired Spanish `severity`\n  values inside their notice window raise no warning. `GET /v1/vendors`\n  `category` is free text with no vocabulary and is not checked. Nothing\n  existing was removed, renamed or re-statused.\n\n- **2026-10-27 — correction: a scope needs its module active.** A tenant API key\n  or a portfolio key was served on its scope alone, even when the tenant read no\n  longer had that scope's module active; an OAuth access token already was not.\n  Every credential now gets **403** with `error.details.code`\n  `MODULE_NOT_ENTITLED`, `error.details.scopes` and `error.details.modules`\n  (the module ids the tenant lacks) in that case (a new `error.details.code`\n  value), plus `error.details.frameworks` when a compliance framework is\n  entitled but not activated. A `compliance.<framework>` scope also needs\n  the framework ACTIVATED for the tenant, not only included in its plan; an OAuth\n  token no longer carries a compliance scope whose framework is not activated. **This changes what such a request receives:**\n  it was a 200. `GET /v1/me` needs no scope and is unaffected. The same version\n  adds the operation `listChanges` (`GET /v1/changes`, scope `changes:read`,\n  read-only), the change-management register, served once at least one compliance\n  framework is ACTIVATED for the tenant. Nothing else was removed, renamed or\n  re-statused.\n\n- **2026-10-26 — change: `user.email` on `GET /v1/me` needs the `email` scope.**\n  The OAuth scope `email` is new. `user.email` is returned only to an access\n  token that carries it, and is omitted otherwise: `user` still names the\n  signed-in user by `id` and `name`. A client that shows the email asks for\n  `email` at authorization; the consent screen lists it. The call is never refused\n  for a missing `email` scope. A client that decoded `user.email` as required\n  must treat it as optional.\n\n- **2026-10-24 — correction: `beta` on `GET /v1/me` is the tenant's own.** For\n  a client tenant of an MSSP whose own organisation is not in a running beta, `beta`\n  is `active`, `running: true` and `ends_at: null` while the MSSP's beta runs\n  (it is what lifts the client's access), and `null` otherwise: the MSSP's end date\n  and whether its beta ended or converted are not the client's to read. The tenant's\n  own organisation's beta is described as before. No field was added or removed.\n\n- **2026-10-21 — addition: `user` on `GET /v1/me`.** The `whoAmI` answer gains\n  a nullable `user` object (`id`, `name`, `email`): the signed-in user of an\n  OAuth access token (`hs_at_…`), so a client can show who is logged in. It is the\n  caller's own data only, never another user's. It is `null` for a tenant API key\n  and for a portfolio key. Nothing existing was removed, renamed or re-statused.\n\n- **2026-10-20 — addition: `beta` on `GET /v1/me`.** The `whoAmI` answer gains\n  a nullable `beta` object (`status`, `running`, `ends_at`): the beta of the\n  tenant's own organisation, so a client can show when it ends. It is `null` for an\n  organisation that never joined the beta and for a portfolio key; a beta inherited\n  from a parent MSSP is not described. Nothing existing was removed, renamed or\n  re-statused.\n\n- **2026-10-19 — addition: reports.** `GET /v1/reports` (`listReports`),\n  `GET /v1/reports/{id}` (`getReport`) and\n  `GET /v1/reports/{id}/download` (`downloadReport`), all under the scope\n  `reports:read`. The download is the contract's first non-JSON success: a\n  PDF or XLSX file as an attachment (see Downloads). A new `error.code`,\n  `conflict` (**409**), answered only by the download, with three new\n  `error.details.code` values (`REPORT_NOT_READY`, `FORMAT_UNSUPPORTED`,\n  `FILE_TOO_LARGE`). Nothing existing was removed, renamed or re-statused.\n\n- **2026-10-18 — addition: known values for four filters.** `GET /v1/risks`\n  `domain` and `status`, `GET /v1/compliance/controls` `status` and the\n  `vendor_type` field of `GET /v1/vendors` now list their vocabulary in\n  `x-hs-known-values`, taken from the lists the platform validates against.\n  They stay open: a value outside the list is still accepted and matches exactly,\n  as before. `GET /v1/vendors` `category` is free text with no closed\n  vocabulary, and its description now says so. Nothing existing was removed,\n  renamed or re-statused.\n\n- **2026-10-17 — addition: `GET /v1/me`.** The operation `whoAmI` describes the\n  calling credential: its type and scopes, the tenant (id, name) and organisation it\n  reads, or, for a portfolio key, the MSSP organisation and how many tenants it can\n  reach. Any valid credential may call it and it requires no scope; it uses the same\n  authentication and rate limits as every other operation, and refuses\n  `X-HS-Tenant`. Nothing existing was removed, renamed or re-statused.\n\n- **2026-10-16 — addition: MSSP portfolio keys.** A third credential, the\n  portfolio key (`hsp_…`); the operation `GET /v1/portfolio/tenants`\n  (`listPortfolioTenants`, scope `portfolio:read`); the optional request\n  header `X-HS-Tenant` on every data operation, echoed on every 2xx answer of\n  them for every credential, with `Vary: X-HS-Tenant`;\n  `error.details.code` becomes contract (`TENANT_HEADER_INVALID`,\n  `TENANT_REQUIRED`, `TENANT_SELECTOR_NOT_SUPPORTED`, `TENANT_NOT_FOUND`,\n  `INSUFFICIENT_SCOPE`, `LICENCE_INACTIVE`), and every scope 403 now carries\n  `INSUFFICIENT_SCOPE`; three new 429 `details.scope` values\n  (`portfolio_key`, `portfolio_org`, `portfolio_tenant`). Nothing existing\n  was removed, renamed or re-statused.\n\n- **2026-10-16 — correction: alert `severity` is English.** `GET /v1/alerts`\n  and `GET /v1/alerts/{id}` returned `severity` as stored, in Spanish\n  (`critico`, `alto`, `medio`, `bajo`, `info`), while this document\n  promised `critical | high | medium | low`. They now return `critical`,\n  `high`, `medium`, `low` and `info` (`info` is added to the documented\n  values). **This changes what an integrator who adapted to the Spanish values\n  receives.** The `severity` filter accepts both the English values and the\n  Spanish ones; the Spanish ones are documented as accepted until\n  **2027-01-14** (90 days after this version), so switch to the English ones\n  before then. A value outside both lists is still matched exactly and matches\n  nothing. `GET /v1/risks`: the descriptions of `domain` and `status` named\n  values that do not exist; they now list the real ones (no value changed).",
     "contact": {
       "name": "Hodeitek S.L.",
       "url": "https://hodeishield.com"
@@ -423,7 +423,7 @@
             }
           },
           "403": {
-            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which), or that tenant has an IP allowlist and the request comes from an address outside it (`error.details.code` is `IP_NOT_ALLOWED`), or the credential is an OAuth access token of an account without the second factor that tenant requires (`error.details.code` is `MFA_ENROLLMENT_REQUIRED`). Re-authenticating alone does not help with the last four: the licence is renewed, the module activated, the address allowed or a second factor enrolled in the console.",
+            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which), or that tenant has an IP allowlist and the request comes from an address outside it (`error.details.code` is `IP_NOT_ALLOWED`), or the credential is an OAuth access token of an account without the second factor that tenant requires (`error.details.code` is `MFA_ENROLLMENT_REQUIRED`), or that tenant’s plan does not include API access, which is included from Comply, except in AI Governance (`error.details.code` is `PLAN_WITHOUT_API` and `error.details.deniedReason` is `plan_without_api`). Re-authenticating alone does not help with the last five: the licence is renewed, the module activated, the address allowed, a second factor enrolled or the plan changed in the console.",
             "content": {
               "application/json": {
                 "schema": {
@@ -443,7 +443,7 @@
             }
           },
           "429": {
-            "description": "A rate limit is exhausted. `Retry-After` says when to come back and `error.details.scope` which limit it was: `key`, `tenant` or `service`; with a portfolio key also `portfolio_key`, `portfolio_org` or `portfolio_tenant`; on `createActProposal` also `proposal_grant` (proposals per minute per application and user) or `proposal_user` (proposals per minute per user, across all their applications).",
+            "description": "A rate limit is exhausted. `Retry-After` says when to come back and `error.details.scope` which limit it was: `key`, `tenant` or `service`; with a portfolio key also `portfolio_key`, `portfolio_org` or `portfolio_tenant`; on a write, `write_key` (the key’s write budget) or `service`; on `createActProposal` also `proposal_grant` (proposals per minute per application and user) or `proposal_user` (proposals per minute per user, across all their applications).",
             "headers": {
               "RateLimit-Limit": {
                 "description": "Requests allowed in the window that is closest to being exhausted.",
@@ -773,7 +773,7 @@
             }
           },
           "403": {
-            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which), or that tenant has an IP allowlist and the request comes from an address outside it (`error.details.code` is `IP_NOT_ALLOWED`), or the credential is an OAuth access token of an account without the second factor that tenant requires (`error.details.code` is `MFA_ENROLLMENT_REQUIRED`). Re-authenticating alone does not help with the last four: the licence is renewed, the module activated, the address allowed or a second factor enrolled in the console.",
+            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which), or that tenant has an IP allowlist and the request comes from an address outside it (`error.details.code` is `IP_NOT_ALLOWED`), or the credential is an OAuth access token of an account without the second factor that tenant requires (`error.details.code` is `MFA_ENROLLMENT_REQUIRED`), or that tenant’s plan does not include API access, which is included from Comply, except in AI Governance (`error.details.code` is `PLAN_WITHOUT_API` and `error.details.deniedReason` is `plan_without_api`). Re-authenticating alone does not help with the last five: the licence is renewed, the module activated, the address allowed, a second factor enrolled or the plan changed in the console.",
             "content": {
               "application/json": {
                 "schema": {
@@ -793,7 +793,7 @@
             }
           },
           "429": {
-            "description": "A rate limit is exhausted. `Retry-After` says when to come back and `error.details.scope` which limit it was: `key`, `tenant` or `service`; with a portfolio key also `portfolio_key`, `portfolio_org` or `portfolio_tenant`; on `createActProposal` also `proposal_grant` (proposals per minute per application and user) or `proposal_user` (proposals per minute per user, across all their applications).",
+            "description": "A rate limit is exhausted. `Retry-After` says when to come back and `error.details.scope` which limit it was: `key`, `tenant` or `service`; with a portfolio key also `portfolio_key`, `portfolio_org` or `portfolio_tenant`; on a write, `write_key` (the key’s write budget) or `service`; on `createActProposal` also `proposal_grant` (proposals per minute per application and user) or `proposal_user` (proposals per minute per user, across all their applications).",
             "headers": {
               "RateLimit-Limit": {
                 "description": "Requests allowed in the window that is closest to being exhausted.",
@@ -1196,6 +1196,115 @@
                           "updated_at": {
                             "type": "string",
                             "description": "RFC 3339, UTC. Last change of severity, acknowledgement, resolution or CISA KEV status; equals the instant the service started tracking it for alerts older than that."
+                          },
+                          "mitre_techniques": {
+                            "anyOf": [
+                              {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "id": {
+                                      "type": "string",
+                                      "description": "ATT&CK technique id, e.g. `T1059`; the parent of a sub-technique."
+                                    },
+                                    "name": {
+                                      "type": "string"
+                                    },
+                                    "tactic_id": {
+                                      "type": "string",
+                                      "description": "e.g. `TA0002`."
+                                    },
+                                    "tactic_name": {
+                                      "type": "string"
+                                    },
+                                    "subtechnique_id": {
+                                      "description": "e.g. `T1059.001` when the technique is a sub-technique, otherwise null.",
+                                      "type": [
+                                        "string",
+                                        "null"
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "id",
+                                    "name",
+                                    "tactic_id",
+                                    "tactic_name",
+                                    "subtechnique_id"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ],
+                            "description": "MITRE ATT&CK techniques mapped to the alert CVE (CTID KEV mappings; one entry per technique and tactic). Empty array: the alert has no mapping (`mitre_mapping.status` is `unmapped`, «sin mapeo»). null: the mapping is not served (`not_in_plan` or `unavailable`)."
+                          },
+                          "mitre_mapping": {
+                            "type": "object",
+                            "properties": {
+                              "status": {
+                                "type": "string",
+                                "enum": [
+                                  "mapped",
+                                  "unmapped",
+                                  "not_in_plan",
+                                  "unavailable"
+                                ],
+                                "description": "`mapped`: techniques found. `unmapped`: no mapping (a non-CVE alert, or a CVE outside the CISA KEV set). `not_in_plan`: the tenant plan does not include `supply_chain.mitre_mapping`. `unavailable`: the reference data is not loaded in this environment."
+                              },
+                              "note": {
+                                "description": "Human-readable reason; «sin mapeo» when `unmapped`.",
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "source": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "framework": {
+                                        "type": "string",
+                                        "description": "CTID Mappings Explorer dataset, e.g. `kev`."
+                                      },
+                                      "framework_version": {
+                                        "type": "string"
+                                      },
+                                      "attack_version": {
+                                        "type": "string",
+                                        "description": "MITRE ATT&CK release the techniques come from."
+                                      },
+                                      "upstream_commit": {
+                                        "type": "string",
+                                        "description": "Commit of the CTID mappings that were imported."
+                                      }
+                                    },
+                                    "required": [
+                                      "framework",
+                                      "framework_version",
+                                      "attack_version",
+                                      "upstream_commit"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Source and version of the mapping; null unless the mapping was served."
+                              }
+                            },
+                            "required": [
+                              "status",
+                              "note",
+                              "source"
+                            ],
+                            "additionalProperties": false,
+                            "description": "Why `mitre_techniques` holds what it holds, and where the mapping comes from."
                           }
                         },
                         "required": [
@@ -1212,7 +1321,9 @@
                           "resolved_at",
                           "resolution_reason",
                           "created_at",
-                          "updated_at"
+                          "updated_at",
+                          "mitre_techniques",
+                          "mitre_mapping"
                         ],
                         "additionalProperties": false,
                         "description": "A supply-chain alert raised against one vendor."
@@ -1331,7 +1442,7 @@
             }
           },
           "403": {
-            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which), or that tenant has an IP allowlist and the request comes from an address outside it (`error.details.code` is `IP_NOT_ALLOWED`), or the credential is an OAuth access token of an account without the second factor that tenant requires (`error.details.code` is `MFA_ENROLLMENT_REQUIRED`). Re-authenticating alone does not help with the last four: the licence is renewed, the module activated, the address allowed or a second factor enrolled in the console.",
+            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which), or that tenant has an IP allowlist and the request comes from an address outside it (`error.details.code` is `IP_NOT_ALLOWED`), or the credential is an OAuth access token of an account without the second factor that tenant requires (`error.details.code` is `MFA_ENROLLMENT_REQUIRED`), or that tenant’s plan does not include API access, which is included from Comply, except in AI Governance (`error.details.code` is `PLAN_WITHOUT_API` and `error.details.deniedReason` is `plan_without_api`). Re-authenticating alone does not help with the last five: the licence is renewed, the module activated, the address allowed, a second factor enrolled or the plan changed in the console.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1351,7 +1462,7 @@
             }
           },
           "429": {
-            "description": "A rate limit is exhausted. `Retry-After` says when to come back and `error.details.scope` which limit it was: `key`, `tenant` or `service`; with a portfolio key also `portfolio_key`, `portfolio_org` or `portfolio_tenant`; on `createActProposal` also `proposal_grant` (proposals per minute per application and user) or `proposal_user` (proposals per minute per user, across all their applications).",
+            "description": "A rate limit is exhausted. `Retry-After` says when to come back and `error.details.scope` which limit it was: `key`, `tenant` or `service`; with a portfolio key also `portfolio_key`, `portfolio_org` or `portfolio_tenant`; on a write, `write_key` (the key’s write budget) or `service`; on `createActProposal` also `proposal_grant` (proposals per minute per application and user) or `proposal_user` (proposals per minute per user, across all their applications).",
             "headers": {
               "RateLimit-Limit": {
                 "description": "Requests allowed in the window that is closest to being exhausted.",
@@ -1604,6 +1715,115 @@
                         "updated_at": {
                           "type": "string",
                           "description": "RFC 3339, UTC. Last change of severity, acknowledgement, resolution or CISA KEV status; equals the instant the service started tracking it for alerts older than that."
+                        },
+                        "mitre_techniques": {
+                          "anyOf": [
+                            {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "id": {
+                                    "type": "string",
+                                    "description": "ATT&CK technique id, e.g. `T1059`; the parent of a sub-technique."
+                                  },
+                                  "name": {
+                                    "type": "string"
+                                  },
+                                  "tactic_id": {
+                                    "type": "string",
+                                    "description": "e.g. `TA0002`."
+                                  },
+                                  "tactic_name": {
+                                    "type": "string"
+                                  },
+                                  "subtechnique_id": {
+                                    "description": "e.g. `T1059.001` when the technique is a sub-technique, otherwise null.",
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "name",
+                                  "tactic_id",
+                                  "tactic_name",
+                                  "subtechnique_id"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "description": "MITRE ATT&CK techniques mapped to the alert CVE (CTID KEV mappings; one entry per technique and tactic). Empty array: the alert has no mapping (`mitre_mapping.status` is `unmapped`, «sin mapeo»). null: the mapping is not served (`not_in_plan` or `unavailable`)."
+                        },
+                        "mitre_mapping": {
+                          "type": "object",
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": [
+                                "mapped",
+                                "unmapped",
+                                "not_in_plan",
+                                "unavailable"
+                              ],
+                              "description": "`mapped`: techniques found. `unmapped`: no mapping (a non-CVE alert, or a CVE outside the CISA KEV set). `not_in_plan`: the tenant plan does not include `supply_chain.mitre_mapping`. `unavailable`: the reference data is not loaded in this environment."
+                            },
+                            "note": {
+                              "description": "Human-readable reason; «sin mapeo» when `unmapped`.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "source": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "framework": {
+                                      "type": "string",
+                                      "description": "CTID Mappings Explorer dataset, e.g. `kev`."
+                                    },
+                                    "framework_version": {
+                                      "type": "string"
+                                    },
+                                    "attack_version": {
+                                      "type": "string",
+                                      "description": "MITRE ATT&CK release the techniques come from."
+                                    },
+                                    "upstream_commit": {
+                                      "type": "string",
+                                      "description": "Commit of the CTID mappings that were imported."
+                                    }
+                                  },
+                                  "required": [
+                                    "framework",
+                                    "framework_version",
+                                    "attack_version",
+                                    "upstream_commit"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Source and version of the mapping; null unless the mapping was served."
+                            }
+                          },
+                          "required": [
+                            "status",
+                            "note",
+                            "source"
+                          ],
+                          "additionalProperties": false,
+                          "description": "Why `mitre_techniques` holds what it holds, and where the mapping comes from."
                         }
                       },
                       "required": [
@@ -1620,7 +1840,9 @@
                         "resolved_at",
                         "resolution_reason",
                         "created_at",
-                        "updated_at"
+                        "updated_at",
+                        "mitre_techniques",
+                        "mitre_mapping"
                       ],
                       "additionalProperties": false,
                       "description": "A supply-chain alert raised against one vendor."
@@ -1655,7 +1877,7 @@
             }
           },
           "403": {
-            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which), or that tenant has an IP allowlist and the request comes from an address outside it (`error.details.code` is `IP_NOT_ALLOWED`), or the credential is an OAuth access token of an account without the second factor that tenant requires (`error.details.code` is `MFA_ENROLLMENT_REQUIRED`). Re-authenticating alone does not help with the last four: the licence is renewed, the module activated, the address allowed or a second factor enrolled in the console.",
+            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which), or that tenant has an IP allowlist and the request comes from an address outside it (`error.details.code` is `IP_NOT_ALLOWED`), or the credential is an OAuth access token of an account without the second factor that tenant requires (`error.details.code` is `MFA_ENROLLMENT_REQUIRED`), or that tenant’s plan does not include API access, which is included from Comply, except in AI Governance (`error.details.code` is `PLAN_WITHOUT_API` and `error.details.deniedReason` is `plan_without_api`). Re-authenticating alone does not help with the last five: the licence is renewed, the module activated, the address allowed, a second factor enrolled or the plan changed in the console.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1675,7 +1897,7 @@
             }
           },
           "429": {
-            "description": "A rate limit is exhausted. `Retry-After` says when to come back and `error.details.scope` which limit it was: `key`, `tenant` or `service`; with a portfolio key also `portfolio_key`, `portfolio_org` or `portfolio_tenant`; on `createActProposal` also `proposal_grant` (proposals per minute per application and user) or `proposal_user` (proposals per minute per user, across all their applications).",
+            "description": "A rate limit is exhausted. `Retry-After` says when to come back and `error.details.scope` which limit it was: `key`, `tenant` or `service`; with a portfolio key also `portfolio_key`, `portfolio_org` or `portfolio_tenant`; on a write, `write_key` (the key’s write budget) or `service`; on `createActProposal` also `proposal_grant` (proposals per minute per application and user) or `proposal_user` (proposals per minute per user, across all their applications).",
             "headers": {
               "RateLimit-Limit": {
                 "description": "Requests allowed in the window that is closest to being exhausted.",
@@ -2260,7 +2482,7 @@
             }
           },
           "403": {
-            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which), or that tenant has an IP allowlist and the request comes from an address outside it (`error.details.code` is `IP_NOT_ALLOWED`), or the credential is an OAuth access token of an account without the second factor that tenant requires (`error.details.code` is `MFA_ENROLLMENT_REQUIRED`). Re-authenticating alone does not help with the last four: the licence is renewed, the module activated, the address allowed or a second factor enrolled in the console.",
+            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which), or that tenant has an IP allowlist and the request comes from an address outside it (`error.details.code` is `IP_NOT_ALLOWED`), or the credential is an OAuth access token of an account without the second factor that tenant requires (`error.details.code` is `MFA_ENROLLMENT_REQUIRED`), or that tenant’s plan does not include API access, which is included from Comply, except in AI Governance (`error.details.code` is `PLAN_WITHOUT_API` and `error.details.deniedReason` is `plan_without_api`). Re-authenticating alone does not help with the last five: the licence is renewed, the module activated, the address allowed, a second factor enrolled or the plan changed in the console.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2280,7 +2502,7 @@
             }
           },
           "429": {
-            "description": "A rate limit is exhausted. `Retry-After` says when to come back and `error.details.scope` which limit it was: `key`, `tenant` or `service`; with a portfolio key also `portfolio_key`, `portfolio_org` or `portfolio_tenant`; on `createActProposal` also `proposal_grant` (proposals per minute per application and user) or `proposal_user` (proposals per minute per user, across all their applications).",
+            "description": "A rate limit is exhausted. `Retry-After` says when to come back and `error.details.scope` which limit it was: `key`, `tenant` or `service`; with a portfolio key also `portfolio_key`, `portfolio_org` or `portfolio_tenant`; on a write, `write_key` (the key’s write budget) or `service`; on `createActProposal` also `proposal_grant` (proposals per minute per application and user) or `proposal_user` (proposals per minute per user, across all their applications).",
             "headers": {
               "RateLimit-Limit": {
                 "description": "Requests allowed in the window that is closest to being exhausted.",
@@ -2672,7 +2894,7 @@
             }
           },
           "403": {
-            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which), or that tenant has an IP allowlist and the request comes from an address outside it (`error.details.code` is `IP_NOT_ALLOWED`), or the credential is an OAuth access token of an account without the second factor that tenant requires (`error.details.code` is `MFA_ENROLLMENT_REQUIRED`). Re-authenticating alone does not help with the last four: the licence is renewed, the module activated, the address allowed or a second factor enrolled in the console.",
+            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which), or that tenant has an IP allowlist and the request comes from an address outside it (`error.details.code` is `IP_NOT_ALLOWED`), or the credential is an OAuth access token of an account without the second factor that tenant requires (`error.details.code` is `MFA_ENROLLMENT_REQUIRED`), or that tenant’s plan does not include API access, which is included from Comply, except in AI Governance (`error.details.code` is `PLAN_WITHOUT_API` and `error.details.deniedReason` is `plan_without_api`). Re-authenticating alone does not help with the last five: the licence is renewed, the module activated, the address allowed, a second factor enrolled or the plan changed in the console.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2692,7 +2914,7 @@
             }
           },
           "429": {
-            "description": "A rate limit is exhausted. `Retry-After` says when to come back and `error.details.scope` which limit it was: `key`, `tenant` or `service`; with a portfolio key also `portfolio_key`, `portfolio_org` or `portfolio_tenant`; on `createActProposal` also `proposal_grant` (proposals per minute per application and user) or `proposal_user` (proposals per minute per user, across all their applications).",
+            "description": "A rate limit is exhausted. `Retry-After` says when to come back and `error.details.scope` which limit it was: `key`, `tenant` or `service`; with a portfolio key also `portfolio_key`, `portfolio_org` or `portfolio_tenant`; on a write, `write_key` (the key’s write budget) or `service`; on `createActProposal` also `proposal_grant` (proposals per minute per application and user) or `proposal_user` (proposals per minute per user, across all their applications).",
             "headers": {
               "RateLimit-Limit": {
                 "description": "Requests allowed in the window that is closest to being exhausted.",
@@ -3081,7 +3303,7 @@
             }
           },
           "403": {
-            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which), or that tenant has an IP allowlist and the request comes from an address outside it (`error.details.code` is `IP_NOT_ALLOWED`), or the credential is an OAuth access token of an account without the second factor that tenant requires (`error.details.code` is `MFA_ENROLLMENT_REQUIRED`). Re-authenticating alone does not help with the last four: the licence is renewed, the module activated, the address allowed or a second factor enrolled in the console.",
+            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which), or that tenant has an IP allowlist and the request comes from an address outside it (`error.details.code` is `IP_NOT_ALLOWED`), or the credential is an OAuth access token of an account without the second factor that tenant requires (`error.details.code` is `MFA_ENROLLMENT_REQUIRED`), or that tenant’s plan does not include API access, which is included from Comply, except in AI Governance (`error.details.code` is `PLAN_WITHOUT_API` and `error.details.deniedReason` is `plan_without_api`). Re-authenticating alone does not help with the last five: the licence is renewed, the module activated, the address allowed, a second factor enrolled or the plan changed in the console.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3101,7 +3323,7 @@
             }
           },
           "429": {
-            "description": "A rate limit is exhausted. `Retry-After` says when to come back and `error.details.scope` which limit it was: `key`, `tenant` or `service`; with a portfolio key also `portfolio_key`, `portfolio_org` or `portfolio_tenant`; on `createActProposal` also `proposal_grant` (proposals per minute per application and user) or `proposal_user` (proposals per minute per user, across all their applications).",
+            "description": "A rate limit is exhausted. `Retry-After` says when to come back and `error.details.scope` which limit it was: `key`, `tenant` or `service`; with a portfolio key also `portfolio_key`, `portfolio_org` or `portfolio_tenant`; on a write, `write_key` (the key’s write budget) or `service`; on `createActProposal` also `proposal_grant` (proposals per minute per application and user) or `proposal_user` (proposals per minute per user, across all their applications).",
             "headers": {
               "RateLimit-Limit": {
                 "description": "Requests allowed in the window that is closest to being exhausted.",
@@ -3335,7 +3557,7 @@
             }
           },
           "403": {
-            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which), or that tenant has an IP allowlist and the request comes from an address outside it (`error.details.code` is `IP_NOT_ALLOWED`), or the credential is an OAuth access token of an account without the second factor that tenant requires (`error.details.code` is `MFA_ENROLLMENT_REQUIRED`). Re-authenticating alone does not help with the last four: the licence is renewed, the module activated, the address allowed or a second factor enrolled in the console.",
+            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which), or that tenant has an IP allowlist and the request comes from an address outside it (`error.details.code` is `IP_NOT_ALLOWED`), or the credential is an OAuth access token of an account without the second factor that tenant requires (`error.details.code` is `MFA_ENROLLMENT_REQUIRED`), or that tenant’s plan does not include API access, which is included from Comply, except in AI Governance (`error.details.code` is `PLAN_WITHOUT_API` and `error.details.deniedReason` is `plan_without_api`). Re-authenticating alone does not help with the last five: the licence is renewed, the module activated, the address allowed, a second factor enrolled or the plan changed in the console.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3355,7 +3577,7 @@
             }
           },
           "429": {
-            "description": "A rate limit is exhausted. `Retry-After` says when to come back and `error.details.scope` which limit it was: `key`, `tenant` or `service`; with a portfolio key also `portfolio_key`, `portfolio_org` or `portfolio_tenant`; on `createActProposal` also `proposal_grant` (proposals per minute per application and user) or `proposal_user` (proposals per minute per user, across all their applications).",
+            "description": "A rate limit is exhausted. `Retry-After` says when to come back and `error.details.scope` which limit it was: `key`, `tenant` or `service`; with a portfolio key also `portfolio_key`, `portfolio_org` or `portfolio_tenant`; on a write, `write_key` (the key’s write budget) or `service`; on `createActProposal` also `proposal_grant` (proposals per minute per application and user) or `proposal_user` (proposals per minute per user, across all their applications).",
             "headers": {
               "RateLimit-Limit": {
                 "description": "Requests allowed in the window that is closest to being exhausted.",
@@ -3755,7 +3977,7 @@
             }
           },
           "403": {
-            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which), or that tenant has an IP allowlist and the request comes from an address outside it (`error.details.code` is `IP_NOT_ALLOWED`), or the credential is an OAuth access token of an account without the second factor that tenant requires (`error.details.code` is `MFA_ENROLLMENT_REQUIRED`). Re-authenticating alone does not help with the last four: the licence is renewed, the module activated, the address allowed or a second factor enrolled in the console.",
+            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which), or that tenant has an IP allowlist and the request comes from an address outside it (`error.details.code` is `IP_NOT_ALLOWED`), or the credential is an OAuth access token of an account without the second factor that tenant requires (`error.details.code` is `MFA_ENROLLMENT_REQUIRED`), or that tenant’s plan does not include API access, which is included from Comply, except in AI Governance (`error.details.code` is `PLAN_WITHOUT_API` and `error.details.deniedReason` is `plan_without_api`). Re-authenticating alone does not help with the last five: the licence is renewed, the module activated, the address allowed, a second factor enrolled or the plan changed in the console.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3775,7 +3997,7 @@
             }
           },
           "429": {
-            "description": "A rate limit is exhausted. `Retry-After` says when to come back and `error.details.scope` which limit it was: `key`, `tenant` or `service`; with a portfolio key also `portfolio_key`, `portfolio_org` or `portfolio_tenant`; on `createActProposal` also `proposal_grant` (proposals per minute per application and user) or `proposal_user` (proposals per minute per user, across all their applications).",
+            "description": "A rate limit is exhausted. `Retry-After` says when to come back and `error.details.scope` which limit it was: `key`, `tenant` or `service`; with a portfolio key also `portfolio_key`, `portfolio_org` or `portfolio_tenant`; on a write, `write_key` (the key’s write budget) or `service`; on `createActProposal` also `proposal_grant` (proposals per minute per application and user) or `proposal_user` (proposals per minute per user, across all their applications).",
             "headers": {
               "RateLimit-Limit": {
                 "description": "Requests allowed in the window that is closest to being exhausted.",
@@ -4054,7 +4276,7 @@
             }
           },
           "403": {
-            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which), or that tenant has an IP allowlist and the request comes from an address outside it (`error.details.code` is `IP_NOT_ALLOWED`), or the credential is an OAuth access token of an account without the second factor that tenant requires (`error.details.code` is `MFA_ENROLLMENT_REQUIRED`). Re-authenticating alone does not help with the last four: the licence is renewed, the module activated, the address allowed or a second factor enrolled in the console.",
+            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which), or that tenant has an IP allowlist and the request comes from an address outside it (`error.details.code` is `IP_NOT_ALLOWED`), or the credential is an OAuth access token of an account without the second factor that tenant requires (`error.details.code` is `MFA_ENROLLMENT_REQUIRED`), or that tenant’s plan does not include API access, which is included from Comply, except in AI Governance (`error.details.code` is `PLAN_WITHOUT_API` and `error.details.deniedReason` is `plan_without_api`). Re-authenticating alone does not help with the last five: the licence is renewed, the module activated, the address allowed, a second factor enrolled or the plan changed in the console.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4074,7 +4296,7 @@
             }
           },
           "429": {
-            "description": "A rate limit is exhausted. `Retry-After` says when to come back and `error.details.scope` which limit it was: `key`, `tenant` or `service`; with a portfolio key also `portfolio_key`, `portfolio_org` or `portfolio_tenant`; on `createActProposal` also `proposal_grant` (proposals per minute per application and user) or `proposal_user` (proposals per minute per user, across all their applications).",
+            "description": "A rate limit is exhausted. `Retry-After` says when to come back and `error.details.scope` which limit it was: `key`, `tenant` or `service`; with a portfolio key also `portfolio_key`, `portfolio_org` or `portfolio_tenant`; on a write, `write_key` (the key’s write budget) or `service`; on `createActProposal` also `proposal_grant` (proposals per minute per application and user) or `proposal_user` (proposals per minute per user, across all their applications).",
             "headers": {
               "RateLimit-Limit": {
                 "description": "Requests allowed in the window that is closest to being exhausted.",
@@ -4443,7 +4665,7 @@
             }
           },
           "403": {
-            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which), or that tenant has an IP allowlist and the request comes from an address outside it (`error.details.code` is `IP_NOT_ALLOWED`), or the credential is an OAuth access token of an account without the second factor that tenant requires (`error.details.code` is `MFA_ENROLLMENT_REQUIRED`). Re-authenticating alone does not help with the last four: the licence is renewed, the module activated, the address allowed or a second factor enrolled in the console.",
+            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which), or that tenant has an IP allowlist and the request comes from an address outside it (`error.details.code` is `IP_NOT_ALLOWED`), or the credential is an OAuth access token of an account without the second factor that tenant requires (`error.details.code` is `MFA_ENROLLMENT_REQUIRED`), or that tenant’s plan does not include API access, which is included from Comply, except in AI Governance (`error.details.code` is `PLAN_WITHOUT_API` and `error.details.deniedReason` is `plan_without_api`). Re-authenticating alone does not help with the last five: the licence is renewed, the module activated, the address allowed, a second factor enrolled or the plan changed in the console.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4463,7 +4685,7 @@
             }
           },
           "429": {
-            "description": "A rate limit is exhausted. `Retry-After` says when to come back and `error.details.scope` which limit it was: `key`, `tenant` or `service`; with a portfolio key also `portfolio_key`, `portfolio_org` or `portfolio_tenant`; on `createActProposal` also `proposal_grant` (proposals per minute per application and user) or `proposal_user` (proposals per minute per user, across all their applications).",
+            "description": "A rate limit is exhausted. `Retry-After` says when to come back and `error.details.scope` which limit it was: `key`, `tenant` or `service`; with a portfolio key also `portfolio_key`, `portfolio_org` or `portfolio_tenant`; on a write, `write_key` (the key’s write budget) or `service`; on `createActProposal` also `proposal_grant` (proposals per minute per application and user) or `proposal_user` (proposals per minute per user, across all their applications).",
             "headers": {
               "RateLimit-Limit": {
                 "description": "Requests allowed in the window that is closest to being exhausted.",
@@ -4785,7 +5007,7 @@
             }
           },
           "403": {
-            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which), or that tenant has an IP allowlist and the request comes from an address outside it (`error.details.code` is `IP_NOT_ALLOWED`), or the credential is an OAuth access token of an account without the second factor that tenant requires (`error.details.code` is `MFA_ENROLLMENT_REQUIRED`). Re-authenticating alone does not help with the last four: the licence is renewed, the module activated, the address allowed or a second factor enrolled in the console.",
+            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which), or that tenant has an IP allowlist and the request comes from an address outside it (`error.details.code` is `IP_NOT_ALLOWED`), or the credential is an OAuth access token of an account without the second factor that tenant requires (`error.details.code` is `MFA_ENROLLMENT_REQUIRED`), or that tenant’s plan does not include API access, which is included from Comply, except in AI Governance (`error.details.code` is `PLAN_WITHOUT_API` and `error.details.deniedReason` is `plan_without_api`). Re-authenticating alone does not help with the last five: the licence is renewed, the module activated, the address allowed, a second factor enrolled or the plan changed in the console.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4795,7 +5017,7 @@
             }
           },
           "429": {
-            "description": "A rate limit is exhausted. `Retry-After` says when to come back and `error.details.scope` which limit it was: `key`, `tenant` or `service`; with a portfolio key also `portfolio_key`, `portfolio_org` or `portfolio_tenant`; on `createActProposal` also `proposal_grant` (proposals per minute per application and user) or `proposal_user` (proposals per minute per user, across all their applications).",
+            "description": "A rate limit is exhausted. `Retry-After` says when to come back and `error.details.scope` which limit it was: `key`, `tenant` or `service`; with a portfolio key also `portfolio_key`, `portfolio_org` or `portfolio_tenant`; on a write, `write_key` (the key’s write budget) or `service`; on `createActProposal` also `proposal_grant` (proposals per minute per application and user) or `proposal_user` (proposals per minute per user, across all their applications).",
             "headers": {
               "RateLimit-Limit": {
                 "description": "Requests allowed in the window that is closest to being exhausted.",
@@ -5176,7 +5398,7 @@
             }
           },
           "403": {
-            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which), or that tenant has an IP allowlist and the request comes from an address outside it (`error.details.code` is `IP_NOT_ALLOWED`), or the credential is an OAuth access token of an account without the second factor that tenant requires (`error.details.code` is `MFA_ENROLLMENT_REQUIRED`). Re-authenticating alone does not help with the last four: the licence is renewed, the module activated, the address allowed or a second factor enrolled in the console.",
+            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which), or that tenant has an IP allowlist and the request comes from an address outside it (`error.details.code` is `IP_NOT_ALLOWED`), or the credential is an OAuth access token of an account without the second factor that tenant requires (`error.details.code` is `MFA_ENROLLMENT_REQUIRED`), or that tenant’s plan does not include API access, which is included from Comply, except in AI Governance (`error.details.code` is `PLAN_WITHOUT_API` and `error.details.deniedReason` is `plan_without_api`). Re-authenticating alone does not help with the last five: the licence is renewed, the module activated, the address allowed, a second factor enrolled or the plan changed in the console.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5186,7 +5408,7 @@
             }
           },
           "429": {
-            "description": "A rate limit is exhausted. `Retry-After` says when to come back and `error.details.scope` which limit it was: `key`, `tenant` or `service`; with a portfolio key also `portfolio_key`, `portfolio_org` or `portfolio_tenant`; on `createActProposal` also `proposal_grant` (proposals per minute per application and user) or `proposal_user` (proposals per minute per user, across all their applications).",
+            "description": "A rate limit is exhausted. `Retry-After` says when to come back and `error.details.scope` which limit it was: `key`, `tenant` or `service`; with a portfolio key also `portfolio_key`, `portfolio_org` or `portfolio_tenant`; on a write, `write_key` (the key’s write budget) or `service`; on `createActProposal` also `proposal_grant` (proposals per minute per application and user) or `proposal_user` (proposals per minute per user, across all their applications).",
             "headers": {
               "RateLimit-Limit": {
                 "description": "Requests allowed in the window that is closest to being exhausted.",
@@ -5562,7 +5784,7 @@
             }
           },
           "403": {
-            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which), or that tenant has an IP allowlist and the request comes from an address outside it (`error.details.code` is `IP_NOT_ALLOWED`), or the credential is an OAuth access token of an account without the second factor that tenant requires (`error.details.code` is `MFA_ENROLLMENT_REQUIRED`). Re-authenticating alone does not help with the last four: the licence is renewed, the module activated, the address allowed or a second factor enrolled in the console.",
+            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which), or that tenant has an IP allowlist and the request comes from an address outside it (`error.details.code` is `IP_NOT_ALLOWED`), or the credential is an OAuth access token of an account without the second factor that tenant requires (`error.details.code` is `MFA_ENROLLMENT_REQUIRED`), or that tenant’s plan does not include API access, which is included from Comply, except in AI Governance (`error.details.code` is `PLAN_WITHOUT_API` and `error.details.deniedReason` is `plan_without_api`). Re-authenticating alone does not help with the last five: the licence is renewed, the module activated, the address allowed, a second factor enrolled or the plan changed in the console.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5582,7 +5804,7 @@
             }
           },
           "429": {
-            "description": "A rate limit is exhausted. `Retry-After` says when to come back and `error.details.scope` which limit it was: `key`, `tenant` or `service`; with a portfolio key also `portfolio_key`, `portfolio_org` or `portfolio_tenant`; on `createActProposal` also `proposal_grant` (proposals per minute per application and user) or `proposal_user` (proposals per minute per user, across all their applications).",
+            "description": "A rate limit is exhausted. `Retry-After` says when to come back and `error.details.scope` which limit it was: `key`, `tenant` or `service`; with a portfolio key also `portfolio_key`, `portfolio_org` or `portfolio_tenant`; on a write, `write_key` (the key’s write budget) or `service`; on `createActProposal` also `proposal_grant` (proposals per minute per application and user) or `proposal_user` (proposals per minute per user, across all their applications).",
             "headers": {
               "RateLimit-Limit": {
                 "description": "Requests allowed in the window that is closest to being exhausted.",
@@ -5846,7 +6068,7 @@
             }
           },
           "403": {
-            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which), or that tenant has an IP allowlist and the request comes from an address outside it (`error.details.code` is `IP_NOT_ALLOWED`), or the credential is an OAuth access token of an account without the second factor that tenant requires (`error.details.code` is `MFA_ENROLLMENT_REQUIRED`). Re-authenticating alone does not help with the last four: the licence is renewed, the module activated, the address allowed or a second factor enrolled in the console.",
+            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which), or that tenant has an IP allowlist and the request comes from an address outside it (`error.details.code` is `IP_NOT_ALLOWED`), or the credential is an OAuth access token of an account without the second factor that tenant requires (`error.details.code` is `MFA_ENROLLMENT_REQUIRED`), or that tenant’s plan does not include API access, which is included from Comply, except in AI Governance (`error.details.code` is `PLAN_WITHOUT_API` and `error.details.deniedReason` is `plan_without_api`). Re-authenticating alone does not help with the last five: the licence is renewed, the module activated, the address allowed, a second factor enrolled or the plan changed in the console.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5866,7 +6088,7 @@
             }
           },
           "429": {
-            "description": "A rate limit is exhausted. `Retry-After` says when to come back and `error.details.scope` which limit it was: `key`, `tenant` or `service`; with a portfolio key also `portfolio_key`, `portfolio_org` or `portfolio_tenant`; on `createActProposal` also `proposal_grant` (proposals per minute per application and user) or `proposal_user` (proposals per minute per user, across all their applications).",
+            "description": "A rate limit is exhausted. `Retry-After` says when to come back and `error.details.scope` which limit it was: `key`, `tenant` or `service`; with a portfolio key also `portfolio_key`, `portfolio_org` or `portfolio_tenant`; on a write, `write_key` (the key’s write budget) or `service`; on `createActProposal` also `proposal_grant` (proposals per minute per application and user) or `proposal_user` (proposals per minute per user, across all their applications).",
             "headers": {
               "RateLimit-Limit": {
                 "description": "Requests allowed in the window that is closest to being exhausted.",
@@ -6103,7 +6325,7 @@
             }
           },
           "403": {
-            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which), or that tenant has an IP allowlist and the request comes from an address outside it (`error.details.code` is `IP_NOT_ALLOWED`), or the credential is an OAuth access token of an account without the second factor that tenant requires (`error.details.code` is `MFA_ENROLLMENT_REQUIRED`). Re-authenticating alone does not help with the last four: the licence is renewed, the module activated, the address allowed or a second factor enrolled in the console.",
+            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which), or that tenant has an IP allowlist and the request comes from an address outside it (`error.details.code` is `IP_NOT_ALLOWED`), or the credential is an OAuth access token of an account without the second factor that tenant requires (`error.details.code` is `MFA_ENROLLMENT_REQUIRED`), or that tenant’s plan does not include API access, which is included from Comply, except in AI Governance (`error.details.code` is `PLAN_WITHOUT_API` and `error.details.deniedReason` is `plan_without_api`). Re-authenticating alone does not help with the last five: the licence is renewed, the module activated, the address allowed, a second factor enrolled or the plan changed in the console.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6133,7 +6355,7 @@
             }
           },
           "429": {
-            "description": "A rate limit is exhausted. `Retry-After` says when to come back and `error.details.scope` which limit it was: `key`, `tenant` or `service`; with a portfolio key also `portfolio_key`, `portfolio_org` or `portfolio_tenant`; on `createActProposal` also `proposal_grant` (proposals per minute per application and user) or `proposal_user` (proposals per minute per user, across all their applications).",
+            "description": "A rate limit is exhausted. `Retry-After` says when to come back and `error.details.scope` which limit it was: `key`, `tenant` or `service`; with a portfolio key also `portfolio_key`, `portfolio_org` or `portfolio_tenant`; on a write, `write_key` (the key’s write budget) or `service`; on `createActProposal` also `proposal_grant` (proposals per minute per application and user) or `proposal_user` (proposals per minute per user, across all their applications).",
             "headers": {
               "RateLimit-Limit": {
                 "description": "Requests allowed in the window that is closest to being exhausted.",
@@ -6643,7 +6865,7 @@
             }
           },
           "403": {
-            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which), or that tenant has an IP allowlist and the request comes from an address outside it (`error.details.code` is `IP_NOT_ALLOWED`), or the credential is an OAuth access token of an account without the second factor that tenant requires (`error.details.code` is `MFA_ENROLLMENT_REQUIRED`). Re-authenticating alone does not help with the last four: the licence is renewed, the module activated, the address allowed or a second factor enrolled in the console.",
+            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which), or that tenant has an IP allowlist and the request comes from an address outside it (`error.details.code` is `IP_NOT_ALLOWED`), or the credential is an OAuth access token of an account without the second factor that tenant requires (`error.details.code` is `MFA_ENROLLMENT_REQUIRED`), or that tenant’s plan does not include API access, which is included from Comply, except in AI Governance (`error.details.code` is `PLAN_WITHOUT_API` and `error.details.deniedReason` is `plan_without_api`). Re-authenticating alone does not help with the last five: the licence is renewed, the module activated, the address allowed, a second factor enrolled or the plan changed in the console.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6663,7 +6885,7 @@
             }
           },
           "429": {
-            "description": "A rate limit is exhausted. `Retry-After` says when to come back and `error.details.scope` which limit it was: `key`, `tenant` or `service`; with a portfolio key also `portfolio_key`, `portfolio_org` or `portfolio_tenant`; on `createActProposal` also `proposal_grant` (proposals per minute per application and user) or `proposal_user` (proposals per minute per user, across all their applications).",
+            "description": "A rate limit is exhausted. `Retry-After` says when to come back and `error.details.scope` which limit it was: `key`, `tenant` or `service`; with a portfolio key also `portfolio_key`, `portfolio_org` or `portfolio_tenant`; on a write, `write_key` (the key’s write budget) or `service`; on `createActProposal` also `proposal_grant` (proposals per minute per application and user) or `proposal_user` (proposals per minute per user, across all their applications).",
             "headers": {
               "RateLimit-Limit": {
                 "description": "Requests allowed in the window that is closest to being exhausted.",
@@ -6745,6 +6967,601 @@
         "x-hs-scope": {
           "scopes": [
             "changes:read"
+          ]
+        }
+      }
+    },
+    "/v1/alerts/{id}/acknowledge": {
+      "post": {
+        "operationId": "acknowledgeAlert",
+        "summary": "Acknowledge an alert",
+        "description": "Marks an open alert as taken (\"someone is on it\"). It stays unresolved. Repeating it on an alert that is already acknowledged answers its current state with `changed: false` and writes nothing. Authorised by the API key and its scope alone, with no interactive confirmation: the key acts with the role of the user who CREATED it, read on every request (a creator who was demoted, suspended, deleted or removed from the tenant takes the power away from the key: 403 `WRITE_ACTOR_UNRESOLVED` or `ROLE_NOT_PERMITTED`). A tenant API key (`hsk_…`) writes in its own tenant. An MSSP portfolio key (`hsp_…`) names the client tenant with `X-HS-Tenant`, exactly as on the reads: a tenant outside the key’s client set is a 404 (`TENANT_NOT_FOUND`), and inside it the key acts with the role of the MSSP user who created it, who must still reach that client in the console (403 `WRITE_ACTOR_UNRESOLVED` otherwise); only an MSSP organisation administrator can grant `alerts:write` on a portfolio key. Writes have their own rate-limit budget per key (`error.details.scope: \"write_key\"`), separate from reads, and are refused while the licence is in its grace period. Every change writes one audit row in the tenant’s trail with the key id (never the secret), the acting user, the old and new status and the reason. The body is a JSON object; an unknown key is a 400.\n\nRequired scope: `alerts:write`. Published in `/v1` since 2026-11-14.",
+        "tags": [
+          "alerts"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Alert identifier.",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          },
+          {
+            "name": "X-HS-Tenant",
+            "in": "header",
+            "required": false,
+            "description": "The tenant to read, as its id (a UUID, any case). REQUIRED with a portfolio key (`hsp_…`); with a tenant API key or an OAuth token, optional and accepted only when it equals the credential’s own tenant. Never a slug.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "A JSON object (`Content-Type: application/json`, at most 8 KiB). An unknown key is a 400.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "maxLength": 500,
+                    "description": "Free text, at most 500 characters. Kept in the audit trail."
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "headers": {
+              "RateLimit-Limit": {
+                "description": "Requests allowed in the window that is closest to being exhausted.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              },
+              "RateLimit-Remaining": {
+                "description": "Requests left in that window.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "RateLimit-Reset": {
+                "description": "Seconds until that window renews.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "`<limit>;w=<window seconds>`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-HS-Tenant": {
+                "description": "The id (lowercase UUID) of the tenant whose data this body holds, for every credential. Present on every 2xx answer of a data operation and on no error. A client that selected a tenant must refuse a 2xx whose echo is missing or different.",
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$schema": "https://json-schema.org/draft/2020-12/schema",
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "open",
+                            "acknowledged",
+                            "resolved"
+                          ],
+                          "description": "Derived: resolved if closed, acknowledged if taken, otherwise open."
+                        },
+                        "acknowledged_at": {
+                          "description": "RFC 3339, UTC.",
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "resolved_at": {
+                          "description": "RFC 3339, UTC.",
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "resolution_reason": {
+                          "description": "Why it was closed, when it was.",
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "updated_at": {
+                          "type": "string",
+                          "description": "RFC 3339, UTC. Moves on every change of status."
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "status",
+                        "acknowledged_at",
+                        "resolved_at",
+                        "resolution_reason",
+                        "updated_at"
+                      ],
+                      "additionalProperties": false,
+                      "description": "The state of the alert after the request. Its content (title, description, vendor) is `GET /v1/alerts/{id}`, under `supply_risk:read`."
+                    },
+                    "changed": {
+                      "type": "boolean",
+                      "description": "`true` when THIS request changed the alert (and wrote its audit row); `false` when the alert was already in the state asked for and nothing was written."
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "changed"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A parameter is missing, malformed or out of range: `error.details.issues` names it. Or the `X-HS-Tenant` header was refused (`error.details.parameter` is `X-HS-Tenant`): `TENANT_HEADER_INVALID` (not exactly one UUID), `TENANT_REQUIRED` (a portfolio key on a data operation without it) or `TENANT_SELECTOR_NOT_SUPPORTED` (on `listPortfolioTenants`, or a tenant API key / OAuth token naming a tenant other than its own) in `error.details.code`. Or a query parameter name the operation does not declare: `error.details.code` is `UNKNOWN_QUERY_PARAMETER`, `error.details.unknown` lists the names (at most 10, each cut to 64 characters; `error.details.unknown_omitted` counts the rest) and `error.details.allowed` the names the operation accepts (a misspelt name is refused, never ignored).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or one that is unknown, malformed, revoked or expired (a tenant API key, an OAuth access token or a portfolio key; the cases are not distinguished), a portfolio key whose organisation is no longer an active MSSP, or a portfolio key used from an address outside its allowed ranges. The `WWW-Authenticate` header carries `resource_metadata`, the RFC 9728 document that names the authorization server.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which), or that tenant has an IP allowlist and the request comes from an address outside it (`error.details.code` is `IP_NOT_ALLOWED`), or the credential is an OAuth access token of an account without the second factor that tenant requires (`error.details.code` is `MFA_ENROLLMENT_REQUIRED`), or that tenant’s plan does not include API access, which is included from Comply, except in AI Governance (`error.details.code` is `PLAN_WITHOUT_API` and `error.details.deniedReason` is `plan_without_api`). Re-authenticating alone does not help with the last five: the licence is renewed, the module activated, the address allowed, a second factor enrolled or the plan changed in the console. For this write also: `ROLE_NOT_PERMITTED` (the role the key acts with may not triage alerts (only a role that may write, or an MSSP analyst, may)); `WRITE_ACTOR_UNRESOLVED` (the user who created the key no longer exists, is not active or no longer reaches the tenant; nothing was written).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource in this tenant. With a portfolio key, also: the selected tenant does not exist, is not in this key’s portfolio, or has an IP allowlist that excludes the address of the request (`error.details.code` is `TENANT_NOT_FOUND`; the cases are one answer).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The alert is not in a state this request can change, and nothing was written. `error.details.code` says why: `ALERT_RESOLVED` (the alert is already resolved; `error.details.status` is `resolved`); `ALERT_STATE_CHANGED` (the alert changed between the read and the write of this request; read it again).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "A rate limit is exhausted. `Retry-After` says when to come back and `error.details.scope` which limit it was: `key`, `tenant` or `service`; with a portfolio key also `portfolio_key`, `portfolio_org` or `portfolio_tenant`; on a write, `write_key` (the key’s write budget) or `service`; on `createActProposal` also `proposal_grant` (proposals per minute per application and user) or `proposal_user` (proposals per minute per user, across all their applications).",
+            "headers": {
+              "RateLimit-Limit": {
+                "description": "Requests allowed in the window that is closest to being exhausted.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              },
+              "RateLimit-Remaining": {
+                "description": "Requests left in that window.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "RateLimit-Reset": {
+                "description": "Seconds until that window renews.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "`<limit>;w=<window seconds>`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Something failed on our side. `error.request_id` is what support needs.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The service cannot verify credentials right now. Retry with backoff.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "portfolioKey": []
+          }
+        ],
+        "x-hs-scope": {
+          "scopes": [
+            "alerts:write"
+          ]
+        }
+      }
+    },
+    "/v1/alerts/{id}/resolve": {
+      "post": {
+        "operationId": "resolveAlert",
+        "summary": "Resolve an alert",
+        "description": "Closes an open or acknowledged alert, with the reason why. Repeating it on an alert that is already resolved answers its current state with `changed: false` and writes nothing (the first reason stays). A critical or high alert is closed only by a key whose creator may close it in the console: an MSSP analyst's key closes medium and low alerts only (403 `ROLE_NOT_PERMITTED`). Authorised by the API key and its scope alone, with no interactive confirmation: the key acts with the role of the user who CREATED it, read on every request (a creator who was demoted, suspended, deleted or removed from the tenant takes the power away from the key: 403 `WRITE_ACTOR_UNRESOLVED` or `ROLE_NOT_PERMITTED`). A tenant API key (`hsk_…`) writes in its own tenant. An MSSP portfolio key (`hsp_…`) names the client tenant with `X-HS-Tenant`, exactly as on the reads: a tenant outside the key’s client set is a 404 (`TENANT_NOT_FOUND`), and inside it the key acts with the role of the MSSP user who created it, who must still reach that client in the console (403 `WRITE_ACTOR_UNRESOLVED` otherwise); only an MSSP organisation administrator can grant `alerts:write` on a portfolio key. Writes have their own rate-limit budget per key (`error.details.scope: \"write_key\"`), separate from reads, and are refused while the licence is in its grace period. Every change writes one audit row in the tenant’s trail with the key id (never the secret), the acting user, the old and new status and the reason. The body is a JSON object; an unknown key is a 400.\n\nRequired scope: `alerts:write`. Published in `/v1` since 2026-11-14.",
+        "tags": [
+          "alerts"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Alert identifier.",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          },
+          {
+            "name": "X-HS-Tenant",
+            "in": "header",
+            "required": false,
+            "description": "The tenant to read, as its id (a UUID, any case). REQUIRED with a portfolio key (`hsp_…`); with a tenant API key or an OAuth token, optional and accepted only when it equals the credential’s own tenant. Never a slug.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "A JSON object (`Content-Type: application/json`, at most 8 KiB). An unknown key is a 400.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "maxLength": 500,
+                    "description": "Why the alert is closed: required, at least two non-blank characters, at most 500. It becomes the alert's `resolution_reason` and is kept in the audit trail."
+                  }
+                },
+                "required": [
+                  "reason"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "headers": {
+              "RateLimit-Limit": {
+                "description": "Requests allowed in the window that is closest to being exhausted.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              },
+              "RateLimit-Remaining": {
+                "description": "Requests left in that window.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "RateLimit-Reset": {
+                "description": "Seconds until that window renews.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "`<limit>;w=<window seconds>`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-HS-Tenant": {
+                "description": "The id (lowercase UUID) of the tenant whose data this body holds, for every credential. Present on every 2xx answer of a data operation and on no error. A client that selected a tenant must refuse a 2xx whose echo is missing or different.",
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$schema": "https://json-schema.org/draft/2020-12/schema",
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "open",
+                            "acknowledged",
+                            "resolved"
+                          ],
+                          "description": "Derived: resolved if closed, acknowledged if taken, otherwise open."
+                        },
+                        "acknowledged_at": {
+                          "description": "RFC 3339, UTC.",
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "resolved_at": {
+                          "description": "RFC 3339, UTC.",
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "resolution_reason": {
+                          "description": "Why it was closed, when it was.",
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "updated_at": {
+                          "type": "string",
+                          "description": "RFC 3339, UTC. Moves on every change of status."
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "status",
+                        "acknowledged_at",
+                        "resolved_at",
+                        "resolution_reason",
+                        "updated_at"
+                      ],
+                      "additionalProperties": false,
+                      "description": "The state of the alert after the request. Its content (title, description, vendor) is `GET /v1/alerts/{id}`, under `supply_risk:read`."
+                    },
+                    "changed": {
+                      "type": "boolean",
+                      "description": "`true` when THIS request changed the alert (and wrote its audit row); `false` when the alert was already in the state asked for and nothing was written."
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "changed"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A parameter is missing, malformed or out of range: `error.details.issues` names it. Or the `X-HS-Tenant` header was refused (`error.details.parameter` is `X-HS-Tenant`): `TENANT_HEADER_INVALID` (not exactly one UUID), `TENANT_REQUIRED` (a portfolio key on a data operation without it) or `TENANT_SELECTOR_NOT_SUPPORTED` (on `listPortfolioTenants`, or a tenant API key / OAuth token naming a tenant other than its own) in `error.details.code`. Or a query parameter name the operation does not declare: `error.details.code` is `UNKNOWN_QUERY_PARAMETER`, `error.details.unknown` lists the names (at most 10, each cut to 64 characters; `error.details.unknown_omitted` counts the rest) and `error.details.allowed` the names the operation accepts (a misspelt name is refused, never ignored).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or one that is unknown, malformed, revoked or expired (a tenant API key, an OAuth access token or a portfolio key; the cases are not distinguished), a portfolio key whose organisation is no longer an active MSSP, or a portfolio key used from an address outside its allowed ranges. The `WWW-Authenticate` header carries `resource_metadata`, the RFC 9728 document that names the authorization server.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which), or that tenant has an IP allowlist and the request comes from an address outside it (`error.details.code` is `IP_NOT_ALLOWED`), or the credential is an OAuth access token of an account without the second factor that tenant requires (`error.details.code` is `MFA_ENROLLMENT_REQUIRED`), or that tenant’s plan does not include API access, which is included from Comply, except in AI Governance (`error.details.code` is `PLAN_WITHOUT_API` and `error.details.deniedReason` is `plan_without_api`). Re-authenticating alone does not help with the last five: the licence is renewed, the module activated, the address allowed, a second factor enrolled or the plan changed in the console. For this write also: `ROLE_NOT_PERMITTED` (the role the key acts with may not close this alert: it may not triage alerts at all, or it is an MSSP analyst and the alert is critical or high); `WRITE_ACTOR_UNRESOLVED` (the user who created the key no longer exists, is not active or no longer reaches the tenant; nothing was written).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource in this tenant. With a portfolio key, also: the selected tenant does not exist, is not in this key’s portfolio, or has an IP allowlist that excludes the address of the request (`error.details.code` is `TENANT_NOT_FOUND`; the cases are one answer).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The alert is not in a state this request can change, and nothing was written. `error.details.code` says why: `ALERT_STATE_CHANGED` (the alert changed between the read and the write of this request; read it again).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "A rate limit is exhausted. `Retry-After` says when to come back and `error.details.scope` which limit it was: `key`, `tenant` or `service`; with a portfolio key also `portfolio_key`, `portfolio_org` or `portfolio_tenant`; on a write, `write_key` (the key’s write budget) or `service`; on `createActProposal` also `proposal_grant` (proposals per minute per application and user) or `proposal_user` (proposals per minute per user, across all their applications).",
+            "headers": {
+              "RateLimit-Limit": {
+                "description": "Requests allowed in the window that is closest to being exhausted.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              },
+              "RateLimit-Remaining": {
+                "description": "Requests left in that window.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "RateLimit-Reset": {
+                "description": "Seconds until that window renews.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "`<limit>;w=<window seconds>`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Something failed on our side. `error.request_id` is what support needs.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The service cannot verify credentials right now. Retry with backoff.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "portfolioKey": []
+          }
+        ],
+        "x-hs-scope": {
+          "scopes": [
+            "alerts:write"
           ]
         }
       }
@@ -6999,7 +7816,7 @@
             }
           },
           "403": {
-            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which), or that tenant has an IP allowlist and the request comes from an address outside it (`error.details.code` is `IP_NOT_ALLOWED`), or the credential is an OAuth access token of an account without the second factor that tenant requires (`error.details.code` is `MFA_ENROLLMENT_REQUIRED`). Re-authenticating alone does not help with the last four: the licence is renewed, the module activated, the address allowed or a second factor enrolled in the console. On this operation also: `CREDENTIAL_NOT_ALLOWED` (the credential is not a user access token issued for the HodeiShield MCP server).",
+            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which), or that tenant has an IP allowlist and the request comes from an address outside it (`error.details.code` is `IP_NOT_ALLOWED`), or the credential is an OAuth access token of an account without the second factor that tenant requires (`error.details.code` is `MFA_ENROLLMENT_REQUIRED`), or that tenant’s plan does not include API access, which is included from Comply, except in AI Governance (`error.details.code` is `PLAN_WITHOUT_API` and `error.details.deniedReason` is `plan_without_api`). Re-authenticating alone does not help with the last five: the licence is renewed, the module activated, the address allowed, a second factor enrolled or the plan changed in the console. On this operation also: `CREDENTIAL_NOT_ALLOWED` (the credential is not a user access token issued for the HodeiShield MCP server).",
             "content": {
               "application/json": {
                 "schema": {
@@ -7029,7 +7846,7 @@
             }
           },
           "429": {
-            "description": "A rate limit is exhausted. `Retry-After` says when to come back and `error.details.scope` which limit it was: `key`, `tenant` or `service`; with a portfolio key also `portfolio_key`, `portfolio_org` or `portfolio_tenant`; on `createActProposal` also `proposal_grant` (proposals per minute per application and user) or `proposal_user` (proposals per minute per user, across all their applications).",
+            "description": "A rate limit is exhausted. `Retry-After` says when to come back and `error.details.scope` which limit it was: `key`, `tenant` or `service`; with a portfolio key also `portfolio_key`, `portfolio_org` or `portfolio_tenant`; on a write, `write_key` (the key’s write budget) or `service`; on `createActProposal` also `proposal_grant` (proposals per minute per application and user) or `proposal_user` (proposals per minute per user, across all their applications).",
             "headers": {
               "RateLimit-Limit": {
                 "description": "Requests allowed in the window that is closest to being exhausted.",
@@ -7241,7 +8058,7 @@
             }
           },
           "403": {
-            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which), or that tenant has an IP allowlist and the request comes from an address outside it (`error.details.code` is `IP_NOT_ALLOWED`), or the credential is an OAuth access token of an account without the second factor that tenant requires (`error.details.code` is `MFA_ENROLLMENT_REQUIRED`). Re-authenticating alone does not help with the last four: the licence is renewed, the module activated, the address allowed or a second factor enrolled in the console. On this operation also: `CREDENTIAL_NOT_ALLOWED` (the credential is not a user access token issued for the HodeiShield MCP server).",
+            "description": "The credential authenticated but may not perform this operation. Either it does not carry the scope the operation requires (`error.details.code` is `INSUFFICIENT_SCOPE` and `error.details.missing` lists the scopes), or the tenant read (the credential’s own, or the one a portfolio key selected) does not have active the module of a scope the credential does carry (`error.details.code` is `MODULE_NOT_ENTITLED`, `error.details.scopes` lists those scopes, `error.details.modules` the modules the tenant lacks and, when a compliance framework is entitled but not activated, `error.details.frameworks` those frameworks), or that tenant is deactivated or holds no licence in force: none, suspended, revoked or expired, or a write during the grace period (`error.details.code` is `LICENCE_INACTIVE` and `error.details.licence` says which), or that tenant has an IP allowlist and the request comes from an address outside it (`error.details.code` is `IP_NOT_ALLOWED`), or the credential is an OAuth access token of an account without the second factor that tenant requires (`error.details.code` is `MFA_ENROLLMENT_REQUIRED`), or that tenant’s plan does not include API access, which is included from Comply, except in AI Governance (`error.details.code` is `PLAN_WITHOUT_API` and `error.details.deniedReason` is `plan_without_api`). Re-authenticating alone does not help with the last five: the licence is renewed, the module activated, the address allowed, a second factor enrolled or the plan changed in the console. On this operation also: `CREDENTIAL_NOT_ALLOWED` (the credential is not a user access token issued for the HodeiShield MCP server).",
             "content": {
               "application/json": {
                 "schema": {
@@ -7261,7 +8078,7 @@
             }
           },
           "429": {
-            "description": "A rate limit is exhausted. `Retry-After` says when to come back and `error.details.scope` which limit it was: `key`, `tenant` or `service`; with a portfolio key also `portfolio_key`, `portfolio_org` or `portfolio_tenant`; on `createActProposal` also `proposal_grant` (proposals per minute per application and user) or `proposal_user` (proposals per minute per user, across all their applications).",
+            "description": "A rate limit is exhausted. `Retry-After` says when to come back and `error.details.scope` which limit it was: `key`, `tenant` or `service`; with a portfolio key also `portfolio_key`, `portfolio_org` or `portfolio_tenant`; on a write, `write_key` (the key’s write budget) or `service`; on `createActProposal` also `proposal_grant` (proposals per minute per application and user) or `proposal_user` (proposals per minute per user, across all their applications).",
             "headers": {
               "RateLimit-Limit": {
                 "description": "Requests allowed in the window that is closest to being exhausted.",
@@ -7389,7 +8206,7 @@
                 "properties": {
                   "code": {
                     "type": "string",
-                    "description": "OPEN vocabulary (a value keeps its meaning and its HTTP status; new values may be added): `TENANT_HEADER_INVALID`, `TENANT_REQUIRED`, `TENANT_SELECTOR_NOT_SUPPORTED`, `UNKNOWN_QUERY_PARAMETER`, `BODY_NOT_JSON`, `BODY_TOO_LARGE`, `VALIDATION_FAILED` (400), `INSUFFICIENT_SCOPE`, `MODULE_NOT_ENTITLED`, `LICENCE_INACTIVE`, `IP_NOT_ALLOWED`, `MFA_ENROLLMENT_REQUIRED`, `CREDENTIAL_NOT_ALLOWED` (403), `TENANT_NOT_FOUND` (404), `REPORT_NOT_READY`, `FORMAT_UNSUPPORTED`, `FILE_TOO_LARGE`, `DUPLICATE`, `OPEN_PROPOSAL_CAP`, `ACTIONS_PAUSED` (409).",
+                    "description": "OPEN vocabulary (a value keeps its meaning and its HTTP status; new values may be added): `TENANT_HEADER_INVALID`, `TENANT_REQUIRED`, `TENANT_SELECTOR_NOT_SUPPORTED`, `UNKNOWN_QUERY_PARAMETER`, `BODY_NOT_JSON`, `BODY_TOO_LARGE`, `VALIDATION_FAILED` (400), `INSUFFICIENT_SCOPE`, `MODULE_NOT_ENTITLED`, `LICENCE_INACTIVE`, `IP_NOT_ALLOWED`, `MFA_ENROLLMENT_REQUIRED`, `PLAN_WITHOUT_API`, `ROLE_NOT_PERMITTED`, `WRITE_ACTOR_UNRESOLVED`, `CREDENTIAL_NOT_ALLOWED` (403), `TENANT_NOT_FOUND` (404), `REPORT_NOT_READY`, `FORMAT_UNSUPPORTED`, `FILE_TOO_LARGE`, `ALERT_RESOLVED`, `ALERT_STATE_CHANGED`, `DUPLICATE`, `OPEN_PROPOSAL_CAP`, `ACTIONS_PAUSED` (409).",
                     "x-hs-known-values": [
                       "TENANT_HEADER_INVALID",
                       "TENANT_REQUIRED",
@@ -7400,10 +8217,15 @@
                       "LICENCE_INACTIVE",
                       "IP_NOT_ALLOWED",
                       "MFA_ENROLLMENT_REQUIRED",
+                      "PLAN_WITHOUT_API",
                       "TENANT_NOT_FOUND",
                       "REPORT_NOT_READY",
                       "FORMAT_UNSUPPORTED",
                       "FILE_TOO_LARGE",
+                      "ROLE_NOT_PERMITTED",
+                      "WRITE_ACTOR_UNRESOLVED",
+                      "ALERT_RESOLVED",
+                      "ALERT_STATE_CHANGED",
                       "CREDENTIAL_NOT_ALLOWED",
                       "BODY_NOT_JSON",
                       "BODY_TOO_LARGE",
@@ -7433,6 +8255,13 @@
                       "type": "string"
                     },
                     "description": "With `MODULE_NOT_ENTITLED`, present only when it applies: the compliance framework ids (`nis2`, …) the tenant read is entitled to but has not activated."
+                  },
+                  "deniedReason": {
+                    "type": "string",
+                    "description": "With `PLAN_WITHOUT_API`: why the plan of the tenant read offers no API access. Today always `plan_without_api`.",
+                    "x-hs-known-values": [
+                      "plan_without_api"
+                    ]
                   }
                 }
               }
@@ -7445,12 +8274,12 @@
       "bearerAuth": {
         "type": "http",
         "scheme": "bearer",
-        "description": "A tenant API key, created in the console under Settings → API keys with the minimum scopes it needs."
+        "description": "A tenant API key, created in the console under Settings → API keys with the minimum scopes it needs. Mandatory expiry (at most 365 days); it stops working as soon as the administrator who created it is removed from the tenant or loses the role, unless another administrator of the tenant takes it over."
       },
       "portfolioKey": {
         "type": "http",
         "scheme": "bearer",
-        "description": "An MSSP portfolio key (`hsp_…`), created by an organisation administrator of an active managed security service provider in the console’s MSSP area (API keys). It lists the provider’s client tenants (`portfolio:read`) and reads ONE of them per request, selected with `X-HS-Tenant`, with the same data scopes a tenant API key uses. Read-only; mandatory expiry (default 90 days, at most 365); optional client subset and source IP ranges. Refused with 401 everywhere but `/v1`."
+        "description": "An MSSP portfolio key (`hsp_…`), created by an organisation administrator of an active managed security service provider in the console’s MSSP area (API keys). It lists the provider’s client tenants (`portfolio:read`) and reads ONE of them per request, selected with `X-HS-Tenant`, with the same data scopes a tenant API key uses. Read scopes, plus at most the one write scope `alerts:write` (acknowledge and resolve an alert in the selected client, acting with the role, read on every request, of the provider user who created the key); mandatory expiry (at most 90 days); it stops working as soon as the administrator who created it is removed or loses the role; optional client subset and source IP ranges. Refused with 401 everywhere but `/v1`."
       },
       "oauth2": {
         "type": "oauth2",

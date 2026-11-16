@@ -263,9 +263,9 @@ const RESOURCES: [Resource; 7] = [
         command: &["alerts"],
         list_args: &[],
         path: "/v1/alerts",
-        item: r#"{"id":"a1","vendor_id":"v1","type":"cve","severity":"high","title":"Example alert","description":null,"source_url":null,"economic_impact":null,"status":"open","acknowledged_at":null,"resolved_at":null,"resolution_reason":null,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-02T00:00:00Z","added_later":"x"}"#,
-        csv_header: "id,vendor_id,type,severity,title,description,source_url,economic_impact,status,acknowledged_at,resolved_at,resolution_reason,created_at,updated_at,added_later",
-        types: "id:string,vendor_id:string,type:string,severity:string,title:string,description:null,source_url:null,economic_impact:null,status:string,acknowledged_at:null,resolved_at:null,resolution_reason:null,created_at:string,updated_at:string,added_later:string",
+        item: r#"{"id":"a1","vendor_id":"v1","type":"cve","severity":"high","title":"Example alert","description":null,"source_url":null,"economic_impact":null,"status":"open","acknowledged_at":null,"resolved_at":null,"resolution_reason":null,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-02T00:00:00Z","mitre_techniques":null,"mitre_mapping":{"status":"unavailable","note":null,"source":null},"added_later":"x"}"#,
+        csv_header: "id,vendor_id,type,severity,title,description,source_url,economic_impact,status,acknowledged_at,resolved_at,resolution_reason,created_at,updated_at,mitre_techniques,mitre_mapping,added_later",
+        types: "id:string,vendor_id:string,type:string,severity:string,title:string,description:null,source_url:null,economic_impact:null,status:string,acknowledged_at:null,resolved_at:null,resolution_reason:null,created_at:string,updated_at:string,mitre_techniques:null,mitre_mapping:object,added_later:string",
     },
     Resource {
         command: &["risks"],
@@ -812,8 +812,8 @@ fn csv_document_snapshot() {
         .match_query(mockito::Matcher::Any)
         .with_body(
             r#"{"data":[
-{"id":"a1","vendor_id":"v","type":"cve","severity":"+high","title":"=1+1","description":"-x","source_url":"@SUM(A1)","economic_impact":-5,"status":"open","acknowledged_at":null,"resolved_at":null,"resolution_reason":null,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-02T00:00:00Z"},
-{"id":"a2","vendor_id":"v","type":"cve","severity":"say \"hi\"","title":"plain, with comma","description":"two\nlines","source_url":" padded ","economic_impact":2.5,"status":"a=b","acknowledged_at":null,"resolved_at":null,"resolution_reason":null,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-02T00:00:00Z"}
+{"id":"a1","vendor_id":"v","type":"cve","severity":"+high","title":"=1+1","description":"-x","source_url":"@SUM(A1)","economic_impact":-5,"status":"open","acknowledged_at":null,"resolved_at":null,"resolution_reason":null,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-02T00:00:00Z","mitre_techniques":null,"mitre_mapping":{"status":"unavailable","note":null,"source":null}},
+{"id":"a2","vendor_id":"v","type":"cve","severity":"say \"hi\"","title":"plain, with comma","description":"two\nlines","source_url":" padded ","economic_impact":2.5,"status":"a=b","acknowledged_at":null,"resolved_at":null,"resolution_reason":null,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-02T00:00:00Z","mitre_techniques":null,"mitre_mapping":{"status":"unavailable","note":null,"source":null}}
 ],"pagination":{"page":1,"per_page":50,"total":2,"total_pages":1}}"#,
         )
         .create();
@@ -822,9 +822,12 @@ fn csv_document_snapshot() {
     assert_eq!(
         out(&output),
         "id,vendor_id,type,severity,title,description,source_url,economic_impact,status,\
-         acknowledged_at,resolved_at,resolution_reason,created_at,updated_at\r\n\
-         a1,v,cve,'+high,'=1+1,'-x,'@SUM(A1),-5,open,,,,2026-01-01T00:00:00Z,2026-01-02T00:00:00Z\r\n\
-         a2,v,cve,\"say \"\"hi\"\"\",\"plain, with comma\",\"two\nlines\",\" padded \",2.5,a=b,,,,2026-01-01T00:00:00Z,2026-01-02T00:00:00Z\r\n"
+         acknowledged_at,resolved_at,resolution_reason,created_at,updated_at,mitre_techniques,\
+         mitre_mapping\r\n\
+         a1,v,cve,'+high,'=1+1,'-x,'@SUM(A1),-5,open,,,,2026-01-01T00:00:00Z,2026-01-02T00:00:00Z,,\
+         \"{\"\"status\"\":\"\"unavailable\"\",\"\"note\"\":null,\"\"source\"\":null}\"\r\n\
+         a2,v,cve,\"say \"\"hi\"\"\",\"plain, with comma\",\"two\nlines\",\" padded \",2.5,a=b,,,,2026-01-01T00:00:00Z,2026-01-02T00:00:00Z,,\
+         \"{\"\"status\"\":\"\"unavailable\"\",\"\"note\"\":null,\"\"source\"\":null}\"\r\n"
     );
 }
 

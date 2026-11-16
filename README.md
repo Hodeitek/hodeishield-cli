@@ -835,7 +835,7 @@ hodeishield vendors list --all --csv > vendors.csv
 | 1 | Error (invalid input, configuration, unexpected answer) |
 | 2 | Invalid command line |
 | 3 | Not authenticated: no credential (also when the system keychain cannot be reached in this session, or the opt-in token file is refused as unsafe; `login` and `logout` exit 1 for that), or the API rejected it (`whoami` too, after showing the local details) |
-| 4 | The credential lacks the scope the command needs, the tenant's plan does not include the module (or the compliance framework is not enabled), the request comes from an IP address that is not allowed, or the account must enrol multi-factor authentication in the web app first |
+| 4 | The credential lacks the scope the command needs, the tenant's plan does not include the module (or the compliance framework is not enabled), the request comes from an IP address that is not allowed, the tenant's plan does not include API or CLI access, or the account must enrol multi-factor authentication in the web app first |
 | 5 | Not found (or not in your organisation) |
 | 6 | Rate limit exhausted (the CLI already retried short waits) |
 | 7 | The API could not be reached or failed, or does not offer portfolio access yet |

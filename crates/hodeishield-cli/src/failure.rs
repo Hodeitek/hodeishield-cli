@@ -222,6 +222,9 @@ pub fn from_api(error: hodeishield_api::Error, context: &ApiContext<'_>) -> Fail
                      allowlist, or run the command from an allowed network. Signing in again \
                      will not help.",
                 ),
+                403 if detail(&api, "code") == Some("PLAN_WITHOUT_API") => {
+                    plan_without_api(Kind::Forbidden)
+                }
                 403 if detail(&api, "code") == Some("MFA_ENROLLMENT_REQUIRED") => Failure::new(
                     Kind::Forbidden,
                     "This account must enrol multi-factor authentication before it can use the API.",
@@ -579,6 +582,19 @@ impl ApiContext<'_> {
             None => scope.to_owned(),
         }
     }
+}
+
+/// The tenant's plan has no API or CLI access (`PLAN_WITHOUT_API`). Shared by the API refusal (exit
+/// code 4) and the refused device sign-in, which keeps its own kind.
+pub fn plan_without_api(kind: Kind) -> Failure {
+    Failure::new(
+        kind,
+        "This tenant's plan does not include API or CLI access.",
+    )
+    .hint(
+        "API and CLI access is included in every plan from Comply up, except AI Governance, and \
+         also during a trial. The plan can be changed from the plan page in the web console.",
+    )
 }
 
 #[cfg(test)]

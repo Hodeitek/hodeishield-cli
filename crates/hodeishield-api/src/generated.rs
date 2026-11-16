@@ -113,6 +113,45 @@ pub struct GetVendorResponse {
     pub data: Vendor,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MitreTechniques {
+    /// ATT&CK technique id, e.g. `T1059`; the parent of a sub-technique.
+    pub id: String,
+    pub name: String,
+    /// e.g. `TA0002`.
+    pub tactic_id: String,
+    pub tactic_name: String,
+    /// e.g. `T1059.001` when the technique is a sub-technique, otherwise null.
+    #[serde(default)]
+    pub subtechnique_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Source {
+    /// CTID Mappings Explorer dataset, e.g. `kev`.
+    pub framework: String,
+    pub framework_version: String,
+    /// MITRE ATT&CK release the techniques come from.
+    pub attack_version: String,
+    /// Commit of the CTID mappings that were imported.
+    pub upstream_commit: String,
+}
+
+/// Why `mitre_techniques` holds what it holds, and where the mapping comes from.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MitreMapping {
+    /// `mapped`: techniques found. `unmapped`: no mapping (a non-CVE alert, or a CVE outside the CISA KEV set). `not_in_plan`: the tenant plan does not include `supply_chain.mitre_mapping`. `unavailable`: the reference data is not loaded in this environment.
+    ///
+    /// Documented values: `mapped`, `unmapped`, `not_in_plan`, `unavailable`. Treat any other value as valid: the vocabulary may grow.
+    pub status: String,
+    /// Human-readable reason; «sin mapeo» when `unmapped`.
+    #[serde(default)]
+    pub note: Option<String>,
+    /// Source and version of the mapping; null unless the mapping was served.
+    #[serde(default)]
+    pub source: Option<Source>,
+}
+
 /// A supply-chain alert raised against one vendor.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Alert {
@@ -149,6 +188,11 @@ pub struct Alert {
     pub created_at: String,
     /// RFC 3339, UTC. Last change of severity, acknowledgement, resolution or CISA KEV status; equals the instant the service started tracking it for alerts older than that.
     pub updated_at: String,
+    /// MITRE ATT&CK techniques mapped to the alert CVE (CTID KEV mappings; one entry per technique and tactic). Empty array: the alert has no mapping (`mitre_mapping.status` is `unmapped`, «sin mapeo»). null: the mapping is not served (`not_in_plan` or `unavailable`).
+    #[serde(default)]
+    pub mitre_techniques: Option<Vec<MitreTechniques>>,
+    /// Why `mitre_techniques` holds what it holds, and where the mapping comes from.
+    pub mitre_mapping: MitreMapping,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

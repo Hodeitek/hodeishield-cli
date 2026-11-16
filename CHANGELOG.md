@@ -28,6 +28,9 @@ commands, `--json` output and exit codes. Each release's notes start with its se
   must enrol multi-factor authentication first, now says so with what to do about it, and exits with
   code 4. Any other reason the API gives for a refusal is shown with the API's own message, also with
   exit code 4.
+- A refusal because the tenant's plan does not include API or CLI access now says so, with where the
+  plan can be changed, and exits with code 4. A device sign-in refused for the same reason shows the
+  same message and keeps its usual exit code.
 - When the API refuses a request because of a query parameter it does not know, the message now names
   the unknown parameter and the ones the API accepts.
 - A warning on standard error (once per run) when the API marks a request as deprecated, for example
@@ -35,7 +38,9 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ### Changed
 
-- The generated `/v1` client follows version 2026-11-15 of the API document.
+- The generated `/v1` client follows the final version 2026-11-15 of the API document. Alerts now carry
+  their MITRE ATT&CK mapping: `alerts list --json` shows `mitre_techniques` and `mitre_mapping`, and
+  `--csv` has two more columns at the end.
 - A new test checks that every query parameter the client can send is declared in the vendored API
   document.
 - The README's networking section now covers proxy precedence and `NO_PROXY` syntax, proxy

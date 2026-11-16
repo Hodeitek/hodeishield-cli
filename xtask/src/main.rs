@@ -32,7 +32,7 @@ use std::process::{Command, ExitCode, Stdio};
 const SPEC: &str = "openapi/v1.json";
 const OUT: &str = "crates/hodeishield-api/src/generated.rs";
 /// SHA-256 of `openapi/v1.json`. Updating the document means updating this and `openapi/README.md`.
-const EXPECTED_SHA256: &str = "96eb7808965b38686d3df9c3295d0cb78ade9f17dc0d784bfd9ad002ef8ce7a3";
+const EXPECTED_SHA256: &str = "5b41e2c7db2c1a16b0f0c2dabf939454e9a9ba7e0806e185f19f9eb4b43cdbea";
 
 /// Type names that the default naming rules would get wrong, keyed by the schema's location.
 const RENAMES: &[(&str, &str)] = &[

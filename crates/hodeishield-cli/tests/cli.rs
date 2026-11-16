@@ -237,7 +237,7 @@ fn all_walks_every_page() {
                 mockito::Matcher::UrlEncoded("per_page".into(), "200".into()),
             ]))
             .with_body(format!(
-                r#"{{"data":[{{"id":"a{n}","vendor_id":"v","type":"cve","severity":null,"title":"{name}","description":null,"source_url":null,"economic_impact":null,"status":"open","acknowledged_at":null,"resolved_at":null,"resolution_reason":null,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-02T00:00:00Z"}}],"pagination":{{"page":{n},"per_page":1,"total":2,"total_pages":2}}}}"#
+                r#"{{"data":[{{"id":"a{n}","vendor_id":"v","type":"cve","severity":null,"title":"{name}","description":null,"source_url":null,"economic_impact":null,"status":"open","acknowledged_at":null,"resolved_at":null,"resolution_reason":null,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-02T00:00:00Z","mitre_techniques":null,"mitre_mapping":{{"status":"unavailable","note":null,"source":null}}}}],"pagination":{{"page":{n},"per_page":1,"total":2,"total_pages":2}}}}"#
             ))
             .expect(1)
             .create();
@@ -262,7 +262,7 @@ fn all_walks_every_page() {
 fn cursor_page(n: i64, next_cursor: Option<&str>) -> String {
     let next = next_cursor.map_or("null".to_owned(), |c| format!(r#""{c}""#));
     format!(
-        r#"{{"data":[{{"id":"a{n}","vendor_id":"v","type":"cve","severity":null,"title":"T{n}","description":null,"source_url":null,"economic_impact":null,"status":"open","acknowledged_at":null,"resolved_at":null,"resolution_reason":null,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-02T00:00:00Z"}}],"pagination":{{"per_page":1,"next_cursor":{next}}}}}"#
+        r#"{{"data":[{{"id":"a{n}","vendor_id":"v","type":"cve","severity":null,"title":"T{n}","description":null,"source_url":null,"economic_impact":null,"status":"open","acknowledged_at":null,"resolved_at":null,"resolution_reason":null,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-02T00:00:00Z","mitre_techniques":null,"mitre_mapping":{{"status":"unavailable","note":null,"source":null}}}}],"pagination":{{"per_page":1,"next_cursor":{next}}}}}"#
     )
 }
 
@@ -504,6 +504,21 @@ fn an_ip_not_allowed_answer_exits_4_and_says_what_to_do() {
     );
     assert!(stderr.contains("allowlist"), "{stderr}");
     assert!(stderr.contains("request id: req_ip"), "{stderr}");
+    assert!(!stderr.contains("lacks the scope"), "{stderr}");
+}
+
+#[test]
+fn a_plan_without_api_answer_exits_4_and_names_the_plan() {
+    let (code, stderr) = forbidden_with_reason(
+        r#"{"error":{"code":"forbidden","message":"Plan.","request_id":"req_plan","details":{"code":"PLAN_WITHOUT_API","deniedReason":"plan_without_api"}}}"#,
+    );
+    assert_eq!(code, Some(4), "{stderr}");
+    assert!(
+        stderr.contains("plan does not include API or CLI access"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("from Comply up"), "{stderr}");
+    assert!(stderr.contains("request id: req_plan"), "{stderr}");
     assert!(!stderr.contains("lacks the scope"), "{stderr}");
 }
 
@@ -1027,7 +1042,7 @@ fn csv_with_all_prints_one_header_and_every_page() {
             .mock("GET", "/v1/alerts")
             .match_query(mockito::Matcher::UrlEncoded("page".into(), n.to_string()))
             .with_body(format!(
-                r#"{{"data":[{{"id":"a{n}","vendor_id":"v","type":"cve","severity":null,"title":"{title}","description":null,"source_url":null,"economic_impact":-5,"status":"open","acknowledged_at":null,"resolved_at":null,"resolution_reason":null,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-02T00:00:00Z"}}],"pagination":{{"page":{n},"per_page":1,"total":2,"total_pages":2}}}}"#
+                r#"{{"data":[{{"id":"a{n}","vendor_id":"v","type":"cve","severity":null,"title":"{title}","description":null,"source_url":null,"economic_impact":-5,"status":"open","acknowledged_at":null,"resolved_at":null,"resolution_reason":null,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-02T00:00:00Z","mitre_techniques":null,"mitre_mapping":{{"status":"unavailable","note":null,"source":null}}}}],"pagination":{{"page":{n},"per_page":1,"total":2,"total_pages":2}}}}"#
             ))
             .expect(1)
             .create();
@@ -1041,9 +1056,12 @@ fn csv_with_all_prints_one_header_and_every_page() {
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
         "id,vendor_id,type,severity,title,description,source_url,economic_impact,status,\
-         acknowledged_at,resolved_at,resolution_reason,created_at,updated_at\r\n\
-         a1,v,cve,,'=cmd(),,,-5,open,,,,2026-01-01T00:00:00Z,2026-01-02T00:00:00Z\r\n\
-         a2,v,cve,,\"Second, with a comma\",,,-5,open,,,,2026-01-01T00:00:00Z,2026-01-02T00:00:00Z\r\n"
+         acknowledged_at,resolved_at,resolution_reason,created_at,updated_at,mitre_techniques,\
+         mitre_mapping\r\n\
+         a1,v,cve,,'=cmd(),,,-5,open,,,,2026-01-01T00:00:00Z,2026-01-02T00:00:00Z,,\
+         \"{\"\"status\"\":\"\"unavailable\"\",\"\"note\"\":null,\"\"source\"\":null}\"\r\n\
+         a2,v,cve,,\"Second, with a comma\",,,-5,open,,,,2026-01-01T00:00:00Z,2026-01-02T00:00:00Z,,\
+         \"{\"\"status\"\":\"\"unavailable\"\",\"\"note\"\":null,\"\"source\"\":null}\"\r\n"
     );
     assert!(String::from_utf8_lossy(&output.stderr).contains("2 alerts."));
 }
