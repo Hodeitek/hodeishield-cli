@@ -773,6 +773,80 @@ fn control_characters_from_the_api_do_not_reach_the_terminal() {
     assert!(String::from_utf8_lossy(&output.stdout).contains("Evil\u{fffd}]0;pwned\u{fffd}"));
 }
 
+fn alert_json(techniques: &str, status: &str) -> String {
+    format!(
+        r#"{{"id":"a1","vendor_id":"v","type":"cve","severity":"high","title":"Bad CVE","description":null,"source_url":null,"economic_impact":null,"status":"open","acknowledged_at":null,"resolved_at":null,"resolution_reason":null,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-02T00:00:00Z","mitre_techniques":{techniques},"mitre_mapping":{{"status":"{status}","note":null,"source":null}}}}"#
+    )
+}
+
+fn alert_body(techniques: &str, status: &str) -> String {
+    format!(r#"{{"data":{}}}"#, alert_json(techniques, status))
+}
+
+#[test]
+fn alerts_get_shows_the_attack_techniques_or_why_there_are_none() {
+    let mapped = r#"[{"id":"T1190","name":"Exploit Public-Facing Application","tactic_id":"TA0001","tactic_name":"Initial Access","subtechnique_id":null},{"id":"T1059","name":"Command and Scripting Interpreter","tactic_id":"TA0002","tactic_name":"Execution","subtechnique_id":"T1059.001"}]"#;
+    for (techniques, status, expected) in [
+        (
+            mapped,
+            "mapped",
+            "  T1190 Exploit Public-Facing Application (Initial Access)\n  T1059 / T1059.001 Command and Scripting Interpreter (Execution)\n",
+        ),
+        ("[]", "unmapped", "  none mapped\n"),
+        (
+            "null",
+            "not_in_plan",
+            "  not included in the current plan\n",
+        ),
+        ("null", "unavailable", "  mapping not available\n"),
+    ] {
+        let env = Env::new();
+        let mut server = mockito::Server::new();
+        server
+            .mock("GET", "/v1/alerts/a1")
+            .with_body(alert_body(techniques, status))
+            .create();
+        let output = env
+            .api(&server)
+            .args(["alerts", "get", "a1"])
+            .output()
+            .expect("run");
+        assert!(output.status.success(), "{output:?}");
+        let text = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            text.contains(&format!("\nATT&CK techniques\n{expected}")),
+            "{text}"
+        );
+        assert!(!text.contains("mitre_"), "{text}");
+    }
+}
+
+#[test]
+fn alerts_list_shows_a_technique_column() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    server
+        .mock("GET", "/v1/alerts")
+        .match_query(mockito::Matcher::Any)
+        .with_body(format!(
+            r#"{{"data":[{}],"pagination":{{"page":1,"per_page":20,"total":1,"total_pages":1}}}}"#,
+            alert_json(r#"[{"id":"T1190","name":"n","tactic_id":"TA0001","tactic_name":"t","subtechnique_id":null}]"#, "mapped")
+        ))
+        .create();
+    let output = env
+        .api(&server)
+        .args(["alerts", "list"])
+        .output()
+        .expect("run");
+    assert!(output.status.success(), "{output:?}");
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        text.lines().next().expect("header").contains("ATT&CK"),
+        "{text}"
+    );
+    assert!(text.contains("T1190"), "{text}");
+}
+
 #[test]
 fn the_key_is_never_sent_over_plain_http_to_a_remote_host() {
     let env = Env::new();

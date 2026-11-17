@@ -484,16 +484,100 @@ pub fn alerts(ctx: &Context, command: AlertsCommand, out: &mut dyn Write) -> Res
         }
         AlertsCommand::Get { id } => {
             let (client, source) = ctx.single(&settings)?;
-            show(ctx, out, plain(ctx, source), client.get_alert(&id), |r| {
-                &r.data
-            })
+            let api = plain(ctx, source);
+            let response = client.get_alert(&id).map_err(|e| from_api(e, &api))?;
+            if ctx.json {
+                return Ok(print_json(out, &response.raw)?);
+            }
+            Ok(print_alert(out, &response.data.data)?)
         }
     }
 }
 
+/// The alert as `key  value` lines, then the ATT&CK techniques as a section of their own.
+fn print_alert(out: &mut dyn Write, alert: &Alert) -> std::io::Result<()> {
+    let mut value = serde_json::to_value(alert).map_err(std::io::Error::other)?;
+    if let Value::Object(map) = &mut value {
+        map.remove("mitre_techniques");
+        map.remove("mitre_mapping");
+    }
+    print_detail(out, &value)?;
+    write!(out, "{}", attack_section(alert))
+}
+
+/// The "ATT&CK techniques" section of `alerts get`. A technique reads
+/// `T1190 Exploit Public-Facing Application (Initial Access)`, with the sub-technique id after the
+/// parent when there is one. With no techniques, one line says why, from `mitre_mapping.status`.
+fn attack_section(alert: &Alert) -> String {
+    let mut text = String::from("\nATT&CK techniques\n");
+    match alert.mitre_techniques.as_deref() {
+        Some(techniques) if !techniques.is_empty() => {
+            for t in techniques {
+                let sub = t
+                    .subtechnique_id
+                    .as_deref()
+                    .map(|s| format!(" / {}", clean(s)))
+                    .unwrap_or_default();
+                text.push_str(&format!(
+                    "  {}{} {} ({})\n",
+                    clean(&t.id),
+                    sub,
+                    clean(&t.name),
+                    clean(&t.tactic_name)
+                ));
+            }
+            if let Some(source) = alert.mitre_mapping.source.as_ref() {
+                text.push_str(&format!(
+                    "  Source: {} {}, ATT&CK {}\n",
+                    clean(&source.framework),
+                    clean(&source.framework_version),
+                    clean(&source.attack_version)
+                ));
+            }
+        }
+        _ => {
+            let line = match alert.mitre_mapping.status.as_str() {
+                "unmapped" => "none mapped".to_owned(),
+                "not_in_plan" => "not included in the current plan".to_owned(),
+                "unavailable" => "mapping not available".to_owned(),
+                other => format!("none ({})", clean(other)),
+            };
+            text.push_str(&format!("  {line}\n"));
+        }
+    }
+    text
+}
+
+/// Technique ids for the list column: the sub-technique id when there is one, each once, the
+/// first three and a count of the rest. `-` when none are served or mapped.
+fn technique_ids(alert: &Alert) -> String {
+    let mut ids: Vec<&str> = Vec::new();
+    for t in alert.mitre_techniques.as_deref().unwrap_or_default() {
+        let id = t.subtechnique_id.as_deref().unwrap_or(&t.id);
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    if ids.is_empty() {
+        return "-".to_owned();
+    }
+    let mut text = ids
+        .iter()
+        .take(3)
+        .map(|i| clean(i))
+        .collect::<Vec<_>>()
+        .join(",");
+    if ids.len() > 3 {
+        text.push_str(&format!(",+{}", ids.len() - 3));
+    }
+    text
+}
+
 fn alert_table(items: &[Alert]) -> Rows {
     Rows::new(
-        &["ID", "SEVERITY", "STATUS", "TYPE", "TITLE", "CREATED"],
+        &[
+            "ID", "SEVERITY", "STATUS", "TYPE", "ATT&CK", "TITLE", "CREATED",
+        ],
         items
             .iter()
             .map(|a| {
@@ -502,6 +586,7 @@ fn alert_table(items: &[Alert]) -> Rows {
                     cell(a.severity.as_deref()),
                     clean(&a.status),
                     clean(&a.r#type),
+                    technique_ids(a),
                     clean(&a.title),
                     short_time(Some(&a.created_at)),
                 ]
@@ -1005,6 +1090,97 @@ fn download(
 mod tests {
     use super::*;
     use crate::failure::CredentialSource;
+    use hodeishield_api::v1::MitreTechniques;
+
+    fn alert(techniques: Option<Vec<MitreTechniques>>, status: &str) -> Alert {
+        serde_json::from_value(serde_json::json!({
+            "id": "a1", "vendor_id": "v", "type": "cve", "severity": "high", "title": "t",
+            "description": null, "source_url": null, "economic_impact": null, "status": "open",
+            "acknowledged_at": null, "resolved_at": null, "resolution_reason": null,
+            "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-02T00:00:00Z",
+            "mitre_techniques": techniques,
+            "mitre_mapping": { "status": status, "note": null, "source": null }
+        }))
+        .expect("alert")
+    }
+
+    fn technique(id: &str, name: &str, tactic: &str, sub: Option<&str>) -> MitreTechniques {
+        MitreTechniques {
+            id: id.into(),
+            name: name.into(),
+            tactic_id: "TA0001".into(),
+            tactic_name: tactic.into(),
+            subtechnique_id: sub.map(Into::into),
+        }
+    }
+
+    #[test]
+    fn attack_section_lists_techniques_with_tactic_and_subtechnique() {
+        let a = alert(
+            Some(vec![
+                technique(
+                    "T1190",
+                    "Exploit Public-Facing Application",
+                    "Initial Access",
+                    None,
+                ),
+                technique(
+                    "T1059",
+                    "Command and Scripting Interpreter",
+                    "Execution",
+                    Some("T1059.001"),
+                ),
+            ]),
+            "mapped",
+        );
+        assert_eq!(
+            attack_section(&a),
+            "\nATT&CK techniques\n  T1190 Exploit Public-Facing Application (Initial Access)\n  T1059 / T1059.001 Command and Scripting Interpreter (Execution)\n"
+        );
+    }
+
+    #[test]
+    fn attack_section_explains_an_empty_mapping_by_status() {
+        for (techniques, status, line) in [
+            (Some(vec![]), "unmapped", "none mapped"),
+            (None, "not_in_plan", "not included in the current plan"),
+            (None, "unavailable", "mapping not available"),
+            (None, "later_value", "none (later_value)"),
+        ] {
+            assert_eq!(
+                attack_section(&alert(techniques, status)),
+                format!("\nATT&CK techniques\n  {line}\n")
+            );
+        }
+    }
+
+    #[test]
+    fn technique_column_is_compact() {
+        let t = |id: &str| technique(id, "n", "t", None);
+        assert_eq!(technique_ids(&alert(None, "unavailable")), "-");
+        assert_eq!(technique_ids(&alert(Some(vec![]), "unmapped")), "-");
+        let a = alert(
+            Some(vec![
+                t("T1190"),
+                t("T1190"),
+                technique("T1059", "n", "t", Some("T1059.001")),
+                t("T1068"),
+            ]),
+            "mapped",
+        );
+        assert_eq!(technique_ids(&a), "T1190,T1059.001,T1068");
+        let many = alert(
+            Some(vec![
+                t("T1001"),
+                t("T1002"),
+                t("T1003"),
+                t("T1004"),
+                t("T1005"),
+            ]),
+            "mapped",
+        );
+        assert_eq!(technique_ids(&many), "T1001,T1002,T1003,+2");
+    }
 
     /// Serves `total` items, `per_page` at a time, as numbers.
     fn walk(total: i64, per_page: i64, max_items: usize) -> Result<(Vec<Value>, Vec<i64>)> {
