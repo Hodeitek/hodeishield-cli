@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Hodeitek S.L.
 
-//! `hodeishield`: read-only command-line client for HodeiShield.
+//! `hodeishield`: command-line client for HodeiShield.
 //!
 //! The binary is a thin wrapper around [`main`]. The library exists so that repository tools can
 //! reach the command-line definition ([`cli::Cli`]), e.g. to generate the man pages; it is not a

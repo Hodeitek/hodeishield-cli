@@ -229,3 +229,96 @@ fn the_tenant_listing_sends_only_declared_query_parameters() {
     });
     mock.assert();
 }
+
+/// The members of the JSON body the document declares for `operation_id`, with whether each is
+/// required.
+fn declared_body(operation_id: &str) -> Vec<(String, bool)> {
+    let document: Value = serde_json::from_str(DOCUMENT).expect("the OpenAPI document is JSON");
+    for item in document["paths"].as_object().expect("paths").values() {
+        for operation in item.as_object().expect("path item").values() {
+            if operation["operationId"] == operation_id {
+                let schema = &operation["requestBody"]["content"]["application/json"]["schema"];
+                assert_eq!(schema["additionalProperties"], false, "{operation_id}");
+                let required: Vec<&str> = schema["required"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .collect();
+                return schema["properties"]
+                    .as_object()
+                    .expect("properties")
+                    .keys()
+                    .map(|name| (name.clone(), required.contains(&name.as_str())))
+                    .collect();
+            }
+        }
+    }
+    panic!("{operation_id} is not in the OpenAPI document");
+}
+
+/// The alert writes send exactly the body members the document declares (an unknown key is a 400),
+/// no query parameter, and the method and scope the document gives.
+#[test]
+fn the_alert_writes_send_what_the_document_declares() {
+    use hodeishield_api::Client;
+    use hodeishield_api::v1::operations;
+    use mockito::Matcher;
+    use secrecy::SecretString;
+    for (id, method, scope) in [
+        ("acknowledgeAlert", "post", "alerts:write"),
+        ("resolveAlert", "post", "alerts:write"),
+    ] {
+        assert!(declared(id).is_empty(), "{id} declares a query parameter");
+        let document: Value = serde_json::from_str(DOCUMENT).expect("JSON");
+        let operation = document["paths"]
+            .as_object()
+            .expect("paths")
+            .values()
+            .find_map(|item| item.get(method).filter(|op| op["operationId"] == id))
+            .unwrap_or_else(|| panic!("{id} is not a {method} in the document"));
+        assert_eq!(operation["x-hs-scope"]["scopes"][0], scope);
+    }
+    assert_eq!(
+        declared_body("acknowledgeAlert"),
+        [("reason".to_owned(), false)]
+    );
+    assert_eq!(declared_body("resolveAlert"), [("reason".to_owned(), true)]);
+
+    let mut server = mockito::Server::new();
+    let only_reason = |request: &mockito::Request| {
+        let body = request.body().expect("a body");
+        let value: Value = serde_json::from_slice(body).expect("a JSON body");
+        value
+            .as_object()
+            .expect("an object")
+            .keys()
+            .all(|k| k == "reason")
+    };
+    let ack = server
+        .mock("POST", "/v1/alerts/a1/acknowledge")
+        .match_query(Matcher::Missing)
+        .match_request(only_reason)
+        .with_body(r#"{"data":{"id":"a1","status":"acknowledged","acknowledged_at":null,"resolved_at":null,"resolution_reason":null,"updated_at":"2026-11-14T10:00:00Z"},"changed":true}"#)
+        .expect(2)
+        .create();
+    let resolve = server
+        .mock("POST", "/v1/alerts/a1/resolve")
+        .match_query(Matcher::Missing)
+        .match_request(only_reason)
+        .with_body(r#"{"data":{"id":"a1","status":"resolved","acknowledged_at":null,"resolved_at":null,"resolution_reason":"done","updated_at":"2026-11-14T10:00:00Z"},"changed":true}"#)
+        .expect(1)
+        .create();
+    let client = Client::builder(
+        server.url().parse().expect("url"),
+        SecretString::from("hsk_example"),
+    )
+    .build()
+    .expect("client");
+    client.acknowledge_alert("a1", None).expect("ok");
+    client.acknowledge_alert("a1", Some("why")).expect("ok");
+    client.resolve_alert("a1", "done").expect("ok");
+    ack.assert();
+    resolve.assert();
+    assert_eq!(operations::ACKNOWLEDGE_ALERT.method, "POST");
+}

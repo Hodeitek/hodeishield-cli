@@ -25,7 +25,7 @@ import re
 import sys
 
 REPO = "Hodeitek/hodeishield-cli"
-DESCRIPTION = "Read-only command-line client for HodeiShield"
+DESCRIPTION = "Command-line client for HodeiShield"
 
 
 def main():

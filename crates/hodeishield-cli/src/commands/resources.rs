@@ -491,6 +491,10 @@ pub fn alerts(ctx: &Context, command: AlertsCommand, out: &mut dyn Write) -> Res
             }
             Ok(print_alert(out, &response.data.data)?)
         }
+        AlertsCommand::Acknowledge(args) => {
+            super::alert_writes::acknowledge(ctx, &settings, &args, out)
+        }
+        AlertsCommand::Resolve(args) => super::alert_writes::resolve(ctx, &settings, &args, out),
     }
 }
 

@@ -1515,6 +1515,38 @@ mod file_store {
         app.with(env.cmd_file()).arg("whoami").assert().success();
     }
 
+    /// A sign-in cannot write: the alert writes are refused before any request, GET or POST.
+    #[test]
+    fn a_sign_in_cannot_change_an_alert_and_nothing_is_sent() {
+        let env = Env::new();
+        let mut app = app();
+        signed_in(&env, &app);
+        let never_post = app
+            .api
+            .mock("POST", mockito::Matcher::Any)
+            .expect(0)
+            .create();
+        let never_get = app
+            .api
+            .mock("GET", mockito::Matcher::Regex("^/v1/".into()))
+            .expect(0)
+            .create();
+        for args in [
+            &["alerts", "acknowledge", "a1", "--yes"][..],
+            &["alerts", "resolve", "a1", "--reason", "patched", "--yes"][..],
+        ] {
+            let output = app.with(env.cmd_file()).args(args).output().expect("run");
+            assert_eq!(output.status.code(), Some(4), "{args:?}: {output:?}");
+            assert!(output.stdout.is_empty());
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(stderr.contains("needs an API key"), "{stderr}");
+            assert!(stderr.contains("HODEISHIELD_API_KEY"), "{stderr}");
+            assert!(stderr.contains("alerts:write"), "{stderr}");
+        }
+        never_post.assert();
+        never_get.assert();
+    }
+
     #[test]
     fn a_corrupt_file_is_an_error_that_names_it() {
         let env = Env::new();
@@ -3662,5 +3694,434 @@ fn server_text_about_a_download_cannot_drive_the_terminal() {
         } else {
             assert!(text.contains("--format: xlsx."), "{text}");
         }
+    }
+}
+
+// Changing an alert: `alerts acknowledge` and `alerts resolve`.
+
+const A1: &str = "7c1e0a52-6a0e-4d5c-9d3e-1f2a3b4c5d6e";
+
+fn write_answer(status: &str, changed: bool) -> String {
+    format!(
+        r#"{{"data":{{"id":"{A1}","status":"{status}","acknowledged_at":"2026-11-14T10:00:00Z","resolved_at":null,"resolution_reason":null,"updated_at":"2026-11-14T10:00:00Z"}},"changed":{changed}}}"#
+    )
+}
+
+fn write_error(code: &str, details: &str) -> String {
+    format!(
+        r#"{{"error":{{"code":"x","message":"The server's own words.","request_id":"req-w","details":{{"code":"{code}"{details}}}}}}}"#
+    )
+}
+
+/// A server that must see no request at all.
+fn silent(server: &mut mockito::Server) -> mockito::Mock {
+    server
+        .mock("POST", mockito::Matcher::Any)
+        .expect(0)
+        .create()
+}
+
+#[test]
+fn acknowledge_with_yes_says_what_changed_and_asks_nothing() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    let post = server
+        .mock("POST", format!("/v1/alerts/{A1}/acknowledge").as_str())
+        .match_header("authorization", format!("Bearer {KEY}").as_str())
+        .match_header("content-type", "application/json")
+        .match_body(mockito::Matcher::JsonString("{}".into()))
+        .with_body(write_answer("acknowledged", true))
+        .expect(1)
+        .create();
+    // With `--yes` the alert is not read first.
+    let no_read = server.mock("GET", mockito::Matcher::Any).expect(0).create();
+    let output = env
+        .api(&server)
+        .args(["alerts", "acknowledge", A1, "--yes"])
+        .output()
+        .expect("run");
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!("Acknowledged alert {A1} (status: acknowledged).\n")
+    );
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("Proceed?"));
+    assert_no_key(&output);
+    post.assert();
+    no_read.assert();
+}
+
+#[test]
+fn acknowledge_that_changed_nothing_says_so() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    server
+        .mock("POST", format!("/v1/alerts/{A1}/acknowledge").as_str())
+        .with_body(write_answer("acknowledged", false))
+        .create();
+    let output = env
+        .api(&server)
+        .args(["alerts", "acknowledge", A1, "-y"])
+        .output()
+        .expect("run");
+    assert!(output.status.success(), "{output:?}");
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        text.contains("already acknowledged: nothing changed"),
+        "{text}"
+    );
+}
+
+#[test]
+fn acknowledge_can_carry_a_reason() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    let post = server
+        .mock("POST", format!("/v1/alerts/{A1}/acknowledge").as_str())
+        .match_body(mockito::Matcher::JsonString(
+            r#"{"reason":"looking at it"}"#.into(),
+        ))
+        .with_body(write_answer("acknowledged", true))
+        .expect(1)
+        .create();
+    env.api(&server)
+        .args([
+            "alerts",
+            "acknowledge",
+            A1,
+            "--reason",
+            "looking at it",
+            "--yes",
+        ])
+        .assert()
+        .success();
+    post.assert();
+}
+
+#[test]
+fn resolve_with_yes_sends_the_reason_and_reports_both_outcomes() {
+    for (changed, expected) in [
+        (true, format!("Resolved alert {A1} (status: resolved).")),
+        (
+            false,
+            format!("Alert {A1} is already resolved: nothing changed"),
+        ),
+    ] {
+        let env = Env::new();
+        let mut server = mockito::Server::new();
+        let post = server
+            .mock("POST", format!("/v1/alerts/{A1}/resolve").as_str())
+            .match_body(mockito::Matcher::JsonString(
+                r#"{"reason":"Patched in 2.4.1"}"#.into(),
+            ))
+            .with_body(write_answer("resolved", changed))
+            .expect(1)
+            .create();
+        let output = env
+            .api(&server)
+            .args([
+                "alerts",
+                "resolve",
+                A1,
+                "--reason",
+                "Patched in 2.4.1",
+                "--yes",
+            ])
+            .output()
+            .expect("run");
+        assert!(output.status.success(), "{output:?}");
+        let text = String::from_utf8_lossy(&output.stdout);
+        assert!(text.starts_with(&expected), "{text}");
+        post.assert();
+    }
+}
+
+#[test]
+fn resolve_needs_a_reason_of_at_least_two_characters_and_sends_nothing_without() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    let never = silent(&mut server);
+    for args in [
+        &["alerts", "resolve", A1, "--yes"][..],
+        &["alerts", "resolve", A1, "--reason", "  x ", "--yes"][..],
+        &["alerts", "resolve", A1, "--reason", "", "--yes"][..],
+    ] {
+        let output = env.api(&server).args(args).output().expect("run");
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {output:?}");
+        assert!(output.stdout.is_empty());
+    }
+    let too_long = "x".repeat(501);
+    for args in [
+        vec![
+            "alerts",
+            "resolve",
+            A1,
+            "--reason",
+            too_long.as_str(),
+            "--yes",
+        ],
+        vec![
+            "alerts",
+            "acknowledge",
+            A1,
+            "--reason",
+            too_long.as_str(),
+            "--yes",
+        ],
+    ] {
+        let output = env.api(&server).args(&args).output().expect("run");
+        assert_eq!(output.status.code(), Some(2), "{output:?}");
+    }
+    never.assert();
+}
+
+#[test]
+fn without_a_terminal_and_without_yes_a_write_is_refused_and_sends_nothing() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    let never_post = silent(&mut server);
+    let never_get = server.mock("GET", mockito::Matcher::Any).expect(0).create();
+    for args in [
+        &["alerts", "acknowledge", A1][..],
+        &["alerts", "resolve", A1, "--reason", "patched"][..],
+        &["--json", "alerts", "acknowledge", A1][..],
+    ] {
+        let output = env
+            .api(&server)
+            .args(args)
+            // Standard input is not a terminal, and even an answer on it is not read.
+            .write_stdin("y\n")
+            .output()
+            .expect("run");
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {output:?}");
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("without confirmation"), "{stderr}");
+        assert!(stderr.contains("--yes"), "{stderr}");
+        assert_no_key(&output);
+    }
+    never_post.assert();
+    never_get.assert();
+}
+
+#[test]
+fn json_prints_the_apis_answer_untouched() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    let body = format!(
+        r#"{{"data":{{"id":"{A1}","status":"resolved","acknowledged_at":null,"resolved_at":"2026-11-14T11:00:00Z","resolution_reason":"patched","updated_at":"2026-11-14T11:00:00Z","added_later":[1]}},"changed":true,"also_new":"x"}}"#
+    );
+    server
+        .mock("POST", format!("/v1/alerts/{A1}/resolve").as_str())
+        .with_body(&body)
+        .create();
+    let output = env
+        .api(&server)
+        .args([
+            "--json", "alerts", "resolve", A1, "--reason", "patched", "--yes",
+        ])
+        .output()
+        .expect("run");
+    assert!(output.status.success(), "{output:?}");
+    let printed: serde_json::Value = serde_json::from_slice(&output.stdout).expect("JSON");
+    let sent: serde_json::Value = serde_json::from_str(&body).expect("JSON");
+    assert_eq!(printed, sent);
+    assert_eq!(printed["changed"], true);
+}
+
+#[test]
+fn every_refusal_the_contract_lists_has_its_own_message_and_exit_code() {
+    for (operation, status, code, details, exit, message) in [
+        (
+            "resolve",
+            403,
+            "ROLE_NOT_PERMITTED",
+            "",
+            4,
+            "may not close this alert",
+        ),
+        (
+            "acknowledge",
+            403,
+            "ROLE_NOT_PERMITTED",
+            "",
+            4,
+            "may not acknowledge alerts",
+        ),
+        (
+            "acknowledge",
+            403,
+            "WRITE_ACTOR_UNRESOLVED",
+            "",
+            4,
+            "who created this key no longer exists",
+        ),
+        (
+            "acknowledge",
+            409,
+            "ALERT_RESOLVED",
+            "",
+            1,
+            "already resolved, so it cannot be acknowledged",
+        ),
+        (
+            "resolve",
+            409,
+            "ALERT_STATE_CHANGED",
+            "",
+            1,
+            "changed while this request was being applied",
+        ),
+        (
+            "resolve",
+            403,
+            "LICENCE_INACTIVE",
+            r#","licence":"grace""#,
+            8,
+            "licence is not in force (licence: grace), so alerts cannot be changed",
+        ),
+        (
+            "acknowledge",
+            403,
+            "INSUFFICIENT_SCOPE",
+            r#","missing":["alerts:write"]"#,
+            4,
+            "lacks the scope this needs: alerts:write",
+        ),
+        // A code this version does not know falls back to the server's message.
+        (
+            "acknowledge",
+            403,
+            "SOMETHING_NEW",
+            "",
+            4,
+            "The API refused the request: The server's own words.",
+        ),
+        (
+            "resolve",
+            409,
+            "SOMETHING_NEW",
+            "",
+            1,
+            "The API refused the request: The server's own words.",
+        ),
+    ] {
+        let env = Env::new();
+        let mut server = mockito::Server::new();
+        let path = format!("/v1/alerts/{A1}/{operation}");
+        server
+            .mock("POST", path.as_str())
+            .with_status(status)
+            .with_header("x-request-id", "req-w")
+            .with_body(write_error(code, details))
+            .expect(1)
+            .create();
+        let mut args = vec!["alerts", operation, A1, "--yes"];
+        if operation == "resolve" {
+            args.extend(["--reason", "patched"]);
+        }
+        let output = env.api(&server).args(&args).output().expect("run");
+        assert_eq!(output.status.code(), Some(exit), "{code}: {output:?}");
+        assert!(output.stdout.is_empty(), "{code}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains(message), "{code}: {stderr}");
+        assert!(stderr.contains("req-w"), "{code}: {stderr}");
+        assert_no_key(&output);
+    }
+}
+
+#[test]
+fn the_write_rate_limit_and_an_unlisted_status_are_reported_as_such() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    server
+        .mock("POST", format!("/v1/alerts/{A1}/acknowledge").as_str())
+        .with_status(429)
+        .with_body(r#"{"error":{"code":"rate_limited","message":"m","request_id":"r","details":{"scope":"write_key"}}}"#)
+        .expect(1)
+        .create();
+    let output = env
+        .api(&server)
+        .args(["alerts", "acknowledge", A1, "--yes"])
+        .output()
+        .expect("run");
+    assert_eq!(output.status.code(), Some(6), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("(limit: write_key)"), "{stderr}");
+    assert!(stderr.contains("reads are counted apart"), "{stderr}");
+
+    // An answer that is none of the documented ones is the HTTP status's own message, and the write
+    // is not sent again.
+    let mut broken = mockito::Server::new();
+    let once = broken
+        .mock("POST", format!("/v1/alerts/{A1}/acknowledge").as_str())
+        .with_status(503)
+        .with_body("busy")
+        .expect(1)
+        .create();
+    let output = env
+        .api(&broken)
+        .args(["alerts", "acknowledge", A1, "--yes"])
+        .output()
+        .expect("run");
+    assert_eq!(output.status.code(), Some(7), "{output:?}");
+    once.assert();
+}
+
+#[test]
+fn a_portfolio_key_names_the_client_tenant_like_a_read() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    mock_portfolio(&mut server, &two_clients());
+    let post = server
+        .mock("POST", format!("/v1/alerts/{A1}/acknowledge").as_str())
+        .match_header("authorization", format!("Bearer {PORTFOLIO_KEY}").as_str())
+        .match_header("x-hs-tenant", ACME)
+        .with_header("x-hs-tenant", ACME)
+        .with_body(write_answer("acknowledged", true))
+        .expect(1)
+        .create();
+    let output = portfolio_cmd(&env, &server)
+        .args(["--tenant", "acme", "alerts", "acknowledge", A1, "--yes"])
+        .output()
+        .expect("run");
+    assert!(output.status.success(), "{output:?}");
+    assert_no_portfolio_secret(&output);
+    post.assert();
+
+    // Without a client the API says which one is missing, and the hint says how to name it.
+    let mut missing = mockito::Server::new();
+    missing
+        .mock("POST", format!("/v1/alerts/{A1}/acknowledge").as_str())
+        .with_status(400)
+        .with_body(r#"{"error":{"code":"invalid_request","message":"X-HS-Tenant is required","request_id":"r","details":{"code":"TENANT_REQUIRED"}}}"#)
+        .create();
+    let output = portfolio_cmd(&env, &missing)
+        .args(["alerts", "acknowledge", A1, "--yes"])
+        .output()
+        .expect("run");
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("--tenant"));
+}
+
+#[test]
+fn the_help_says_which_two_commands_write_and_what_they_need() {
+    let env = Env::new();
+    let output = env.cmd().arg("--help").output().expect("run");
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(!text.contains("nothing here can change data"), "{text}");
+    assert!(text.contains("alerts acknowledge"), "{text}");
+    assert!(text.contains("alerts resolve"), "{text}");
+    assert!(text.contains("alerts:write"), "{text}");
+    for command in ["acknowledge", "resolve"] {
+        let output = env
+            .cmd()
+            .args(["alerts", command, "--help"])
+            .output()
+            .expect("run");
+        let text = String::from_utf8_lossy(&output.stdout);
+        assert!(text.contains("--yes"), "{text}");
+        assert!(text.contains("--reason"), "{text}");
+        assert!(text.contains("HODEISHIELD_API_KEY"), "{text}");
     }
 }

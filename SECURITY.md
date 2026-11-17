@@ -173,7 +173,10 @@ them to the right team.
 
 ## What the CLI guarantees
 
-- It only reads. The generated API client has no method other than `GET`.
+- It reads, except for two commands: `alerts acknowledge` and `alerts resolve`. The generated API
+  client has a `POST` method for those two operations only. Each asks for confirmation (or takes
+  `--yes`; with no terminal and no `--yes` it refuses and sends nothing), and each needs an API key
+  with the `alerts:write` scope: a sign-in cannot write, and the CLI refuses before sending anything.
 - Credentials are never printed or logged (`--verbose` logs method, URL, status and request id
   only), and never written to disk in clear text unless you opt in to the plain-text token file
   (`HODEISHIELD_TOKEN_STORE=plaintext-file` or `token_store = plaintext-file`, Linux and macOS only;

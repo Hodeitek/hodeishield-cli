@@ -1337,3 +1337,217 @@ fn the_body_of_an_error_is_read_with_the_normal_limit_not_the_download_one() {
         .expect_err("too large");
     assert!(matches!(err, hodeishield_api::Error::Body(_)), "{err:?}");
 }
+
+// The alert writes (`POST`), against a mock of the published contract.
+
+const WRITE_ANSWER: &str = r#"{"data":{"id":"a1","status":"resolved","acknowledged_at":"2026-11-14T10:00:00Z","resolved_at":"2026-11-14T11:00:00Z","resolution_reason":"patched","updated_at":"2026-11-14T11:00:00Z"},"changed":true}"#;
+
+#[test]
+fn the_write_operations_are_posts_under_the_write_scope() {
+    use hodeishield_api::v1::operations;
+    for (operation, path) in [
+        (operations::ACKNOWLEDGE_ALERT, "/v1/alerts/{id}/acknowledge"),
+        (operations::RESOLVE_ALERT, "/v1/alerts/{id}/resolve"),
+    ] {
+        assert_eq!(operation.method, "POST");
+        assert_eq!(operation.path, path);
+        assert_eq!(operation.scopes, ["alerts:write"]);
+        assert!(operation.tenant_scoped);
+    }
+    // Every other operation the client has reads.
+    let writes: Vec<_> = operations::ALL
+        .iter()
+        .filter(|op| op.method != "GET")
+        .map(|op| op.id)
+        .collect();
+    assert_eq!(writes, ["acknowledgeAlert", "resolveAlert"]);
+}
+
+#[test]
+fn acknowledge_posts_an_empty_object_or_the_reason_and_decodes_the_answer() {
+    let mut server = mockito::Server::new();
+    let bare = server
+        .mock("POST", "/v1/alerts/a1/acknowledge")
+        .match_header("authorization", "Bearer hsk_example")
+        .match_header("content-type", "application/json")
+        .match_body(mockito::Matcher::JsonString("{}".into()))
+        .with_body(WRITE_ANSWER)
+        .expect(1)
+        .create();
+    let response = client(&server).acknowledge_alert("a1", None).expect("ok");
+    assert!(response.data.changed);
+    assert_eq!(response.data.data.id, "a1");
+    assert_eq!(response.raw["changed"], true);
+    assert_eq!(response.meta.status, 200);
+    bare.assert();
+
+    let with_reason = server
+        .mock("POST", "/v1/alerts/a2/acknowledge")
+        .match_body(mockito::Matcher::JsonString(r#"{"reason":"on it"}"#.into()))
+        .with_body(WRITE_ANSWER)
+        .expect(1)
+        .create();
+    client(&server)
+        .acknowledge_alert("a2", Some("on it"))
+        .expect("ok");
+    with_reason.assert();
+}
+
+#[test]
+fn resolve_posts_the_reason_and_encodes_the_id() {
+    let mut server = mockito::Server::new();
+    let mock = server
+        .mock("POST", "/v1/alerts/a%2F1/resolve")
+        .match_body(mockito::Matcher::JsonString(
+            r#"{"reason":"patched \"now\""}"#.into(),
+        ))
+        .with_body(WRITE_ANSWER)
+        .expect(1)
+        .create();
+    let response = client(&server)
+        .resolve_alert("a/1", "patched \"now\"")
+        .expect("ok");
+    assert_eq!(response.data.data.status, "resolved");
+    mock.assert();
+    assert!(matches!(
+        client(&server).resolve_alert("..", "x"),
+        Err(Error::InvalidPathArgument(_))
+    ));
+}
+
+#[test]
+fn a_write_sends_the_tenant_selection_and_checks_the_echo() {
+    let mut server = mockito::Server::new();
+    let ok = server
+        .mock("POST", "/v1/alerts/a1/acknowledge")
+        .match_header("x-hs-tenant", TENANT_A)
+        .with_header("x-hs-tenant", TENANT_A)
+        .with_body(WRITE_ANSWER)
+        .expect(1)
+        .create();
+    tenant_client(&server, TENANT_A)
+        .acknowledge_alert("a1", None)
+        .expect("ok");
+    ok.assert();
+
+    let mut other = mockito::Server::new();
+    other
+        .mock("POST", "/v1/alerts/a1/acknowledge")
+        .with_header("x-hs-tenant", TENANT_B)
+        .with_body(WRITE_ANSWER)
+        .create();
+    assert!(matches!(
+        tenant_client(&other, TENANT_A).acknowledge_alert("a1", None),
+        Err(Error::TenantMismatch { .. })
+    ));
+}
+
+#[test]
+fn a_write_is_not_sent_again_after_a_gateway_error_or_a_timeout() {
+    let mut server = mockito::Server::new();
+    let gateway = server
+        .mock("POST", "/v1/alerts/a1/resolve")
+        .with_status(503)
+        .with_body("busy")
+        .expect(1)
+        .create();
+    let err = client_with_transient_retries(&server, 2)
+        .resolve_alert("a1", "done")
+        .expect_err("503");
+    assert_eq!(err.api().map(|a| a.status), Some(503));
+    gateway.assert();
+
+    // The same answer to a read is retried.
+    let read = server
+        .mock("GET", "/v1/alerts/a1")
+        .with_status(503)
+        .with_body("busy")
+        .expect(3)
+        .create();
+    let _ = client_with_transient_retries(&server, 2).get_alert("a1");
+    read.assert();
+
+    let slow = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let url = format!("http://{}", slow.local_addr().expect("addr"));
+    let accepted = std::thread::spawn(move || {
+        let mut held = Vec::new();
+        // Hold every connection open without answering; count them.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        slow.set_nonblocking(true).expect("nonblocking");
+        while Instant::now() < deadline {
+            if let Ok((stream, _)) = slow.accept() {
+                held.push(stream);
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        held.len()
+    });
+    let patient = Client::builder(url.parse().expect("url"), SecretString::from("hsk_example"))
+        .timeout(Duration::from_millis(300))
+        .transient_retries(2, Duration::from_millis(1))
+        .build()
+        .expect("client");
+    let err = patient.resolve_alert("a1", "done").expect_err("timeout");
+    assert!(matches!(err, Error::Transport(_)), "{err:?}");
+    assert_eq!(accepted.join().expect("thread"), 1, "sent once, not again");
+}
+
+#[test]
+fn a_write_refused_for_the_rate_limit_is_sent_again_after_retry_after() {
+    let mut server = mockito::Server::new();
+    let limited = server
+        .mock("POST", "/v1/alerts/a1/acknowledge")
+        .with_status(429)
+        .with_header("retry-after", "1")
+        .with_body(r#"{"error":{"code":"rate_limited","message":"slow","request_id":"r","details":{"scope":"write_key"}}}"#)
+        .expect(2)
+        .create();
+    let err = client(&server)
+        .acknowledge_alert("a1", None)
+        .expect_err("still limited");
+    let api = err.api().expect("api error");
+    assert_eq!(api.status, 429);
+    assert_eq!(
+        api.body
+            .as_ref()
+            .and_then(|b| b.details.as_ref())
+            .and_then(|d| d.get("scope"))
+            .and_then(|v| v.as_str()),
+        Some("write_key")
+    );
+    limited.assert();
+}
+
+#[test]
+fn the_write_refusals_the_contract_lists_arrive_as_api_errors() {
+    for (status, code) in [
+        (403_usize, "ROLE_NOT_PERMITTED"),
+        (403, "WRITE_ACTOR_UNRESOLVED"),
+        (403, "LICENCE_INACTIVE"),
+        (409, "ALERT_RESOLVED"),
+        (409, "ALERT_STATE_CHANGED"),
+    ] {
+        let mut server = mockito::Server::new();
+        server
+            .mock("POST", "/v1/alerts/a1/resolve")
+            .with_status(status)
+            .with_body(format!(
+                r#"{{"error":{{"code":"x","message":"m","request_id":"r","details":{{"code":"{code}"}}}}}}"#
+            ))
+            .create();
+        let err = client(&server)
+            .resolve_alert("a1", "done")
+            .expect_err("refused");
+        let api = err.api().expect("api error");
+        assert_eq!(api.operation, "resolveAlert");
+        assert_eq!(api.required_scopes, ["alerts:write"]);
+        assert_eq!(
+            api.body
+                .as_ref()
+                .and_then(|b| b.details.as_ref())
+                .and_then(|d| d.get("code"))
+                .and_then(|v| v.as_str()),
+            Some(code)
+        );
+    }
+}

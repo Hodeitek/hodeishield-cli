@@ -36,7 +36,7 @@
     <Property Id="ARPURLINFOABOUT" Value="https://hodeishield.com" />
     <Property Id="ARPHELPLINK" Value="https://github.com/Hodeitek/hodeishield-cli" />
     <Property Id="ARPURLUPDATEINFO" Value="https://github.com/Hodeitek/hodeishield-cli/releases" />
-    <Property Id="ARPCOMMENTS" Value="Read-only command-line client for HodeiShield" />
+    <Property Id="ARPCOMMENTS" Value="Command-line client for HodeiShield" />
     <Property Id="ARPNOMODIFY" Value="1" />
 
     <StandardDirectory Id="ProgramFiles64Folder">

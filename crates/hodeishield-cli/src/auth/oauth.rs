@@ -73,6 +73,9 @@ const NOT_SIGNED_IN_OPERATIONS: &[Operation] = &[
     operations::LIST_PORTFOLIO_TENANTS,
     // Reading a proposal needs the scope to make one, which no command asks for.
     operations::GET_ACT_PROPOSAL,
+    // The alert writes take an API key with `alerts:write`; a sign-in never carries it.
+    operations::ACKNOWLEDGE_ALERT,
+    operations::RESOLVE_ALERT,
 ];
 
 /// The scopes to ask for when the profile names none: the ones the operations in

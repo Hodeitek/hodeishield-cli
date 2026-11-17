@@ -22,7 +22,7 @@ use url::Url;
 pub struct Operation {
     /// `operationId`, e.g. `listVendors`.
     pub id: &'static str,
-    /// Always `GET`: `/v1` is read-only.
+    /// `GET` for a read, `POST` for the alert writes.
     pub method: &'static str,
     /// Path template, e.g. `/v1/vendors/{id}`.
     pub path: &'static str,
@@ -185,7 +185,7 @@ fn tenant_header(headers: &HeaderMap) -> Option<String> {
 /// no credential.
 #[derive(Debug, Clone)]
 pub struct RequestEvent<'a> {
-    /// Always `GET`.
+    /// `GET`, or `POST` for a write.
     pub method: &'static str,
     /// The URL, which never contains a credential.
     pub url: &'a Url,
@@ -283,7 +283,7 @@ impl ClientBuilder {
     /// How many times a transient failure (`502`, `503`, `504`, a connection error or a timeout) is
     /// retried, and the base of the exponential backoff between retries: a random wait up to
     /// `base · 2^n`, at most 8 s, unless the answer has a `Retry-After`. Defaults to 2 retries with
-    /// a base of 500 ms. Only `GET` requests exist in this client, so a retry never repeats a change.
+    /// a base of 500 ms. A write is not sent again after a transport error or a gateway error, because it may have been applied.
     #[must_use]
     pub fn transient_retries(mut self, retries: u32, base_delay: Duration) -> Self {
         self.max_transient_retries = retries;
@@ -473,9 +473,33 @@ impl Client {
         path: String,
         query: Vec<(&'static str, String)>,
     ) -> Result<ApiResponse<T>, Error> {
-        let (meta, _, body) = self.fetch(operation, &path, &query, None, MAX_RESPONSE_BYTES)?;
+        let (meta, _, body) =
+            self.fetch(operation, &path, &query, None, None, MAX_RESPONSE_BYTES)?;
+        Self::decode(operation, meta, &body)
+    }
+
+    /// A POST with a JSON body whose answer is JSON, decoded into `T`. A write is never repeated
+    /// after a timeout or a gateway error, because the request may have been applied; it is
+    /// repeated only when the server says it did not process it (a `429` with `Retry-After`, an
+    /// expired credential that is renewed).
+    pub(crate) fn post<T: DeserializeOwned>(
+        &self,
+        operation: &'static Operation,
+        path: String,
+        body: &serde_json::Value,
+    ) -> Result<ApiResponse<T>, Error> {
+        let (meta, _, bytes) =
+            self.fetch(operation, &path, &[], None, Some(body), MAX_RESPONSE_BYTES)?;
+        Self::decode(operation, meta, &bytes)
+    }
+
+    fn decode<T: DeserializeOwned>(
+        operation: &'static Operation,
+        meta: ResponseMeta,
+        body: &[u8],
+    ) -> Result<ApiResponse<T>, Error> {
         let raw: serde_json::Value =
-            serde_json::from_slice(&body).map_err(|source| Error::Decode {
+            serde_json::from_slice(body).map_err(|source| Error::Decode {
                 operation: operation.id,
                 source,
             })?;
@@ -495,8 +519,14 @@ impl Client {
         query: Vec<(&'static str, String)>,
         accept: &'static str,
     ) -> Result<Download, Error> {
-        let (meta, headers, bytes) =
-            self.fetch(operation, &path, &query, Some(accept), MAX_DOWNLOAD_BYTES)?;
+        let (meta, headers, bytes) = self.fetch(
+            operation,
+            &path,
+            &query,
+            Some(accept),
+            None,
+            MAX_DOWNLOAD_BYTES,
+        )?;
         let text = |name| {
             headers
                 .get(name)
@@ -513,7 +543,7 @@ impl Client {
         })
     }
 
-    /// Sends a GET, with the retries, the credential renewal and the tenant check, and returns a
+    /// Sends the request (a GET, or a POST when `body` is given), with the retries, the credential renewal and the tenant check, and returns a
     /// successful answer's metadata, headers and body (at most `limit` bytes; the body of an error is
     /// read up to [`MAX_RESPONSE_BYTES`] whatever `limit` is). The operation decides
     /// whether the client's tenant selection applies: scope headers are sent and checked only when
@@ -524,19 +554,24 @@ impl Client {
         path: &str,
         query: &[(&'static str, String)],
         accept: Option<&'static str>,
+        body: Option<&serde_json::Value>,
         limit: u64,
     ) -> Result<(ResponseMeta, HeaderMap, Vec<u8>), Error> {
         let scoped = operation.tenant_scoped;
+        // Only a read is sent again after a transport or gateway error: a write may have been
+        // applied before the answer was lost.
+        let writes = body.is_some();
         let url = self.url(path, query);
         let mut rate_limit_retries = 0;
         let mut transient_retries = 0;
         let mut renewed = false;
         loop {
             let started = Instant::now();
-            let mut request = self
-                .http
-                .get(url.clone())
-                .header(AUTHORIZATION, self.authorization()?);
+            let mut request = match body {
+                Some(body) => self.http.post(url.clone()).json(body),
+                None => self.http.get(url.clone()),
+            }
+            .header(AUTHORIZATION, self.authorization()?);
             if scoped {
                 request = request.headers(self.scope.headers.clone());
             }
@@ -547,6 +582,7 @@ impl Client {
                 Ok(response) => response,
                 Err(e)
                     if (e.is_connect() || e.is_timeout())
+                        && !writes
                         && !is_certificate_failure(&e)
                         && transient_retries < self.max_transient_retries =>
                 {
@@ -566,7 +602,7 @@ impl Client {
             let meta = ResponseMeta::from_headers(status, response.headers());
             if let Some(observer) = &self.observer {
                 observer(&RequestEvent {
-                    method: "GET",
+                    method: operation.method,
                     url: &url,
                     status: meta.status,
                     request_id: meta.request_id.as_deref(),
@@ -614,7 +650,8 @@ impl Client {
                 StatusCode::BAD_GATEWAY
                     | StatusCode::SERVICE_UNAVAILABLE
                     | StatusCode::GATEWAY_TIMEOUT
-            ) && transient_retries < self.max_transient_retries
+            ) && !writes
+                && transient_retries < self.max_transient_retries
             {
                 let wait = match meta.retry_after.map(Duration::from_secs) {
                     Some(wait) if wait > self.max_retry_wait => {

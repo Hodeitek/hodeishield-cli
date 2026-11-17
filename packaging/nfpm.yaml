@@ -15,7 +15,7 @@ vendor: Hodeitek S.L.
 homepage: https://hodeishield.com
 license: Apache-2.0
 description: |-
-  Read-only command-line client for HodeiShield.
+  Command-line client for HodeiShield.
   Reads vendors, alerts, risks, compliance posture, evidence and endpoints from the HodeiShield
   /v1 API, as tables or as the API's own JSON. Statically linked; no runtime dependencies.
 

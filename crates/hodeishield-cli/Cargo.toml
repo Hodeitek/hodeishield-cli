@@ -1,6 +1,6 @@
 [package]
 name = "hodeishield-cli"
-description = "Read-only command-line client for HodeiShield"
+description = "Command-line client for HodeiShield"
 authors.workspace = true
 version.workspace = true
 edition.workspace = true

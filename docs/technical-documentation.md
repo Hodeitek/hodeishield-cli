@@ -24,7 +24,7 @@ Each release keeps the copy of this document that applies to it, in that release
   only if it is one of those in Annex IV. The core functionality of `hodeishield` is to read one
   organisation's data from the HodeiShield API, from a terminal or a script
   ([risk-assessment.md](risk-assessment.md#intended-purpose-and-conditions-of-use)). It is a
-  read-only API client: it is not, for example, a password manager, a VPN, a SIEM or an identity
+  API client that reads and changes only the status of an alert: it is not, for example, a password manager, a VPN, a SIEM or an identity
   management system, and no other entry of Annex III or Annex IV describes it. The technical
   descriptions of those categories are in Commission Implementing Regulation (EU) 2025/2392.
 - **Conformity assessment.** For a product in the default category, the manufacturer uses the
@@ -49,7 +49,7 @@ Each release keeps the copy of this document that applies to it, in that release
 
 | Annex VII, item 1 | Where it is |
 |---|---|
-| (a) Intended purpose | [user-information.md](user-information.md#intended-purpose) and [risk-assessment.md](risk-assessment.md#intended-purpose-and-conditions-of-use): a read-only command-line client for the public `/v1` API of HodeiShield |
+| (a) Intended purpose | [user-information.md](user-information.md#intended-purpose) and [risk-assessment.md](risk-assessment.md#intended-purpose-and-conditions-of-use): a command-line client for the public `/v1` API of HodeiShield |
 | (b) Versions of the software that affect compliance with the essential requirements | Versions follow [Semantic Versioning](https://semver.org/); each release is tagged `v<version>`, and the version is in `Cargo.toml` and printed by `hodeishield --version` ([user-information.md](user-information.md#product)). The notes of each release are in [CHANGELOG.md](../CHANGELOG.md). The risk assessment states the version it describes ([risk-assessment.md](risk-assessment.md#review)) |
 | (c) Photographs or illustrations of external features, marking and internal layout | Not applicable: the product is software only |
 | (d) User information and instructions (Annex II) | [user-information.md](user-information.md): manufacturer and contact, point of contact for vulnerabilities, intended purpose, secure use, support period, updates, decommissioning and the SBOM. The address of the declaration of conformity is in [Product](user-information.md#product) |

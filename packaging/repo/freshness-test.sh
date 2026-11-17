@@ -111,7 +111,7 @@ mk() {
         printf 'Package: hodeishield\nArchitecture: %s\nVersion: %s-1\nPriority: optional\nSection: utils\n' "$arch" "$v"
         printf 'Maintainer: Hodeitek S.L. <info@hodeitek.com>\nInstalled-Size: 10402\n'
         printf 'Filename: pool/main/h/hodeishield/hodeishield_%s-1_%s.deb\nSize: 3804632\n' "$v" "$arch"
-        printf 'SHA256: %s\nDescription: Read-only command-line client for HodeiShield.\n\n' \
+        printf 'SHA256: %s\nDescription: Command-line client for HodeiShield.\n\n' \
           "$(printf '%s%s' "$v" "$arch" | sha256sum | cut -d' ' -f1)"
       } >> "$d/Packages"
     done
