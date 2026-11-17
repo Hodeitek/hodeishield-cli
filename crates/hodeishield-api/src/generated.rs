@@ -658,6 +658,35 @@ pub struct ListChangesResponse {
     pub pagination: Pagination,
 }
 
+/// The state of the alert after the request. Its content (title, description, vendor) is `GET /v1/alerts/{id}`, under `supply_risk:read`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AcknowledgeAlert {
+    pub id: String,
+    /// Derived: resolved if closed, acknowledged if taken, otherwise open.
+    ///
+    /// Documented values: `open`, `acknowledged`, `resolved`. Treat any other value as valid: the vocabulary may grow.
+    pub status: String,
+    /// RFC 3339, UTC.
+    #[serde(default)]
+    pub acknowledged_at: Option<String>,
+    /// RFC 3339, UTC.
+    #[serde(default)]
+    pub resolved_at: Option<String>,
+    /// Why it was closed, when it was.
+    #[serde(default)]
+    pub resolution_reason: Option<String>,
+    /// RFC 3339, UTC. Moves on every change of status.
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AcknowledgeAlertResponse {
+    /// The state of the alert after the request. Its content (title, description, vendor) is `GET /v1/alerts/{id}`, under `supply_risk:read`.
+    pub data: AcknowledgeAlert,
+    /// `true` when THIS request changed the alert (and wrote its audit row); `false` when the alert was already in the state asked for and nothing was written.
+    pub changed: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GetActProposalResponse {
     /// `proposed` (waiting for a person), `approved`, `executed`, `rejected` (a person said no), `refused` (the system did; `refusal_reason` says why) or `expired` (nobody decided within 7 days; reported as soon as `expires_at` passes).
@@ -2284,6 +2313,30 @@ pub mod operations {
         tenant_scoped: true,
     };
 
+    /// `POST /v1/alerts/{id}/acknowledge`: Acknowledge an alert.
+    pub const ACKNOWLEDGE_ALERT: Operation = Operation {
+        id: "acknowledgeAlert",
+        method: "POST",
+        path: "/v1/alerts/{id}/acknowledge",
+        summary: "Acknowledge an alert",
+        scopes: &["alerts:write"],
+        known_values: &[],
+        deprecated_values: &[],
+        tenant_scoped: true,
+    };
+
+    /// `POST /v1/alerts/{id}/resolve`: Resolve an alert.
+    pub const RESOLVE_ALERT: Operation = Operation {
+        id: "resolveAlert",
+        method: "POST",
+        path: "/v1/alerts/{id}/resolve",
+        summary: "Resolve an alert",
+        scopes: &["alerts:write"],
+        known_values: &[],
+        deprecated_values: &[],
+        tenant_scoped: true,
+    };
+
     /// `GET /v1/act/proposals/{id}`: Status of a proposal this application made.
     pub const GET_ACT_PROPOSAL: Operation = Operation {
         id: "getActProposal",
@@ -2315,6 +2368,8 @@ pub mod operations {
         GET_REPORT,
         DOWNLOAD_REPORT,
         LIST_CHANGES,
+        ACKNOWLEDGE_ALERT,
+        RESOLVE_ALERT,
         GET_ACT_PROPOSAL,
     ];
 }
@@ -2664,6 +2719,62 @@ impl crate::Client {
             &operations::LIST_CHANGES,
             "/v1/changes".to_owned(),
             params.query_pairs(),
+        )
+    }
+
+    /// Acknowledge an alert.
+    ///
+    /// Marks an open alert as taken ("someone is on it"). It stays unresolved. Repeating it on an alert that is already acknowledged answers its current state with `changed: false` and writes nothing. Authorised by the API key and its scope alone, with no interactive confirmation: the key acts with the role of the user who CREATED it, read on every request (a creator who was demoted, suspended, deleted or removed from the tenant takes the power away from the key: 403 `WRITE_ACTOR_UNRESOLVED` or `ROLE_NOT_PERMITTED`). A tenant API key (`hsk_…`) writes in its own tenant. An MSSP portfolio key (`hsp_…`) names the client tenant with `X-HS-Tenant`, exactly as on the reads: a tenant outside the key’s client set is a 404 (`TENANT_NOT_FOUND`), and inside it the key acts with the role of the MSSP user who created it, who must still reach that client in the console (403 `WRITE_ACTOR_UNRESOLVED` otherwise); only an MSSP organisation administrator can grant `alerts:write` on a portfolio key. Writes have their own rate-limit budget per key (`error.details.scope: "write_key"`), separate from reads, and are refused while the licence is in its grace period. Every change writes one audit row in the tenant’s trail with the key id (never the secret), the acting user, the old and new status and the reason. The body is a JSON object; an unknown key is a 400.
+    ///
+    /// Required scope: `alerts:write`. Published in `/v1` since 2026-11-14.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error`] when the request cannot be sent, the API answers with an error, or the
+    /// body does not match the document.
+    pub fn acknowledge_alert(
+        &self,
+        id: &str,
+        reason: Option<&str>,
+    ) -> Result<crate::ApiResponse<AcknowledgeAlertResponse>, crate::Error> {
+        let mut body = serde_json::Map::new();
+        if let Some(value) = reason {
+            body.insert(
+                "reason".to_owned(),
+                serde_json::Value::String(value.to_owned()),
+            );
+        }
+        self.post(
+            &operations::ACKNOWLEDGE_ALERT,
+            format!("/v1/alerts/{}/acknowledge", crate::encode_path_segment(id)?),
+            &serde_json::Value::Object(body),
+        )
+    }
+
+    /// Resolve an alert.
+    ///
+    /// Closes an open or acknowledged alert, with the reason why. Repeating it on an alert that is already resolved answers its current state with `changed: false` and writes nothing (the first reason stays). A critical or high alert is closed only by a key whose creator may close it in the console: an MSSP analyst's key closes medium and low alerts only (403 `ROLE_NOT_PERMITTED`). Authorised by the API key and its scope alone, with no interactive confirmation: the key acts with the role of the user who CREATED it, read on every request (a creator who was demoted, suspended, deleted or removed from the tenant takes the power away from the key: 403 `WRITE_ACTOR_UNRESOLVED` or `ROLE_NOT_PERMITTED`). A tenant API key (`hsk_…`) writes in its own tenant. An MSSP portfolio key (`hsp_…`) names the client tenant with `X-HS-Tenant`, exactly as on the reads: a tenant outside the key’s client set is a 404 (`TENANT_NOT_FOUND`), and inside it the key acts with the role of the MSSP user who created it, who must still reach that client in the console (403 `WRITE_ACTOR_UNRESOLVED` otherwise); only an MSSP organisation administrator can grant `alerts:write` on a portfolio key. Writes have their own rate-limit budget per key (`error.details.scope: "write_key"`), separate from reads, and are refused while the licence is in its grace period. Every change writes one audit row in the tenant’s trail with the key id (never the secret), the acting user, the old and new status and the reason. The body is a JSON object; an unknown key is a 400.
+    ///
+    /// Required scope: `alerts:write`. Published in `/v1` since 2026-11-14.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error`] when the request cannot be sent, the API answers with an error, or the
+    /// body does not match the document.
+    pub fn resolve_alert(
+        &self,
+        id: &str,
+        reason: &str,
+    ) -> Result<crate::ApiResponse<AcknowledgeAlertResponse>, crate::Error> {
+        let mut body = serde_json::Map::new();
+        body.insert(
+            "reason".to_owned(),
+            serde_json::Value::String(reason.to_owned()),
+        );
+        self.post(
+            &operations::RESOLVE_ALERT,
+            format!("/v1/alerts/{}/resolve", crate::encode_path_segment(id)?),
+            &serde_json::Value::Object(body),
         )
     }
 

@@ -33,8 +33,10 @@ Verify the download before you run it: see [Install](#install) and [Verify a dow
 Read your third-party inventory, supply-chain alerts, risk register, change requests, compliance posture, evidence and
 endpoint agents from a terminal or a script.
 
-- **Read-only.** Every command is a `GET` against the public `/v1` API. Nothing here can change data in
-  your organisation.
+- **Reads, with two explicit writes.** Every command is a `GET` against the public `/v1` API, except
+  `alerts acknowledge` and `alerts resolve`. Each asks you to confirm before it changes anything and
+  needs an API key with the `alerts:write` scope; a sign-in can only read. See
+  [Change an alert](#change-an-alert).
 - **Safe with credentials.** Sign-in tokens live in the system keychain unless you opt in to a
   plain-text file for machines that have none; nothing is ever printed or logged; credentials only travel over HTTPS and are never replayed to a redirect.
 - **Built for scripts.** `--json` prints the API's own JSON, exit codes say what went wrong, and
@@ -474,7 +476,7 @@ información → Ejecutar de todos modos» on a Spanish system).
 ### With a tenant API key (scripts, CI, servers)
 
 Create a key in [the app](https://app.hodeishield.com) under **Settings → API keys**, with only the
-read scopes you need, and export it:
+scopes you need (the read scopes; add `alerts:write` only for a key that changes alerts), and export it:
 
 ```sh
 export HODEISHIELD_API_KEY=hsk_...
@@ -508,7 +510,7 @@ hodeishield logout           # revokes the token at the app and removes it from 
 
 You sign in to [app.hodeishield.com](https://app.hodeishield.com) as usual (2FA, passkey or SSO), and
 on the consent screen you choose **the one tenant** the CLI may read. A sign-in token never covers
-more than that tenant, and it only reads.
+more than that tenant, and it only reads: [changing an alert](#change-an-alert) needs an API key.
 
 When the sign-in ends, the browser shows a short page in the language of the browser (English, Spanish,
 German, French, Italian or Basque; English otherwise) that says whether it worked and that you can close the tab.
@@ -633,6 +635,8 @@ hodeishield compliance posture --framework nis2          # ...and as --framework
 hodeishield evidence list --expiring-before 2026-12-31T00:00:00Z
 hodeishield endpoints list --status active
 hodeishield reports list --type monthly --status completed
+hodeishield alerts acknowledge 7c1e0a52-6a0e-4d5c-9d3e-1f2a3b4c5d6e   # writes: asks first, API key only
+hodeishield alerts resolve 7c1e0a52-6a0e-4d5c-9d3e-1f2a3b4c5d6e --reason "Patched in 2.4.1"   # writes
 ```
 
 ```console
@@ -701,6 +705,51 @@ Saved monthly-2026-09.xlsx (48213 bytes).
   is larger than the API serves (20 MiB) fails with exit code 1 and says which. Each download is
   recorded in the tenant's audit trail.
 
+### Change an alert
+
+Two commands change data. Every other command reads.
+
+```sh
+hodeishield alerts acknowledge <id> [--reason TEXT] [--yes]   # "someone is on it"; it stays unresolved
+hodeishield alerts resolve <id> --reason TEXT [--yes]         # closes it; --reason is required
+```
+
+- **They ask first.** Before it writes, the command reads the alert and shows its id, title,
+  severity and status, and the change it is about to make, then asks `Proceed? [y/N]`. Only `y` or
+  `yes` goes ahead; anything else, or the end of input, cancels (exit code 1) and sends nothing.
+  `--yes` (`-y`) skips the question, for scripts.
+- **No terminal, no write.** When standard input is not a terminal and `--yes` is missing, the
+  command refuses with exit code 2 and sends nothing. A script says explicitly that it means it.
+- **API key only.** The API accepts these writes from a **tenant API key** that holds the
+  `alerts:write` scope, or from an MSSP **portfolio key** that holds it (name the client with
+  `--tenant`, as for reads). A sign-in made with `hodeishield login` cannot write: the command says
+  so, exits with code 4 and sends nothing. Only a user whose role may close alerts in the app can
+  grant `alerts:write`; no read scope implies it.
+- **The key acts as the user who created it**, checked on every request. If that user was demoted,
+  suspended or removed, the write is refused (exit code 4). A portfolio key held by an MSSP analyst
+  closes only medium and low alerts.
+- **`--reason`** is kept in the tenant's audit trail, which records every change with the key id.
+  `resolve` needs 2 to 500 characters; `acknowledge` takes one optionally.
+- **Repeating is safe.** An alert that is already in the state asked for is not touched: the command
+  prints `already acknowledged: nothing changed` (or `resolved`) and exits 0. With `--json` it prints
+  the API's `{"data": {...}, "changed": true|false}`; `data` is the alert's state after the request
+  (`status`, `acknowledged_at`, `resolved_at`, `resolution_reason`, `updated_at`).
+- **Refusals.** An alert that is already resolved cannot be acknowledged, and one that changed
+  between the read and the write is not touched: both exit with code 1 and say nothing was changed.
+  A tenant whose licence is not in force, or is in its grace period, exits with code 8. The write
+  rate limit is separate from the read one: when it is used up the command exits with code 6.
+
+```console
+$ hodeishield alerts resolve 7c1e0a52-6a0e-4d5c-9d3e-1f2a3b4c5d6e --reason "Patched in 2.4.1"
+Alert 7c1e0a52-6a0e-4d5c-9d3e-1f2a3b4c5d6e
+  title:    Example advisory
+  severity: high
+  status:   open
+Change: resolve it, reason: Patched in 2.4.1
+Proceed? [y/N] y
+Resolved alert 7c1e0a52-6a0e-4d5c-9d3e-1f2a3b4c5d6e (status: resolved).
+```
+
 ### Several tenants (MSSP)
 
 An MSSP reads all of its client tenants with **one** credential: a **portfolio key**, created in the
@@ -709,7 +758,8 @@ Nobody else can create one: not a tenant administrator, and not a platform opera
 an MSSP organisation. You do not need
 a profile, a key or a sign-in per client, and you should not set them up that way.
 
-A portfolio key reads only, always expires (90 days by default, 365 at most), and works on the
+A portfolio key reads, plus the one write scope `alerts:write` (see [Change an alert](#change-an-alert)) when an
+organisation administrator grants it; it always expires (90 days by default, 365 at most), and works on the
 HodeiShield API only. It can be limited when it is created to some of your clients and to source IP
 ranges; a request from another address is refused like an unknown key (exit code 3). Signing in
 with `hodeishield login` does not cover a whole portfolio: use the key. Rotate your portfolio keys
@@ -833,10 +883,10 @@ hodeishield vendors list --all --csv > vendors.csv
 | Code | Meaning |
 |---|---|
 | 0 | Success |
-| 1 | Error (invalid input, configuration, unexpected answer) |
-| 2 | Invalid command line |
+| 1 | Error (invalid input, configuration, unexpected answer), or an alert write that was cancelled at the prompt, refused because the alert is already resolved, or refused because the alert changed meanwhile |
+| 2 | Invalid command line, including an alert write with no terminal and no `--yes` |
 | 3 | Not authenticated: no credential (also when the system keychain cannot be reached in this session, or the opt-in token file is refused as unsafe; `login` and `logout` exit 1 for that), or the API rejected it (`whoami` too, after showing the local details) |
-| 4 | The credential lacks the scope the command needs, the tenant's plan does not include the module (or the compliance framework is not enabled), the request comes from an IP address that is not allowed, the tenant's plan does not include API or CLI access, or the account must enrol multi-factor authentication in the web app first |
+| 4 | The credential lacks the scope the command needs, the tenant's plan does not include the module (or the compliance framework is not enabled), the request comes from an IP address that is not allowed, the tenant's plan does not include API or CLI access, the account must enrol multi-factor authentication in the web app first, or an alert write is refused: it was tried with a sign-in instead of an API key, or the key's role or creator may not do it |
 | 5 | Not found (or not in your organisation) |
 | 6 | Rate limit exhausted (the CLI already retried short waits) |
 | 7 | The API could not be reached or failed, or does not offer portfolio access yet |

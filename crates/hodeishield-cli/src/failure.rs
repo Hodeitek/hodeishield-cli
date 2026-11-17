@@ -142,6 +142,9 @@ pub fn from_api(error: hodeishield_api::Error, context: &ApiContext<'_>) -> Fail
                         .map_or_else(String::new, |s| format!(" (licence: {s})"));
                     let message = if detail(&api, "licence") == Some("tenant_inactive") {
                         "The tenant is deactivated.".to_owned()
+                    } else if is_write(&api) {
+                        // A write is also refused while the licence is in its grace period.
+                        format!("The tenant's licence is not in force{state}, so alerts cannot be changed.")
                     } else {
                         format!("The tenant's licence is not in force{state}.")
                     };
@@ -225,6 +228,25 @@ pub fn from_api(error: hodeishield_api::Error, context: &ApiContext<'_>) -> Fail
                 403 if detail(&api, "code") == Some("PLAN_WITHOUT_API") => {
                     plan_without_api(Kind::Forbidden)
                 }
+                403 if detail(&api, "code") == Some("ROLE_NOT_PERMITTED") => Failure::new(
+                    Kind::Forbidden,
+                    if api.operation == "resolveAlert" {
+                        "The role this key acts with may not close this alert. Nothing was changed."
+                    } else {
+                        "The role this key acts with may not acknowledge alerts. Nothing was changed."
+                    },
+                )
+                .hint(
+                    "A key acts with the role of the user who created it. An MSSP analyst's key \
+                     closes medium and low alerts only. Use a key created by a user whose role may \
+                     do this in the app.",
+                ),
+                403 if detail(&api, "code") == Some("WRITE_ACTOR_UNRESOLVED") => Failure::new(
+                    Kind::Forbidden,
+                    "The user who created this key no longer exists, is not active or no longer \
+                     reaches the tenant. Nothing was changed.",
+                )
+                .hint("Ask for a new key, created by a user who can triage alerts."),
                 403 if detail(&api, "code") == Some("MFA_ENROLLMENT_REQUIRED") => Failure::new(
                     Kind::Forbidden,
                     "This account must enrol multi-factor authentication before it can use the API.",
@@ -305,6 +327,10 @@ pub fn from_api(error: hodeishield_api::Error, context: &ApiContext<'_>) -> Fail
                         ),
                         // The plain `tenant` limit is also what a single-tenant key hits: the
                         // client wording fits only when a client tenant was selected.
+                        Some("write_key") => Some(
+                            "This key has used its allowance of changes for the minute; reads are \
+                             counted apart. Space out the changes a script makes.",
+                        ),
                         Some("tenant") if context.tenant_selected => Some(
                             "This client tenant's own limit is used up; other client tenants are \
                              not affected.",
@@ -417,6 +443,13 @@ fn conflict(api: &hodeishield_api::ApiError, server_message: Option<&str>) -> Fa
     };
     let details = api.body.as_ref().and_then(|b| b.details.as_ref());
     match detail(api, "code") {
+        Some("ALERT_RESOLVED") => Failure::general(
+            "The alert is already resolved, so it cannot be acknowledged. Nothing was changed.",
+        ),
+        Some("ALERT_STATE_CHANGED") => Failure::general(
+            "The alert changed while this request was being applied. Nothing was changed.",
+        )
+        .hint("Read it again with `hodeishield alerts get <id>`, and repeat the command if it is still needed."),
         Some("REPORT_NOT_READY") if detail(api, "status") == Some("failed") => {
             Failure::general("The report failed to generate, so it has no file.")
                 .hint("Generate it again in the app.")
@@ -470,6 +503,11 @@ fn conflict(api: &hodeishield_api::ApiError, server_message: Option<&str>) -> Fa
 /// that "Bad value." does not become "Bad value..".
 fn sentence_body(message: &str) -> &str {
     message.trim_end().trim_end_matches(['.', '!', '?'])
+}
+
+/// Whether the call that failed was one of the alert writes.
+fn is_write(api: &hodeishield_api::ApiError) -> bool {
+    matches!(api.operation, "acknowledgeAlert" | "resolveAlert")
 }
 
 fn detail<'a>(api: &'a hodeishield_api::ApiError, key: &str) -> Option<&'a str> {

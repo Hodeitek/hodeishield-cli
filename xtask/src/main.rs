@@ -49,6 +49,10 @@ const RENAMES: &[(&str, &str)] = &[
     ),
 ];
 
+/// The operations that write, which the client generates a method for. Every other `POST` of the
+/// document stays out of the client: it is not something this CLI does.
+const WRITES: &[&str] = &["acknowledgeAlert", "resolveAlert"];
+
 type Result<T> = std::result::Result<T, String>;
 
 fn main() -> ExitCode {
@@ -212,6 +216,17 @@ struct OperationDef {
     response: Response,
     /// Whether the operation takes the `X-HS-Tenant` header that selects a client tenant.
     tenant_scoped: bool,
+    /// `GET` or `POST`.
+    method: &'static str,
+    /// The members of the JSON body of a write, in document order; empty for a read.
+    body: Vec<BodyField>,
+}
+
+/// A string member of the JSON object a write sends.
+struct BodyField {
+    json_name: String,
+    rust_name: String,
+    required: bool,
 }
 
 struct Generator<'a> {
@@ -268,12 +283,17 @@ impl<'a> Generator<'a> {
         for (path, item) in paths {
             let item = item.as_object().ok_or("path item is not an object")?;
             for (method, operation) in item {
-                // The CLI only reads: an operation that writes is described by the document but
-                // gets no method in this client.
-                if method != "get" {
+                // Every read gets a method. A write gets one only when it is listed in `WRITES`:
+                // the document describes writes the CLI does not offer.
+                let wanted = match method.as_str() {
+                    "get" => true,
+                    "post" => WRITES.contains(&operation_id(operation)?),
+                    _ => false,
+                };
+                if !wanted {
                     continue;
                 }
-                self.operation(path, operation, &enum_names)?;
+                self.operation(path, method, operation, &enum_names)?;
             }
         }
         Ok(self.render(&version, &server))
@@ -374,10 +394,17 @@ impl<'a> Generator<'a> {
     fn operation(
         &mut self,
         path: &str,
+        method: &str,
         operation: &Value,
         enum_names: &BTreeMap<(String, String), String>,
     ) -> Result<()> {
         let id = operation_id(operation)?.to_owned();
+        let method = if method == "post" { "POST" } else { "GET" };
+        let body = if method == "POST" {
+            body_fields(&id, operation)?
+        } else {
+            Vec::new()
+        };
         let summary = operation
             .get("summary")
             .and_then(Value::as_str)
@@ -489,6 +516,8 @@ impl<'a> Generator<'a> {
             query_params,
             response,
             tenant_scoped,
+            method,
+            body,
         });
         Ok(())
     }
@@ -822,11 +851,13 @@ impl<'a> Generator<'a> {
                 .collect();
             let _ = writeln!(
                 out,
-                "    /// `GET {}`: {}.\n    pub const {}: Operation = Operation {{ id: {:?}, method: \"GET\", path: {:?}, summary: {:?}, scopes: &[{}], known_values: &[{}], deprecated_values: &[{}], tenant_scoped: {} }};\n",
+                "    /// `{} {}`: {}.\n    pub const {}: Operation = Operation {{ id: {:?}, method: {:?}, path: {:?}, summary: {:?}, scopes: &[{}], known_values: &[{}], deprecated_values: &[{}], tenant_scoped: {} }};\n",
+                op.method,
                 op.path,
                 op.summary,
                 screaming(&op.id),
                 op.id,
+                op.method,
                 op.path,
                 op.summary,
                 scopes.join(", "),
@@ -854,6 +885,13 @@ impl<'a> Generator<'a> {
             for param in &op.path_params {
                 args.push(format!("{}: &str", param.rust_name));
             }
+            for field in &op.body {
+                args.push(if field.required {
+                    format!("{}: &str", field.rust_name)
+                } else {
+                    format!("{}: Option<&str>", field.rust_name)
+                });
+            }
             if !op.query_params.is_empty() {
                 args.push(format!("params: &{}Params", pascal(&op.id)));
             }
@@ -873,6 +911,35 @@ impl<'a> Generator<'a> {
             } else {
                 "params.query_pairs()"
             };
+            if op.method == "POST" {
+                let Response::Json(ty) = &op.response else {
+                    unreachable!("a write answers JSON: checked when the operation is read");
+                };
+                let mut body = String::from("        let mut body = serde_json::Map::new();\n");
+                for field in &op.body {
+                    if field.required {
+                        let _ = writeln!(
+                            body,
+                            "        body.insert({:?}.to_owned(), serde_json::Value::String({}.to_owned()));",
+                            field.json_name, field.rust_name
+                        );
+                    } else {
+                        let _ = writeln!(
+                            body,
+                            "        if let Some(value) = {} {{\n            body.insert({:?}.to_owned(), serde_json::Value::String(value.to_owned()));\n        }}",
+                            field.rust_name, field.json_name
+                        );
+                    }
+                }
+                let _ = writeln!(
+                    out,
+                    "    pub fn {}({}) -> Result<crate::ApiResponse<{ty}>, crate::Error> {{\n{body}        self.post(&operations::{}, {path_value}, &serde_json::Value::Object(body))\n    }}\n",
+                    snake(&op.id),
+                    args.join(", "),
+                    screaming(&op.id),
+                );
+                continue;
+            }
             match &op.response {
                 Response::Json(ty) => {
                     let _ = writeln!(
@@ -897,6 +964,49 @@ impl<'a> Generator<'a> {
         out.push_str("}\n");
         out
     }
+}
+
+/// The members of the JSON body a write sends: all strings, nothing else accepted, and the
+/// document must refuse unknown keys, so that what the client builds is exactly what it declares.
+fn body_fields(id: &str, operation: &Value) -> Result<Vec<BodyField>> {
+    let schema = operation
+        .pointer("/requestBody/content/application~1json/schema")
+        .ok_or_else(|| format!("{id}: no JSON request body"))?;
+    if schema.get("type").and_then(Value::as_str) != Some("object")
+        || schema.get("additionalProperties") != Some(&Value::Bool(false))
+    {
+        return Err(format!(
+            "{id}: the request body must be an object that refuses unknown keys"
+        ));
+    }
+    let required: Vec<&str> = schema
+        .get("required")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect();
+    let properties = schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .ok_or_else(|| format!("{id}: the request body has no properties"))?;
+    let mut fields = Vec::new();
+    for (name, property) in properties {
+        if property.get("type").and_then(Value::as_str) != Some("string") {
+            return Err(format!(
+                "{id}.{name}: only string body members are supported"
+            ));
+        }
+        fields.push(BodyField {
+            json_name: name.clone(),
+            rust_name: snake(name),
+            required: required.contains(&name.as_str()),
+        });
+    }
+    if let Some(unknown) = required.iter().find(|r| !properties.contains_key(**r)) {
+        return Err(format!("{id}.{unknown}: required but not declared"));
+    }
+    Ok(fields)
 }
 
 /// The `Accept` value of an operation whose 200 answer is a file: every media type it declares, each

@@ -1,6 +1,6 @@
 # Vendored `/v1` OpenAPI document
 
-`v1.json` is the public OpenAPI 3.1 description of the HodeiShield read-only API, byte for byte as the
+`v1.json` is the public OpenAPI 3.1 description of the HodeiShield API, byte for byte as the
 service publishes it at `GET /v1/openapi.json`. The Rust client in `crates/hodeishield-api` is generated
 from it; nothing in that client is written by hand from memory.
 
@@ -8,7 +8,7 @@ from it; nothing in that client is written by hand from memory.
 |---|---|
 | `info.version` | `2026-11-15` |
 | SHA-256 | `5b41e2c7db2c1a16b0f0c2dabf939454e9a9ba7e0806e185f19f9eb4b43cdbea` |
-| Operations | 21 (18 `GET`, 3 `POST`); the client generates the `GET` ones only |
+| Operations | 21 (18 `GET`, 3 `POST`); the client generates the `GET` ones and the two alert writes (`acknowledgeAlert`, `resolveAlert`) |
 
 ## Updating it
 

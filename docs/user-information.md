@@ -55,16 +55,17 @@ advisories are under
 
 ## Intended purpose
 
-`hodeishield` is a read-only command-line client for the public `/v1` API of
+`hodeishield` is a command-line client for the public `/v1` API of
 [HodeiShield](https://hodeishield.com). It reads one organisation's third-party inventory,
 supply-chain alerts, risk register, change requests, compliance posture, evidence, endpoint agents and reports, from
-a terminal or a script. Every command reads: its requests to the API are `GET` only, and it cannot
-change data in your organisation. It needs a HodeiShield account to sign in with, or a tenant API
+a terminal or a script. Every command reads, except two that change an alert (`alerts acknowledge`
+and `alerts resolve`): each asks for confirmation before it writes, and needs an API key with the
+`alerts:write` scope, which a sign-in does not carry. It needs a HodeiShield account to sign in with, or a tenant API
 key.
 
 ## Security properties and secure use
 
-What the CLI guarantees (read only, credentials never printed or logged and never written to disk
+What the CLI guarantees (reads, apart from two confirmation-gated alert writes that need an API key; credentials never printed or logged and never written to disk
 in clear text unless you opt in to the plain-text token file, HTTPS only, no redirects followed, signed releases) is in
 [SECURITY.md](../SECURITY.md#what-the-cli-guarantees), and the risk assessment behind them is in
 [risk-assessment.md](risk-assessment.md). To use it securely:
@@ -77,7 +78,8 @@ in clear text unless you opt in to the plain-text token file, HTTPS only, no red
   plain-text file; see
   [Servers, containers and remote sessions](../README.md#servers-containers-and-remote-sessions)),
   covers one tenant and only reads.
-  Scripts, CI and servers use a tenant API key with only the read scopes they need, kept in the CI's
+  Scripts, CI and servers use a tenant API key with only the scopes they need (add `alerts:write`
+  only to a key that changes alerts), kept in the CI's
   secret store and passed in the environment, not on a command line. When
   `HODEISHIELD_API_KEY` is set, it is used for every call, whatever else is configured.
 - **Keep the configuration file free of credentials.** It holds URLs and sign-in settings only,

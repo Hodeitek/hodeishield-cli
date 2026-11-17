@@ -28,13 +28,21 @@ Several client tenants (portfolio credential):
   hodeishield --tenant <slug|id> vendors list    One client.
   hodeishield --all-tenants vendors list         Every client, with a tenant column.
 
+Changing data (the only two commands that write):
+  hodeishield alerts acknowledge <id>             Mark an open alert as taken.
+  hodeishield alerts resolve <id> --reason TEXT   Close an alert, with the reason.
+  Both ask you to confirm first (--yes skips the question; without a terminal and without --yes they
+  refuse), and both need HODEISHIELD_API_KEY with the `alerts:write` scope.
+
 Exit codes:
   0 ok · 1 error · 2 usage · 3 not authenticated · 4 missing scope · 5 not found
   6 rate limited · 7 API unreachable, failing or without portfolio access · 8 tenant licence not in force";
 
-/// Read-only command-line client for HodeiShield.
+/// Command-line client for HodeiShield.
 ///
-/// Every command reads; nothing here can change data in your organisation.
+/// Every command reads, except two that change an alert: `alerts acknowledge` and `alerts
+/// resolve`. Each asks for confirmation (or `--yes`) before it writes, and each needs an API key
+/// with the `alerts:write` scope: a sign-in made with `hodeishield login` can only read.
 #[derive(Debug, Parser)]
 #[command(name = "hodeishield", version, propagate_version = true, after_help = AFTER_HELP)]
 pub struct Cli {
@@ -184,6 +192,15 @@ impl Cli {
         if let Some((kind, message)) = cli.command.framework_error() {
             Self::command().error(kind, message).exit();
         }
+        if cli.command.asks_confirmation() && !std::io::stdin().is_terminal() {
+            Self::command()
+                .error(
+                    clap::error::ErrorKind::InvalidValue,
+                    "refusing to change an alert without confirmation: standard input is not a \
+                     terminal, so there is nobody to ask; pass --yes to confirm the change",
+                )
+                .exit();
+        }
         if cli.command.downloads_to_stdout() && std::io::stdout().is_terminal() {
             Self::command()
                 .error(
@@ -257,6 +274,15 @@ impl Command {
                 | Self::Endpoints(_)
                 | Self::Reports(_)
         )
+    }
+
+    /// Whether this is a write that has to ask before it changes anything (no `--yes`).
+    fn asks_confirmation(&self) -> bool {
+        match self {
+            Self::Alerts(AlertsCommand::Acknowledge(args)) => !args.confirm.yes,
+            Self::Alerts(AlertsCommand::Resolve(args)) => !args.confirm.yes,
+            _ => false,
+        }
     }
 
     /// Whether this is a download whose file goes to standard output (`--output -`).
@@ -371,6 +397,84 @@ pub enum AlertsCommand {
         /// Alert id.
         id: String,
     },
+    /// Mark an open alert as taken. Writes: asks for confirmation, needs an API key.
+    #[command(long_about = ACKNOWLEDGE_ABOUT)]
+    Acknowledge(AlertAcknowledge),
+    /// Close an alert, with the reason. Writes: asks for confirmation, needs an API key.
+    #[command(long_about = RESOLVE_ABOUT)]
+    Resolve(AlertResolve),
+}
+
+const ACKNOWLEDGE_ABOUT: &str = "\
+Mark an open alert as taken (\"someone is on it\"). It stays unresolved. Repeating it on an alert \
+that is already acknowledged changes nothing.
+
+This command writes. It first shows the alert (its title, severity and status) and the change, and \
+asks you to confirm; --yes skips the question. With no terminal on standard input and no --yes it \
+refuses and sends nothing.
+
+It needs HODEISHIELD_API_KEY: a tenant API key, or an MSSP portfolio key (with --tenant), that holds \
+the `alerts:write` scope. A sign-in made with `hodeishield login` cannot write. The key acts with \
+the role of the user who created it, and every change is written to the tenant's audit trail.";
+
+const RESOLVE_ABOUT: &str = "\
+Close an alert, with the reason why (2 to 500 characters, kept in the audit trail). Repeating it on \
+an alert that is already resolved changes nothing, and the first reason stays.
+
+This command writes. It first shows the alert (its title, severity and status) and the change, and \
+asks you to confirm; --yes skips the question. With no terminal on standard input and no --yes it \
+refuses and sends nothing.
+
+It needs HODEISHIELD_API_KEY: a tenant API key, or an MSSP portfolio key (with --tenant), that holds \
+the `alerts:write` scope. A sign-in made with `hodeishield login` cannot write. The key acts with \
+the role of the user who created it; an MSSP analyst's key closes medium and low alerts only.";
+
+/// The confirmation every write asks for.
+#[derive(Debug, Args)]
+pub struct Confirm {
+    /// Do not ask for confirmation: change the alert straight away. Needed when standard input is
+    /// not a terminal.
+    #[arg(short = 'y', long)]
+    pub yes: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct AlertAcknowledge {
+    /// Alert id.
+    pub id: String,
+    /// Why, kept in the audit trail (at most 500 characters).
+    #[arg(long, value_name = "TEXT", value_parser = acknowledge_reason)]
+    pub reason: Option<String>,
+    #[command(flatten)]
+    pub confirm: Confirm,
+}
+
+#[derive(Debug, Args)]
+pub struct AlertResolve {
+    /// Alert id.
+    pub id: String,
+    /// Why the alert is closed: 2 to 500 characters, kept in the audit trail.
+    #[arg(long, required = true, value_name = "TEXT", value_parser = resolve_reason)]
+    pub reason: String,
+    #[command(flatten)]
+    pub confirm: Confirm,
+}
+
+/// The longest reason the API takes.
+const REASON_MAX_CHARS: usize = 500;
+
+fn acknowledge_reason(text: &str) -> Result<String, String> {
+    if text.chars().count() > REASON_MAX_CHARS {
+        return Err(format!("at most {REASON_MAX_CHARS} characters"));
+    }
+    Ok(text.to_owned())
+}
+
+fn resolve_reason(text: &str) -> Result<String, String> {
+    if text.chars().filter(|c| !c.is_whitespace()).count() < 2 {
+        return Err("at least two characters that are not blank".to_owned());
+    }
+    acknowledge_reason(text)
 }
 
 #[derive(Debug, Args)]

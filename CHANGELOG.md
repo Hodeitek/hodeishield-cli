@@ -8,6 +8,20 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ### Added
 
+- `hodeishield alerts acknowledge <id>` and `hodeishield alerts resolve <id> --reason <text>` change
+  an alert's status through `POST /v1/alerts/{id}/acknowledge` and `.../resolve` (the first commands
+  that write). Each shows the alert (id, title, severity, status) and the change and asks for
+  confirmation; `--yes` skips the question, and with no terminal on standard input and no `--yes`
+  the command exits with code 2 and sends nothing. They need an API key (a tenant key, or a portfolio
+  key with `--tenant`) that holds the `alerts:write` scope: a sign-in made with `hodeishield login`
+  cannot write, and the command says so (exit code 4) before sending anything. The answer is a line
+  saying what changed, or that nothing changed because the alert already was in that state; `--json`
+  prints the API's `{data, changed}`. The refusals the API documents (`ROLE_NOT_PERMITTED`,
+  `WRITE_ACTOR_UNRESOLVED`, `ALERT_RESOLVED`, `ALERT_STATE_CHANGED`, `LICENCE_INACTIVE`, and the
+  write rate limit) each get their own message and keep the existing exit codes (4, 4, 1, 1, 8, 6).
+  A write is never sent again after a transport or gateway error.
+  ([#60](https://github.com/Hodeitek/hodeishield-cli/issues/60))
+
 - `hodeishield alerts get` shows the MITRE ATT&CK techniques mapped to the alert in an "ATT&CK
   techniques" section (id, name and tactic, plus the sub-technique when there is one). With no
   techniques it says why: none mapped, not included in the current plan, or mapping not available.

@@ -3,6 +3,7 @@
 
 //! Command dispatch and what every command shares.
 
+mod alert_writes;
 mod config;
 mod resources;
 mod save;
@@ -85,7 +86,7 @@ impl Context {
         if self.verbose {
             builder = builder.retry_observer(|event| {
                 eprintln!(
-                    "retrying GET {} in {} ms ({}, retry {})",
+                    "retrying {} in {} ms ({}, retry {})",
                     event.url,
                     event.wait.as_millis(),
                     event.reason,
