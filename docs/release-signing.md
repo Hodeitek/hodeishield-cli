@@ -232,11 +232,41 @@ A mismatch, or anything the check cannot read, fails the run and opens an issue 
 If installing cosign fails, the workflow waits a minute and tries once more before it reports a
 failure, so a short outage of the download host does not open an issue.
 
+### At every release
+
+The last job of `release.yml` (`integrity`) runs the same script in release-time mode, so a release
+whose check fails shows red. It fails the release if:
+
+- a file the release signs (`SHA256SUMS` and every file it lists) has no Rekor entry, found by its
+  SHA-256, that verifies against Sigstore's trust root and was made by `release.yml` at this tag, at
+  the tag's commit and in this very run; or
+- a run of `release.yml` or `container-image.yml` is for a tag that is not a published release.
+
+What differs from the weekly check, and why:
+
+- The release is still a draft when its run ends, and the container image does not exist yet:
+  `container-image.yml` starts when the draft is published. The release-time check therefore covers
+  only the files and the runs, and the image is left to the weekly check, which does not race
+  anything. The tag being made counts as the release being made, so its own run is not a run for an
+  unpublished tag, and it is not required to have succeeded: it is still running.
+- It reads the file list from the `SHA256SUMS` this run made, kept as the `release-sha256sums`
+  artifact, so it needs no access to the draft release. Only the files this run signed are checked
+  at release time; the other releases are left to the weekly check.
+- Rekor's index can lag a few seconds behind a signature just made, so a missing entry is looked up
+  again a few times before it is reported.
+- The job has read access to the repository contents and the run history, and no secret.
+
+A red `integrity` job means: do not publish the draft, and follow
+[If the release workflow identity is compromised](#if-the-release-workflow-identity-is-compromised)
+until the cause is known. The weekly check will then also report the run as unsuccessful.
+
 What the check cannot see:
 
-- A signature made with the release identity for a file that was never published. Rekor cannot be
-  searched by certificate identity
-  ([#158](https://github.com/Hodeitek/hodeishield-cli/issues/158)).
+- A signature made with the release identity outside GitHub, for a file that was never published (for
+  example with a leaked or misused identity). Rekor cannot be searched by certificate identity
+  ([#158](https://github.com/Hodeitek/hodeishield-cli/issues/158)), so both the weekly and the
+  release-time check see only the files this repository published, by their hash, and the GitHub run
+  history.
 - A run deleted from the run history: repository administrators can delete runs. Each published
   file is still tied to its run through its Rekor entry.
 - A draft release: only published releases count. A draft made by a rogue tag still shows as a run

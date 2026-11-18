@@ -4,6 +4,8 @@
 """Checks that every release run, release file, Rekor entry and container image belongs together.
 
 Usage: release-integrity.py <repository> <cosign> <trusted_root.json>
+       release-integrity.py <repository> <cosign> <trusted_root.json> \
+           --release-tag <tag> --run-id <id> --sums <SHA256SUMS>
 
 <repository> is "owner/name". <cosign> is the cosign binary used to verify the container images.
 <trusted_root.json> is Sigstore's trust root as `cosign initialize` fetched and checked it through
@@ -33,13 +35,27 @@ What is checked, in both directions:
                      from 0.4.0 has one, and the signature on its digest verifies with cosign against
                      container-image.yml at that tag.
 
-Rekor cannot be searched by certificate identity, so a signature made with the identity for a file
-that was never published is not seen here (see #158).
+Release-time mode (the second form). The release workflow runs it as its last job, so a release whose
+check fails shows red. It checks only what a release can answer for, and leaves the rest to the weekly
+run: (1) every file the release signs, which is SHA256SUMS and every file it lists (<SHA256SUMS> is the
+file the run just made), has a Rekor entry found by its SHA-256 that verifies against the trust root and
+was made by release.yml at <tag> in this very run <id>; and (2) every run of release.yml and
+container-image.yml, over the whole history, is for a published release or for <tag>. At that point
+the release is still a draft and its container image does not exist yet (container-image.yml starts
+when a person publishes the release), so <tag> counts as the release being made: its own run is not a
+run for an unpublished tag, the run is not required to have succeeded (it is still running), and the
+image is not checked. The Rekor index can lag a few seconds behind a signature just made, so a missing
+entry is looked up again a few times before it is reported.
+
+Rekor cannot be searched by certificate identity, so a signature made with the release identity for a
+file that was never published, outside GitHub, is not seen here (see #158): both modes see only the
+published files, by hash, and the GitHub run history.
 
 Prints the report on standard output. Exit status: 0 when everything matches, 1 when something does
 not match or cannot be read. Nothing that cannot be read is ever treated as a pass.
 """
 
+import argparse
 import base64
 import hashlib
 import json
@@ -494,25 +510,9 @@ def stable_version(tag: str):
     return tuple(int(part) for part in match.groups()[:3])
 
 
-def check(repository: str, cosign: str, trust: Trust, github: GitHub, out) -> bool:
-    problems: list[str] = []
-
-    def problem(text: str):
-        problems.append(text)
-        print(f"MISMATCH: {text}", file=out)
-
-    releases = [r for r in github.pages("releases") if not r["draft"]]
-    print(f"{len(releases)} published releases.", file=out)
-    commits = {r["tag_name"]: github.tag_commit(r["tag_name"]) for r in releases}
-
-    release_runs = github.pages("actions/workflows/release.yml/runs", "workflow_runs")
-    image_runs = github.pages("actions/workflows/container-image.yml/runs", "workflow_runs")
-    print(
-        f"{len(release_runs)} runs of release.yml, {len(image_runs)} of container-image.yml.",
-        file=out,
-    )
-
-    # runs -> releases
+def compare_runs(release_runs, image_runs, commits, problem, out) -> None:
+    """runs -> releases: every run that publishes something belongs to a release in `commits` (tag ->
+    commit), at the commit of its tag."""
     for run in release_runs:
         if run["event"] == "workflow_dispatch":
             continue  # a manual run is always a dry run: it signs and publishes nothing
@@ -535,6 +535,27 @@ def check(repository: str, cosign: str, trust: Trust, github: GitHub, out) -> bo
             problem(f"{where}: no published release has this tag")
         elif run["head_sha"] != commits[run["head_branch"]]:
             problem(f"{where}: commit {run['head_sha']} is not the tag's {commits[run['head_branch']]}")
+
+
+def check(repository: str, cosign: str, trust: Trust, github: GitHub, out) -> bool:
+    problems: list[str] = []
+
+    def problem(text: str):
+        problems.append(text)
+        print(f"MISMATCH: {text}", file=out)
+
+    releases = [r for r in github.pages("releases") if not r["draft"]]
+    print(f"{len(releases)} published releases.", file=out)
+    commits = {r["tag_name"]: github.tag_commit(r["tag_name"]) for r in releases}
+
+    release_runs = github.pages("actions/workflows/release.yml/runs", "workflow_runs")
+    image_runs = github.pages("actions/workflows/container-image.yml/runs", "workflow_runs")
+    print(
+        f"{len(release_runs)} runs of release.yml, {len(image_runs)} of container-image.yml.",
+        file=out,
+    )
+
+    compare_runs(release_runs, image_runs, commits, problem, out)
 
     image = repository.lower()
     token = registry_token(image)
@@ -644,15 +665,119 @@ def check(repository: str, cosign: str, trust: Trust, github: GitHub, out) -> bo
     return not problems
 
 
+def lookup_until_matched(lookup, judge, attempts: int, delay: float, sleep=time.sleep):
+    """`judge(lookup())`, repeated while the release's own entry is missing: the Rekor index can lag
+    a few seconds behind a signature just made. Returns the last (matched, problems)."""
+    for attempt in range(attempts):
+        matched, wrong = judge(lookup())
+        if matched or attempt == attempts - 1:
+            return matched, wrong
+        sleep(delay)
+    raise AssertionError("unreachable")
+
+
+def check_release(
+    repository: str, trust: Trust, github: GitHub, out, tag: str, run_id: int, sums_bytes: bytes,
+    attempts: int = 6, delay: float = 20, sleep=time.sleep,
+) -> bool:
+    """The release-time check: the files of `tag`, in the run `run_id` that is making it, and the runs."""
+    problems: list[str] = []
+
+    def problem(text: str):
+        problems.append(text)
+        print(f"MISMATCH: {text}", file=out)
+
+    releases = [r for r in github.pages("releases") if not r["draft"]]
+    commits = {r["tag_name"]: github.tag_commit(r["tag_name"]) for r in releases}
+    # The release being made is a draft: it counts as published here, and only this run signs it.
+    commit = commits[tag] = github.tag_commit(tag)
+
+    release_runs = github.pages("actions/workflows/release.yml/runs", "workflow_runs")
+    image_runs = github.pages("actions/workflows/container-image.yml/runs", "workflow_runs")
+    print(
+        f"{len(releases)} published releases, {tag} being made; {len(release_runs)} runs of "
+        f"release.yml, {len(image_runs)} of container-image.yml.",
+        file=out,
+    )
+
+    compare_runs(release_runs, image_runs, commits, problem, out)
+    this_run = [r for r in release_runs if r["id"] == run_id]
+    if not (
+        this_run
+        and this_run[0]["event"] == "push"
+        and this_run[0]["head_branch"] == tag
+        and this_run[0]["head_sha"] == commit
+    ):
+        problem(f"run {run_id} is not a push run of release.yml for {tag} at {commit}")
+
+    signers = {
+        other: (
+            other_commit,
+            {
+                run["id"]
+                for run in release_runs
+                if run["event"] == "push"
+                and run["head_branch"] == other
+                and run["head_sha"] == other_commit
+                and run["conclusion"] == "success"
+            },
+        )
+        for other, other_commit in commits.items()
+        if other != tag
+    }
+    signers[tag] = (commit, {run_id})
+
+    sums = parse_sha256sums(sums_bytes.decode())
+    digests = {"SHA256SUMS": hashlib.sha256(sums_bytes).hexdigest(), **sums}
+    signed = sorted(must_be_signed(set(sums), sums))
+    for name in signed:
+        matched, wrong = lookup_until_matched(
+            lambda digest=digests[name]: rekor_entries(digest, trust),
+            lambda entries: judge_rekor(entries, repository=repository, tag=tag, releases=signers),
+            attempts,
+            delay,
+            sleep,
+        )
+        for text in wrong:
+            problem(f"{tag}: {name} (sha256:{digests[name]}): {text}")
+        if not matched:
+            problem(
+                f"{tag}: {name} (sha256:{digests[name]}): no Rekor entry from release.yml at "
+                f"this tag, commit and run {run_id}"
+            )
+    print(f"{tag}: {len(signed)} signed files checked.", file=out)
+    print(f"{len(problems)} mismatch(es)." if problems else "Everything matches.", file=out)
+    return not problems
+
+
 def main(argv: list[str]) -> int:
-    if len(argv) != 4 or "/" not in argv[1]:
+    parser = argparse.ArgumentParser(usage=__doc__.split("\n\n")[1], add_help=False)
+    parser.add_argument("repository")
+    parser.add_argument("cosign")
+    parser.add_argument("trusted_root")
+    parser.add_argument("--release-tag")
+    parser.add_argument("--run-id", type=int)
+    parser.add_argument("--sums")
+    try:
+        args = parser.parse_args(argv[1:])
+    except SystemExit:
+        return 1
+    release_time = [args.release_tag, args.run_id, args.sums]
+    if "/" not in args.repository or any(release_time) != all(release_time):
         print(__doc__.split("\n\n")[1], file=sys.stderr)
         return 1
-    github = GitHub(argv[1], os.environ.get("GH_TOKEN") or None)
+    github = GitHub(args.repository, os.environ.get("GH_TOKEN") or None)
     try:
-        with open(argv[3], encoding="utf-8") as file, tempfile.TemporaryDirectory() as workdir:
+        with open(args.trusted_root, encoding="utf-8") as file, tempfile.TemporaryDirectory() as workdir:
             trust = Trust(json.load(file), workdir)
-            return 0 if check(argv[1], argv[2], trust, github, sys.stdout) else 1
+            if args.release_tag:
+                with open(args.sums, "rb") as sums:
+                    ok = check_release(
+                        args.repository, trust, github, sys.stdout, args.release_tag, args.run_id, sums.read()
+                    )
+            else:
+                ok = check(args.repository, args.cosign, trust, github, sys.stdout)
+            return 0 if ok else 1
     except (Unreadable, ValueError, KeyError, OSError) as error:
         print(f"UNREADABLE: {error}", file=sys.stdout)
         return 1

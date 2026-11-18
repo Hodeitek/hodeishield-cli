@@ -9,6 +9,7 @@ Tests whose names contain "negative" feed changed data on purpose; they run in C
 """
 
 import importlib.util
+import io
 import json
 import pathlib
 import tempfile
@@ -191,6 +192,102 @@ class Bundles(unittest.TestCase):
     def test_bundles_and_provenance_are_not_required_to_have_bundles(self):
         names = {"x.tar.gz.sigstore.json", "multiple.intoto.jsonl"}
         self.assertEqual(ri.must_be_signed(names, {}), {"SHA256SUMS"})
+
+
+class FakeGitHub:
+    """Stands in for the GitHub API: releases (one draft), tag commits and the run history."""
+
+    def __init__(self, release_runs, image_runs=(), published=("v0.4.1",)):
+        self.release_runs, self.image_runs, self.published = list(release_runs), list(image_runs), published
+
+    def pages(self, path, key=None):
+        if path == "releases":
+            return [{"tag_name": t, "draft": False} for t in self.published] + [
+                {"tag_name": "v0.4.2", "draft": True}
+            ]
+        return self.release_runs if "release.yml" in path else self.image_runs
+
+    def tag_commit(self, tag):
+        return {"v0.4.1": COMMIT_041, "v0.4.2": COMMIT_042}[tag]
+
+
+COMMIT_042 = "c" * 40
+RUN_042 = 4242
+SUMS = ("a" * 64 + "  hodeishield-0.4.2-x.tar.gz\n" + "b" * 64 + "  install.sh\n").encode()
+
+
+def run(run_id, tag, commit, event="push", conclusion="success"):
+    return {"id": run_id, "event": event, "head_branch": tag, "head_sha": commit, "conclusion": conclusion}
+
+
+class ReleaseTime(unittest.TestCase):
+    def check(self, github, entries, run_id=RUN_042):
+        """Runs the release-time check with `entries` as what Rekor returns for every file."""
+        out = io.StringIO()
+        original = ri.rekor_entries
+        ri.rekor_entries = lambda digest, trust: entries
+        try:
+            ok = ri.check_release(
+                REPO, None, github, out, "v0.4.2", run_id, SUMS, attempts=3, delay=0, sleep=lambda _: None
+            )
+        finally:
+            ri.rekor_entries = original
+        return ok, out.getvalue()
+
+    def own_run(self):
+        return run(RUN_042, "v0.4.2", COMMIT_042, conclusion=None)
+
+    def good(self):
+        return [(1, certificate("v0.4.2", COMMIT_042, RUN_042))]
+
+    def test_the_release_being_made_passes_while_it_is_still_a_draft_and_running(self):
+        ok, report = self.check(FakeGitHub([self.own_run(), run(RUN_041, "v0.4.1", COMMIT_041)]), self.good())
+        self.assertTrue(ok, report)
+        self.assertIn("3 signed files checked", report)  # SHA256SUMS and the two files it lists
+
+    def test_a_run_for_a_tag_that_is_not_a_published_release_is_red(self):
+        ok, report = self.check(
+            FakeGitHub([self.own_run(), run(7, "v0.9.9", "d" * 40)]), self.good()
+        )
+        self.assertFalse(ok)
+        self.assertIn("run 7 (push, v0.9.9", report)
+
+    def test_a_container_image_run_for_an_unpublished_tag_is_red(self):
+        ok, report = self.check(
+            FakeGitHub([self.own_run()], [run(8, "v0.9.9", "d" * 40, event="release")]), self.good()
+        )
+        self.assertFalse(ok)
+        self.assertIn("container-image.yml run 8", report)
+
+    def test_a_file_without_a_rekor_entry_of_this_run_is_red(self):
+        for entries in ([], [(1, certificate("v0.4.2", COMMIT_042, 1))], [(1, certificate("v0.4.1"))]):
+            with self.subTest(entries=entries):
+                ok, report = self.check(FakeGitHub([self.own_run()]), entries)
+                self.assertFalse(ok)
+                self.assertIn("no Rekor entry from release.yml at this tag, commit and run", report)
+
+    def test_the_run_must_be_the_pushed_run_of_the_tag(self):
+        ok, report = self.check(FakeGitHub([self.own_run()]), self.good(), run_id=1)
+        self.assertFalse(ok)
+        self.assertIn("run 1 is not a push run of release.yml for v0.4.2", report)
+
+    def test_a_missing_entry_is_looked_up_again_before_it_is_reported(self):
+        answers = [[], [], [(1, certificate("v0.4.2", COMMIT_042, RUN_042))]]
+        slept = []
+        result = ri.lookup_until_matched(
+            lambda: answers.pop(0),
+            lambda entries: ri.judge_rekor(
+                entries, repository=REPO, tag="v0.4.2", releases={"v0.4.2": (COMMIT_042, {RUN_042})}
+            ),
+            attempts=6,
+            delay=20,
+            sleep=slept.append,
+        )
+        self.assertEqual(result, (True, []))
+        self.assertEqual(slept, [20, 20])
+        self.assertEqual(
+            ri.lookup_until_matched(lambda: [], lambda e: (False, []), 3, 1, lambda _: None), (False, [])
+        )
 
 
 class Parsing(unittest.TestCase):
