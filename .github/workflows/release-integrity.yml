@@ -10,8 +10,14 @@ name: Release integrity
 # nothing but an issue labelled `release-integrity`: opened (or commented on) while the check fails,
 # and closed when it passes again. It fails closed: anything that cannot be read is a failure.
 #
-# Rekor cannot be searched by certificate identity, so a signature made with the release identity
-# for a file that was never published is not seen here (#158).
+# Every release also runs the files and runs halves of this check as the last job of release.yml,
+# so a release whose check fails shows red (see docs/release-signing.md). This weekly run covers the
+# whole history and the container images, which do not exist yet when a release is made.
+#
+# Limit: Rekor cannot be searched by certificate identity, so a signature made with the release
+# identity outside GitHub, for a file that was never published (for example with a leaked or misused
+# identity), is not detected here or at release time. Both see only the published files, by their
+# hash, and the GitHub run history (#158).
 on:
   schedule:
     - cron: "23 5 * * 1" # Mondays, 05:23 UTC
