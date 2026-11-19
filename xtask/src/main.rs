@@ -32,7 +32,7 @@ use std::process::{Command, ExitCode, Stdio};
 const SPEC: &str = "openapi/v1.json";
 const OUT: &str = "crates/hodeishield-api/src/generated.rs";
 /// SHA-256 of `openapi/v1.json`. Updating the document means updating this and `openapi/README.md`.
-const EXPECTED_SHA256: &str = "5b41e2c7db2c1a16b0f0c2dabf939454e9a9ba7e0806e185f19f9eb4b43cdbea";
+const EXPECTED_SHA256: &str = "f2a791396786e012d6577ab56786f99da5882afb5995b5ea575b1d2ac4e3d8d7";
 
 /// Type names that the default naming rules would get wrong, keyed by the schema's location.
 const RENAMES: &[(&str, &str)] = &[
@@ -51,7 +51,13 @@ const RENAMES: &[(&str, &str)] = &[
 
 /// The operations that write, which the client generates a method for. Every other `POST` of the
 /// document stays out of the client: it is not something this CLI does.
-const WRITES: &[&str] = &["acknowledgeAlert", "resolveAlert"];
+const WRITES: &[&str] = &[
+    "acknowledgeAlert",
+    "resolveAlert",
+    "transitionRisk",
+    "approveActProposal",
+    "rejectActProposal",
+];
 
 type Result<T> = std::result::Result<T, String>;
 
@@ -591,6 +597,10 @@ impl<'a> Generator<'a> {
         }
         let Some(properties) = schema.get("properties").and_then(Value::as_object) else {
             return match schema.get("additionalProperties") {
+                // `{}` accepts any value: the object keeps every key as it came.
+                Some(Value::Object(any)) if any.is_empty() => {
+                    Ok("serde_json::Map<String, serde_json::Value>".to_owned())
+                }
                 Some(additional @ Value::Object(_)) => {
                     let (inner, _) = self.rust_type(
                         additional,

@@ -13,7 +13,7 @@
 use serde::{Deserialize, Serialize};
 
 /// `info.version` of the OpenAPI document this client was generated from.
-pub const OPENAPI_VERSION: &str = "2026-11-15";
+pub const OPENAPI_VERSION: &str = "2026-11-18";
 
 /// The server the OpenAPI document declares.
 pub const DEFAULT_SERVER: &str = "https://api.hodeishield.com";
@@ -699,6 +699,80 @@ pub struct GetActProposalResponse {
     /// RFC 3339, UTC, when it was executed; else null.
     #[serde(default)]
     pub executed_at: Option<String>,
+}
+
+/// The state of the entry after the request. Its content (title, scores, owner) is `GET /v1/risks/{id}`, under `supply_risk:read`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TransitionRisk {
+    pub id: String,
+    /// The lifecycle status after the request.
+    ///
+    /// Documented values: `identified`, `assessed`, `treatment_planned`, `treatment_implemented`, `closed`. Treat any other value as valid: the vocabulary may grow.
+    pub status: String,
+    /// RFC 3339, UTC. Moves on every change of status.
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TransitionRiskResponse {
+    /// The state of the entry after the request. Its content (title, scores, owner) is `GET /v1/risks/{id}`, under `supply_risk:read`.
+    pub data: TransitionRisk,
+    /// `true` when THIS request moved the entry (and wrote its history and audit rows); `false` when the entry already had the status asked for and nothing was written.
+    pub changed: bool,
+}
+
+/// A proposal waiting for a decision.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PendingActProposal {
+    /// The proposal id, for the approve and reject operations.
+    pub id: String,
+    /// The action class (`create_task`, …); null for a kind no class declares.
+    #[serde(default)]
+    pub class: Option<String>,
+    /// The module the class needs, re-checked at the decision; null when none.
+    #[serde(default)]
+    pub module: Option<String>,
+    pub payload_kind: String,
+    /// EXACTLY what would be written if approved and executed. Read it before deciding.
+    pub payload: serde_json::Map<String, serde_json::Value>,
+    /// Why it was proposed, as the proposer wrote it.
+    pub rationale: String,
+    /// The proposing agent's self-reported confidence, 0..1; not calibrated. Null for a proposal made through the MCP.
+    #[serde(default)]
+    pub confidence: Option<f64>,
+    /// Who recorded the proposal (`mcp.v1`, an agent name, …).
+    pub proposed_via: String,
+    /// True when the caller is the user the proposal was made for. Such a proposal is listed only when its class and the tenant policy do not require four-eyes (otherwise the caller could not approve it).
+    pub proposed_by_you: bool,
+    /// RFC 3339, UTC.
+    pub created_at: String,
+    /// RFC 3339, UTC. After this instant nobody can decide it.
+    pub expires_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ListPendingActProposalsResponse {
+    pub data: Vec<PendingActProposal>,
+    pub pagination: Pagination,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ApproveActProposal {
+    pub id: String,
+    /// The proposal status after the decision.
+    ///
+    /// Documented values: `approved`, `rejected`. Treat any other value as valid: the vocabulary may grow.
+    pub status: String,
+    /// Approve only, RFC 3339 UTC: the approved action must be executed in the console before this instant, or the approval lapses. Null for a rejection.
+    #[serde(default)]
+    pub approval_expires_at: Option<String>,
+    /// The ACT ledger entry that records the decision.
+    pub ledger_entry_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ApproveActProposalResponse {
+    pub data: ApproveActProposal,
 }
 
 /// Accepted values of a query parameter.
@@ -1569,6 +1643,111 @@ impl std::str::FromStr for ChangeCategory {
     }
 }
 
+/// Accepted values of a query parameter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PendingActProposalSort {
+    /// `expires_at`
+    ExpiresAt,
+    /// `created_at`
+    CreatedAt,
+}
+
+impl PendingActProposalSort {
+    /// Every accepted value, as sent on the wire.
+    pub const VALUES: &'static [&'static str] = &["expires_at", "created_at"];
+
+    /// The value as sent on the wire.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ExpiresAt => "expires_at",
+            Self::CreatedAt => "created_at",
+        }
+    }
+}
+
+impl std::fmt::Display for PendingActProposalSort {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for PendingActProposalSort {
+    type Err = crate::ParseEnumError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "expires_at" => Ok(Self::ExpiresAt),
+            "created_at" => Ok(Self::CreatedAt),
+            _ => Err(crate::ParseEnumError::new(value, Self::VALUES)),
+        }
+    }
+}
+
+/// Accepted values of a query parameter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Class {
+    /// `create_risk_entry`
+    CreateRiskEntry,
+    /// `create_task`
+    CreateTask,
+    /// `request_vendor_evidence`
+    RequestVendorEvidence,
+    /// `schedule_vendor_scan`
+    ScheduleVendorScan,
+    /// `set_vendor_criticality`
+    SetVendorCriticality,
+    /// `open_vendor_review`
+    OpenVendorReview,
+}
+
+impl Class {
+    /// Every accepted value, as sent on the wire.
+    pub const VALUES: &'static [&'static str] = &[
+        "create_risk_entry",
+        "create_task",
+        "request_vendor_evidence",
+        "schedule_vendor_scan",
+        "set_vendor_criticality",
+        "open_vendor_review",
+    ];
+
+    /// The value as sent on the wire.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::CreateRiskEntry => "create_risk_entry",
+            Self::CreateTask => "create_task",
+            Self::RequestVendorEvidence => "request_vendor_evidence",
+            Self::ScheduleVendorScan => "schedule_vendor_scan",
+            Self::SetVendorCriticality => "set_vendor_criticality",
+            Self::OpenVendorReview => "open_vendor_review",
+        }
+    }
+}
+
+impl std::fmt::Display for Class {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for Class {
+    type Err = crate::ParseEnumError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "create_risk_entry" => Ok(Self::CreateRiskEntry),
+            "create_task" => Ok(Self::CreateTask),
+            "request_vendor_evidence" => Ok(Self::RequestVendorEvidence),
+            "schedule_vendor_scan" => Ok(Self::ScheduleVendorScan),
+            "set_vendor_criticality" => Ok(Self::SetVendorCriticality),
+            "open_vendor_review" => Ok(Self::OpenVendorReview),
+            _ => Err(crate::ParseEnumError::new(value, Self::VALUES)),
+        }
+    }
+}
+
 /// Query parameters of `listVendors`.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ListVendorsParams {
@@ -2060,6 +2239,55 @@ impl ListChangesParams {
     }
 }
 
+/// Query parameters of `listPendingActProposals`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ListPendingActProposalsParams {
+    /// 1-based page number. Defaults to 1.
+    pub page: Option<i64>,
+    /// Items per page, 1..200. Defaults to 50.
+    pub per_page: Option<i64>,
+    /// Field to order by. One of: expires_at, created_at.
+    pub sort: Option<PendingActProposalSort>,
+    /// Sort direction. Defaults to asc (the proposal that expires soonest first).
+    pub order: Option<Order>,
+    /// Only proposals of this action class. One of: create_risk_entry, create_task, request_vendor_evidence, schedule_vendor_scan, set_vendor_criticality, open_vendor_review.
+    pub class: Option<Class>,
+    /// Only proposals whose action class needs this module (`supply_risk`, …). A module no class needs matches nothing.
+    pub module: Option<String>,
+    /// RFC 3339. Only proposals that stop being decidable before this instant.
+    pub expires_before: Option<String>,
+}
+
+impl ListPendingActProposalsParams {
+    /// The query string, in document order, without the parameters that are unset.
+    #[must_use]
+    pub fn query_pairs(&self) -> Vec<(&'static str, String)> {
+        let mut pairs = Vec::new();
+        if let Some(value) = &self.page {
+            pairs.push(("page", value.to_string()));
+        }
+        if let Some(value) = &self.per_page {
+            pairs.push(("per_page", value.to_string()));
+        }
+        if let Some(value) = &self.sort {
+            pairs.push(("sort", value.as_str().to_owned()));
+        }
+        if let Some(value) = &self.order {
+            pairs.push(("order", value.as_str().to_owned()));
+        }
+        if let Some(value) = &self.class {
+            pairs.push(("class", value.as_str().to_owned()));
+        }
+        if let Some(value) = &self.module {
+            pairs.push(("module", value.clone()));
+        }
+        if let Some(value) = &self.expires_before {
+            pairs.push(("expires_before", value.clone()));
+        }
+        pairs
+    }
+}
+
 /// Every `/v1` operation, as the OpenAPI document describes it.
 pub mod operations {
     use crate::Operation;
@@ -2349,6 +2577,54 @@ pub mod operations {
         tenant_scoped: true,
     };
 
+    /// `POST /v1/risks/{id}/transition`: Move a risk along its lifecycle.
+    pub const TRANSITION_RISK: Operation = Operation {
+        id: "transitionRisk",
+        method: "POST",
+        path: "/v1/risks/{id}/transition",
+        summary: "Move a risk along its lifecycle",
+        scopes: &["risks:write"],
+        known_values: &[],
+        deprecated_values: &[],
+        tenant_scoped: true,
+    };
+
+    /// `GET /v1/act/inbox`: Proposals waiting for a decision.
+    pub const LIST_PENDING_ACT_PROPOSALS: Operation = Operation {
+        id: "listPendingActProposals",
+        method: "GET",
+        path: "/v1/act/inbox",
+        summary: "Proposals waiting for a decision",
+        scopes: &["act:decide"],
+        known_values: &[],
+        deprecated_values: &[],
+        tenant_scoped: true,
+    };
+
+    /// `POST /v1/act/proposals/{id}/approve`: Approve a proposal.
+    pub const APPROVE_ACT_PROPOSAL: Operation = Operation {
+        id: "approveActProposal",
+        method: "POST",
+        path: "/v1/act/proposals/{id}/approve",
+        summary: "Approve a proposal",
+        scopes: &["act:decide"],
+        known_values: &[],
+        deprecated_values: &[],
+        tenant_scoped: true,
+    };
+
+    /// `POST /v1/act/proposals/{id}/reject`: Reject a proposal.
+    pub const REJECT_ACT_PROPOSAL: Operation = Operation {
+        id: "rejectActProposal",
+        method: "POST",
+        path: "/v1/act/proposals/{id}/reject",
+        summary: "Reject a proposal",
+        scopes: &["act:decide"],
+        known_values: &[],
+        deprecated_values: &[],
+        tenant_scoped: true,
+    };
+
     /// All operations, in document order.
     pub const ALL: &[Operation] = &[
         LIST_VENDORS,
@@ -2371,6 +2647,10 @@ pub mod operations {
         ACKNOWLEDGE_ALERT,
         RESOLVE_ALERT,
         GET_ACT_PROPOSAL,
+        TRANSITION_RISK,
+        LIST_PENDING_ACT_PROPOSALS,
+        APPROVE_ACT_PROPOSAL,
+        REJECT_ACT_PROPOSAL,
     ];
 }
 
@@ -2796,6 +3076,121 @@ impl crate::Client {
             &operations::GET_ACT_PROPOSAL,
             format!("/v1/act/proposals/{}", crate::encode_path_segment(id)?),
             Vec::new(),
+        )
+    }
+
+    /// Move a risk along its lifecycle.
+    ///
+    /// Changes the lifecycle status of one risk-register entry, exactly as the console does: only the transitions the lifecycle allows (`identified` → `assessed`; `assessed` → `treatment_planned`; `treatment_planned` → `treatment_implemented`; `treatment_implemented` → `closed`; `closed` → `assessed`), anything else is a 409 `TRANSITION_NOT_ALLOWED` that names the current status and where it may go. Asking for the status the entry already has answers its current state with `changed: false` and writes nothing. The key acts with the role of the user who CREATED it, read on every request: only an administrator role of the tenant may move a risk (403 `ROLE_NOT_PERMITTED` otherwise), and a creator who was demoted, suspended, deleted or removed from the tenant takes the power away from the key (403 `WRITE_ACTOR_UNRESOLVED` or `ROLE_NOT_PERMITTED`). A tenant API key (`hsk_…`) writes in its own tenant. An MSSP portfolio key (`hsp_…`) names the client tenant with `X-HS-Tenant`, exactly as on the reads: a tenant outside the key’s client set is a 404 (`TENANT_NOT_FOUND`); only an MSSP organisation administrator can grant `risks:write` on a portfolio key. Writes have their own rate-limit budget per key (`error.details.scope: "write_key"`), separate from reads, and are refused while the licence is in its grace period. Every change writes the register's history row (from, to, note, the acting user) and one audit row in the tenant’s trail with the key id (never the secret). An id of another tenant answers the same 404 as one that does not exist. The body is a JSON object; an unknown key is a 400.
+    ///
+    /// Required scope: `risks:write`. Published in `/v1` since 2026-11-18.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error`] when the request cannot be sent, the API answers with an error, or the
+    /// body does not match the document.
+    pub fn transition_risk(
+        &self,
+        id: &str,
+        to_status: &str,
+        note: Option<&str>,
+    ) -> Result<crate::ApiResponse<TransitionRiskResponse>, crate::Error> {
+        let mut body = serde_json::Map::new();
+        body.insert(
+            "to_status".to_owned(),
+            serde_json::Value::String(to_status.to_owned()),
+        );
+        if let Some(value) = note {
+            body.insert(
+                "note".to_owned(),
+                serde_json::Value::String(value.to_owned()),
+            );
+        }
+        self.post(
+            &operations::TRANSITION_RISK,
+            format!("/v1/risks/{}/transition", crate::encode_path_segment(id)?),
+            &serde_json::Value::Object(body),
+        )
+    }
+
+    /// Proposals waiting for a decision.
+    ///
+    /// The ACT proposals of the tenant that THE CALLER may approve: still waiting for a decision (status `proposed`, not expired) and admitted by the console's own approve rules for this person (the role the action class and the tenant's policy require, the module the class needs, four-eyes, and not a proposal made through the MCP, which the console cannot approve yet). A proposal the caller could not approve is not listed, and `pagination.total` counts only what is listed. While actions are paused a listed proposal is still refused at approval (`ACTIONS_PAUSED`), as in the console. Soonest to expire first by default, each with EXACTLY what it would write (`payload`) and why it was proposed. Approving does not execute it: execution stays a separate step in the console. Like a decision, the inbox needs a sign-in confirmed within the last 15 minutes (403 `STEP_UP_REQUIRED` otherwise). Only a user access token of the HodeiShield CLI carrying `act:decide` may call it (an OAuth-only scope, off unless the server enables it): a tenant API key, an MSSP portfolio key, a token issued for the HodeiShield MCP server and any other application are answered 403 `CREDENTIAL_NOT_ALLOWED`.
+    ///
+    /// Required scope: `act:decide`. Published in `/v1` since 2026-11-18.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error`] when the request cannot be sent, the API answers with an error, or the
+    /// body does not match the document.
+    pub fn list_pending_act_proposals(
+        &self,
+        params: &ListPendingActProposalsParams,
+    ) -> Result<crate::ApiResponse<ListPendingActProposalsResponse>, crate::Error> {
+        self.get(
+            &operations::LIST_PENDING_ACT_PROPOSALS,
+            "/v1/act/inbox".to_owned(),
+            params.query_pairs(),
+        )
+    }
+
+    /// Approve a proposal.
+    ///
+    /// Approves one proposal waiting for a decision. It does NOT execute it, and no `/v1` operation does: the approved action is executed in the console before `approval_expires_at` (15 minutes), as after an approval made there. An approval is consent to execute now, not a standing authorisation. The decision runs through the console's own service, so its rules are the console's: the role the action class and the tenant's policy require, the module the class needs, four-eyes (the user a proposal was made for cannot approve it when it applies), the expiry, a single decision per proposal and the pause switches. Every refusal carries a stable `error.details.code` and the ACT reason beside it (`error.details.reason`). The decider is the token's user, with their role read on every request. A decision needs a sign-in confirmed within the last 15 minutes (403 `STEP_UP_REQUIRED` otherwise: sign in again, which asks for your second factor or password). At most 30 decisions per minute per person (429, `error.details.scope` `decision_user`). Every decision and every refusal writes one entry in the tenant's audit trail naming the person, the application and the reason; the ACT ledger records the decision too. An id of another tenant answers the same 404 as one that does not exist. Only a user access token of the HodeiShield CLI carrying `act:decide` may call it (an OAuth-only scope, off unless the server enables it): a tenant API key, an MSSP portfolio key, a token issued for the HodeiShield MCP server and any other application are answered 403 `CREDENTIAL_NOT_ALLOWED`.
+    ///
+    /// Required scope: `act:decide`. Published in `/v1` since 2026-11-18.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error`] when the request cannot be sent, the API answers with an error, or the
+    /// body does not match the document.
+    pub fn approve_act_proposal(
+        &self,
+        id: &str,
+        reason: &str,
+    ) -> Result<crate::ApiResponse<ApproveActProposalResponse>, crate::Error> {
+        let mut body = serde_json::Map::new();
+        body.insert(
+            "reason".to_owned(),
+            serde_json::Value::String(reason.to_owned()),
+        );
+        self.post(
+            &operations::APPROVE_ACT_PROPOSAL,
+            format!(
+                "/v1/act/proposals/{}/approve",
+                crate::encode_path_segment(id)?
+            ),
+            &serde_json::Value::Object(body),
+        )
+    }
+
+    /// Reject a proposal.
+    ///
+    /// Rejects one proposal waiting for a decision, with the reason why; nothing is executed. As in the console, any role that may write may reject, the user a proposal was made for included. The decision runs through the console's own service, so its rules are the console's: the role the action class and the tenant's policy require, the module the class needs, four-eyes (the user a proposal was made for cannot approve it when it applies), the expiry, a single decision per proposal and the pause switches. Every refusal carries a stable `error.details.code` and the ACT reason beside it (`error.details.reason`). The decider is the token's user, with their role read on every request. A decision needs a sign-in confirmed within the last 15 minutes (403 `STEP_UP_REQUIRED` otherwise: sign in again, which asks for your second factor or password). At most 30 decisions per minute per person (429, `error.details.scope` `decision_user`). Every decision and every refusal writes one entry in the tenant's audit trail naming the person, the application and the reason; the ACT ledger records the decision too. An id of another tenant answers the same 404 as one that does not exist. Only a user access token of the HodeiShield CLI carrying `act:decide` may call it (an OAuth-only scope, off unless the server enables it): a tenant API key, an MSSP portfolio key, a token issued for the HodeiShield MCP server and any other application are answered 403 `CREDENTIAL_NOT_ALLOWED`.
+    ///
+    /// Required scope: `act:decide`. Published in `/v1` since 2026-11-18.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error`] when the request cannot be sent, the API answers with an error, or the
+    /// body does not match the document.
+    pub fn reject_act_proposal(
+        &self,
+        id: &str,
+        reason: &str,
+    ) -> Result<crate::ApiResponse<ApproveActProposalResponse>, crate::Error> {
+        let mut body = serde_json::Map::new();
+        body.insert(
+            "reason".to_owned(),
+            serde_json::Value::String(reason.to_owned()),
+        );
+        self.post(
+            &operations::REJECT_ACT_PROPOSAL,
+            format!(
+                "/v1/act/proposals/{}/reject",
+                crate::encode_path_segment(id)?
+            ),
+            &serde_json::Value::Object(body),
         )
     }
 }

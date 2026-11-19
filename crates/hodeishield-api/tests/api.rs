@@ -1360,7 +1360,16 @@ fn the_write_operations_are_posts_under_the_write_scope() {
         .filter(|op| op.method != "GET")
         .map(|op| op.id)
         .collect();
-    assert_eq!(writes, ["acknowledgeAlert", "resolveAlert"]);
+    assert_eq!(
+        writes,
+        [
+            "acknowledgeAlert",
+            "resolveAlert",
+            "transitionRisk",
+            "approveActProposal",
+            "rejectActProposal"
+        ]
+    );
 }
 
 #[test]
@@ -1541,6 +1550,236 @@ fn the_write_refusals_the_contract_lists_arrive_as_api_errors() {
         let api = err.api().expect("api error");
         assert_eq!(api.operation, "resolveAlert");
         assert_eq!(api.required_scopes, ["alerts:write"]);
+        assert_eq!(
+            api.body
+                .as_ref()
+                .and_then(|b| b.details.as_ref())
+                .and_then(|d| d.get("code"))
+                .and_then(|v| v.as_str()),
+            Some(code)
+        );
+    }
+}
+
+// Moving a risk and deciding proposals, against a mock of the published contract.
+
+const RISK_ANSWER: &str = r#"{"data":{"id":"r1","status":"assessed","updated_at":"2026-11-18T10:00:00Z"},"changed":true}"#;
+const DECISION_ANSWER: &str = r#"{"data":{"id":"p1","status":"approved","approval_expires_at":"2026-11-18T10:15:00Z","ledger_entry_id":"l1"}}"#;
+const INBOX_ANSWER: &str = r#"{"data":[{"id":"p1","class":"create_task","module":null,"payload_kind":"task","payload":{"title":"Rotate keys","extra":{"deep":[1,2]}},"rationale":"Because.","confidence":0.5,"proposed_via":"agent","proposed_by_you":true,"created_at":"2026-11-18T09:00:00Z","expires_at":"2026-11-25T09:00:00Z","added_later":1}],"pagination":{"page":1,"per_page":50,"total":1,"total_pages":1}}"#;
+
+#[test]
+fn the_risk_and_decision_operations_have_the_scopes_the_document_gives() {
+    use hodeishield_api::v1::operations;
+    for (operation, method, path, scope) in [
+        (
+            operations::TRANSITION_RISK,
+            "POST",
+            "/v1/risks/{id}/transition",
+            "risks:write",
+        ),
+        (
+            operations::LIST_PENDING_ACT_PROPOSALS,
+            "GET",
+            "/v1/act/inbox",
+            "act:decide",
+        ),
+        (
+            operations::APPROVE_ACT_PROPOSAL,
+            "POST",
+            "/v1/act/proposals/{id}/approve",
+            "act:decide",
+        ),
+        (
+            operations::REJECT_ACT_PROPOSAL,
+            "POST",
+            "/v1/act/proposals/{id}/reject",
+            "act:decide",
+        ),
+    ] {
+        assert_eq!(operation.method, method, "{}", operation.id);
+        assert_eq!(operation.path, path);
+        assert_eq!(operation.scopes, [scope]);
+    }
+    // The proposal-creating write of the document is not in this client.
+    assert!(
+        operations::ALL
+            .iter()
+            .all(|op| op.id != "createActProposal")
+    );
+}
+
+#[test]
+fn transition_risk_posts_the_status_and_the_optional_note() {
+    let mut server = mockito::Server::new();
+    let bare = server
+        .mock("POST", "/v1/risks/r1/transition")
+        .match_header("authorization", "Bearer hsk_example")
+        .match_header("content-type", "application/json")
+        .match_body(mockito::Matcher::JsonString(
+            r#"{"to_status":"assessed"}"#.into(),
+        ))
+        .with_body(RISK_ANSWER)
+        .expect(1)
+        .create();
+    let response = client(&server)
+        .transition_risk("r1", "assessed", None)
+        .expect("ok");
+    assert!(response.data.changed);
+    assert_eq!(response.data.data.status, "assessed");
+    bare.assert();
+
+    let noted = server
+        .mock("POST", "/v1/risks/r2/transition")
+        .match_body(mockito::Matcher::JsonString(
+            r#"{"to_status":"closed","note":"mitigated"}"#.into(),
+        ))
+        .with_body(RISK_ANSWER)
+        .expect(1)
+        .create();
+    client(&server)
+        .transition_risk("r2", "closed", Some("mitigated"))
+        .expect("ok");
+    noted.assert();
+}
+
+#[test]
+fn the_inbox_is_a_get_with_the_declared_query_and_decodes_every_field() {
+    let mut server = mockito::Server::new();
+    let mock = server
+        .mock("GET", "/v1/act/inbox")
+        .match_query(mockito::Matcher::AllOf(vec![
+            mockito::Matcher::UrlEncoded("class".into(), "create_task".into()),
+            mockito::Matcher::UrlEncoded("sort".into(), "created_at".into()),
+            mockito::Matcher::UrlEncoded("per_page".into(), "10".into()),
+        ]))
+        .with_body(INBOX_ANSWER)
+        .expect(1)
+        .create();
+    let params = hodeishield_api::v1::ListPendingActProposalsParams {
+        per_page: Some(10),
+        class: Some(hodeishield_api::v1::Class::CreateTask),
+        sort: Some(hodeishield_api::v1::PendingActProposalSort::CreatedAt),
+        ..Default::default()
+    };
+    let response = client(&server)
+        .list_pending_act_proposals(&params)
+        .expect("ok");
+    let proposal = &response.data.data[0];
+    assert_eq!(proposal.id, "p1");
+    assert!(proposal.proposed_by_you);
+    assert_eq!(proposal.module, None);
+    assert_eq!(proposal.payload["extra"]["deep"][1], 2);
+    assert_eq!(response.data.pagination.total, 1);
+    mock.assert();
+}
+
+#[test]
+fn approve_and_reject_post_the_reason_and_decode_the_answer() {
+    let mut server = mockito::Server::new();
+    let approve = server
+        .mock("POST", "/v1/act/proposals/p1/approve")
+        .match_body(mockito::Matcher::JsonString(
+            r#"{"reason":"checked the payload"}"#.into(),
+        ))
+        .with_body(DECISION_ANSWER)
+        .expect(1)
+        .create();
+    let response = client(&server)
+        .approve_act_proposal("p1", "checked the payload")
+        .expect("ok");
+    assert_eq!(response.data.data.status, "approved");
+    assert_eq!(
+        response.data.data.approval_expires_at.as_deref(),
+        Some("2026-11-18T10:15:00Z")
+    );
+    approve.assert();
+
+    let reject = server
+        .mock("POST", "/v1/act/proposals/p2/reject")
+        .match_body(mockito::Matcher::JsonString(
+            r#"{"reason":"not needed"}"#.into(),
+        ))
+        .with_body(
+            r#"{"data":{"id":"p2","status":"rejected","approval_expires_at":null,"ledger_entry_id":"l2"}}"#,
+        )
+        .expect(1)
+        .create();
+    let response = client(&server)
+        .reject_act_proposal("p2", "not needed")
+        .expect("ok");
+    assert_eq!(response.data.data.approval_expires_at, None);
+    reject.assert();
+    assert!(matches!(
+        client(&server).approve_act_proposal("..", "x"),
+        Err(Error::InvalidPathArgument(_))
+    ));
+}
+
+#[test]
+fn a_decision_and_a_risk_move_are_not_sent_again_after_a_gateway_error() {
+    let mut server = mockito::Server::new();
+    let approve = server
+        .mock("POST", "/v1/act/proposals/p1/approve")
+        .with_status(503)
+        .with_body("busy")
+        .expect(1)
+        .create();
+    let err = client_with_transient_retries(&server, 2)
+        .approve_act_proposal("p1", "ok")
+        .expect_err("503");
+    assert_eq!(err.api().map(|a| a.status), Some(503));
+    approve.assert();
+
+    let transition = server
+        .mock("POST", "/v1/risks/r1/transition")
+        .with_status(502)
+        .with_body("bad gateway")
+        .expect(1)
+        .create();
+    let err = client_with_transient_retries(&server, 2)
+        .transition_risk("r1", "assessed", None)
+        .expect_err("502");
+    assert_eq!(err.api().map(|a| a.status), Some(502));
+    transition.assert();
+}
+
+#[test]
+fn the_refusals_of_the_new_operations_arrive_as_api_errors_with_their_code() {
+    for (status, code, call) in [
+        (403_usize, "STEP_UP_REQUIRED", "approve"),
+        (403, "CREDENTIAL_NOT_ALLOWED", "approve"),
+        (403, "OWN_PROPOSAL", "approve"),
+        (403, "ROLE_NOT_PERMITTED", "reject"),
+        (409, "PROPOSAL_EXPIRED", "approve"),
+        (409, "ALREADY_DECIDED", "reject"),
+        (409, "ACTIONS_PAUSED", "approve"),
+        (409, "NOT_DECIDABLE", "approve"),
+        (409, "TRANSITION_NOT_ALLOWED", "risk"),
+        (403, "WRITE_ACTOR_UNRESOLVED", "risk"),
+    ] {
+        let mut server = mockito::Server::new();
+        let path = match call {
+            "approve" => "/v1/act/proposals/p1/approve",
+            "reject" => "/v1/act/proposals/p1/reject",
+            _ => "/v1/risks/p1/transition",
+        };
+        server
+            .mock("POST", path)
+            .with_status(status)
+            .with_body(format!(
+                r#"{{"error":{{"code":"x","message":"m","request_id":"r","details":{{"code":"{code}"}}}}}}"#
+            ))
+            .create();
+        let c = client(&server);
+        let err = match call {
+            "approve" => c.approve_act_proposal("p1", "why").expect_err("refused"),
+            "reject" => c.reject_act_proposal("p1", "why").expect_err("refused"),
+            _ => c
+                .transition_risk("p1", "closed", None)
+                .expect_err("refused"),
+        };
+        let api = err.api().expect("api error");
+        assert_eq!(api.status as usize, status);
         assert_eq!(
             api.body
                 .as_ref()

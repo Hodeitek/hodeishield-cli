@@ -173,10 +173,17 @@ them to the right team.
 
 ## What the CLI guarantees
 
-- It reads, except for two commands: `alerts acknowledge` and `alerts resolve`. The generated API
-  client has a `POST` method for those two operations only. Each asks for confirmation (or takes
-  `--yes`; with no terminal and no `--yes` it refuses and sends nothing), and each needs an API key
-  with the `alerts:write` scope: a sign-in cannot write, and the CLI refuses before sending anything.
+- It reads, except for five commands: `alerts acknowledge`, `alerts resolve` and `risks transition`,
+  which need an API key with the `alerts:write` or `risks:write` scope (a sign-in cannot write them,
+  and the CLI refuses before sending anything), and `approvals approve` and `approvals reject`,
+  which need a sign-in made with `hodeishield login --decide` (an API key cannot decide, and the CLI
+  refuses before sending anything). The generated API client has a `POST` method for those five
+  operations only. Each asks for confirmation (or takes `--yes`; with no terminal and no `--yes` it
+  refuses and sends nothing), and a write is never sent again after a transport or gateway error.
+- A plain `hodeishield login` never asks for permission to decide (`act:decide`); only `login
+  --decide` does, and it tells you beforehand that the sign-in asks you to confirm your identity
+  again. Decisions work only for 15 minutes after that confirmation. Approving only records the
+  approval: the CLI does not carry the action out.
 - Credentials are never printed or logged (`--verbose` logs method, URL, status and request id
   only), and never written to disk in clear text unless you opt in to the plain-text token file
   (`HODEISHIELD_TOKEN_STORE=plaintext-file` or `token_store = plaintext-file`, Linux and macOS only;

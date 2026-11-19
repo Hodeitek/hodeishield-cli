@@ -58,14 +58,16 @@ advisories are under
 `hodeishield` is a command-line client for the public `/v1` API of
 [HodeiShield](https://hodeishield.com). It reads one organisation's third-party inventory,
 supply-chain alerts, risk register, change requests, compliance posture, evidence, endpoint agents and reports, from
-a terminal or a script. Every command reads, except two that change an alert (`alerts acknowledge`
-and `alerts resolve`): each asks for confirmation before it writes, and needs an API key with the
-`alerts:write` scope, which a sign-in does not carry. It needs a HodeiShield account to sign in with, or a tenant API
+a terminal or a script. Every command reads, except five that change data: `alerts acknowledge`,
+`alerts resolve` and `risks transition` need an API key with the `alerts:write` or `risks:write`
+scope, which a sign-in does not carry; `approvals approve` and `approvals reject` record a decision on
+a proposal and need a sign-in made with `hodeishield login --decide`, which an API key cannot do.
+Each asks for confirmation before it writes. It needs a HodeiShield account to sign in with, or a tenant API
 key.
 
 ## Security properties and secure use
 
-What the CLI guarantees (reads, apart from two confirmation-gated alert writes that need an API key; credentials never printed or logged and never written to disk
+What the CLI guarantees (reads, apart from five confirmation-gated writes; credentials never printed or logged and never written to disk
 in clear text unless you opt in to the plain-text token file, HTTPS only, no redirects followed, signed releases) is in
 [SECURITY.md](../SECURITY.md#what-the-cli-guarantees), and the risk assessment behind them is in
 [risk-assessment.md](risk-assessment.md). To use it securely:
@@ -77,9 +79,10 @@ in clear text unless you opt in to the plain-text token file, HTTPS only, no red
   `hodeishield login`: the token is kept in the system keychain (or, only if you opt in, in a
   plain-text file; see
   [Servers, containers and remote sessions](../README.md#servers-containers-and-remote-sessions)),
-  covers one tenant and only reads.
+  covers one tenant and only reads, unless you sign in with `hodeishield login --decide` to decide
+  proposals (it asks you to confirm your identity again, and decisions work for 15 minutes after).
   Scripts, CI and servers use a tenant API key with only the scopes they need (add `alerts:write`
-  only to a key that changes alerts), kept in the CI's
+  only to a key that changes alerts, and `risks:write` only to a key that moves risks), kept in the CI's
   secret store and passed in the environment, not on a command line. When
   `HODEISHIELD_API_KEY` is set, it is used for every call, whatever else is configured.
 - **Keep the configuration file free of credentials.** It holds URLs and sign-in settings only,

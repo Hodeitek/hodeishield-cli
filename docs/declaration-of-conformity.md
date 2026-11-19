@@ -23,7 +23,7 @@ A simplified declaration (Annex VI) may point to that address.
 
 - Name: HodeiShield CLI (command `hodeishield`), a product with digital elements in the default
   category (not listed in Annex III or Annex IV).
-- Type: command-line software, a client for the public `/v1` API of HodeiShield that reads, and can acknowledge or resolve an alert.
+- Type: command-line software, a client for the public `/v1` API of HodeiShield that reads, can acknowledge or resolve an alert, move a risk, and approve or reject a proposal.
 - Version: `<version>`, tagged `v<version>` at
   `https://github.com/Hodeitek/hodeishield-cli/releases/tag/v<version>`.
 - Source commit: `<commit>`.

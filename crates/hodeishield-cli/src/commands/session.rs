@@ -14,6 +14,9 @@ use serde_json::{Map, Value, json};
 use std::io::Write;
 use std::time::{Duration, Instant};
 
+/// How recent the identity confirmation of a sign-in must be for a decision.
+pub const DECISION_WINDOW_MINUTES: u32 = 15;
+
 const BROWSER_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 pub fn login(ctx: &Context, args: &LoginArgs) -> Result<()> {
@@ -36,10 +39,21 @@ fn login_with(
     )?;
     let http = oauth::http_client(&issuer)?;
     let metadata = oauth::discover(&http, &issuer)?;
-    let scopes = settings
+    let mut scopes = settings
         .oauth_scopes
         .clone()
         .unwrap_or_else(|| oauth::default_scopes(&metadata));
+    if args.decide {
+        // Opt-in only: a plain sign-in never asks for `act:decide`. Refused here, before the
+        // person is sent anywhere, when the server does not offer it.
+        scopes = oauth::with_decide_scope(scopes, &metadata)?;
+        eprintln!(
+            "You asked to sign in with permission to decide proposals. The sign-in will ask you to \
+             confirm your identity again (your second factor or password): decisions need a \
+             sign-in confirmed in the last {} minutes.",
+            DECISION_WINDOW_MINUTES
+        );
+    }
     let scopes = Some(scopes.as_slice()).filter(|s| !s.is_empty());
 
     let tokens = if args.device {
@@ -105,6 +119,7 @@ fn login_with(
         )?
     };
 
+    let decide_granted = oauth::grants(tokens.scope.as_deref(), oauth::DECIDE_SCOPE);
     let token = StoredToken {
         access_token: tokens.access_token,
         refresh_token: tokens.refresh_token,
@@ -154,6 +169,25 @@ fn login_with(
         eprintln!(
             "Note: {} is set in this shell and takes precedence for API calls.",
             auth::API_KEY_ENV
+        );
+    }
+    if args.decide {
+        if !decide_granted {
+            // The sign-in itself worked and is kept for reading, but it must not look like the
+            // decisions the person asked for are available.
+            return Err(Failure::new(
+                Kind::Forbidden,
+                "Signed in, but without permission to decide: the server did not include \
+                 `act:decide` in the sign-in. Decisions are not available with it.",
+            )
+            .hint(
+                "Decisions may be switched off for this server or tenant. The sign-in still reads \
+                 as usual; `hodeishield approvals list` will be refused.",
+            ));
+        }
+        eprintln!(
+            "Decisions are enabled. This sign-in was confirmed just now; decisions work for the \
+             next {DECISION_WINDOW_MINUTES} minutes. After that, run `hodeishield login --decide` again."
         );
     }
     Ok(())
@@ -1264,6 +1298,7 @@ mod tests {
     const DEVICE: LoginArgs = LoginArgs {
         device: true,
         no_browser: false,
+        decide: false,
     };
 
     /// An app that offers the device flow, issues `at-new` / `rt-new`, and revokes whatever it is

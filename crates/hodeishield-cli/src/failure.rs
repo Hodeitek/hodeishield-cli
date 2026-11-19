@@ -144,7 +144,11 @@ pub fn from_api(error: hodeishield_api::Error, context: &ApiContext<'_>) -> Fail
                         "The tenant is deactivated.".to_owned()
                     } else if is_write(&api) {
                         // A write is also refused while the licence is in its grace period.
-                        format!("The tenant's licence is not in force{state}, so alerts cannot be changed.")
+                        format!(
+                            "The tenant's licence is not in force{state}, so {} cannot be {}.",
+                            write_noun(&api),
+                            if api.operation.ends_with("ActProposal") { "decided" } else { "changed" }
+                        )
                     } else {
                         format!("The tenant's licence is not in force{state}.")
                     };
@@ -228,25 +232,79 @@ pub fn from_api(error: hodeishield_api::Error, context: &ApiContext<'_>) -> Fail
                 403 if detail(&api, "code") == Some("PLAN_WITHOUT_API") => {
                     plan_without_api(Kind::Forbidden)
                 }
-                403 if detail(&api, "code") == Some("ROLE_NOT_PERMITTED") => Failure::new(
+                403 if detail(&api, "code") == Some("STEP_UP_REQUIRED") => {
+                    // The window is the server's: `max_grant_age_seconds`, 900 today.
+                    let minutes = detail_u64(&api, "max_grant_age_seconds")
+                        .filter(|s| (60..=86_400).contains(s))
+                        .map_or(15, |s| s.div_ceil(60));
+                    Failure::new(
+                        Kind::Forbidden,
+                        format!(
+                            "Decisions need a sign-in confirmed in the last {minutes} minutes. \
+                             Run `hodeishield login --decide` and try again."
+                        ),
+                    )
+                    .hint(
+                        "The sign-in asks you to confirm your identity again. Refreshing the \
+                         sign-in does not extend the window. Nothing was decided.",
+                    )
+                }
+                403 if detail(&api, "code") == Some("CREDENTIAL_NOT_ALLOWED") => Failure::new(
                     Kind::Forbidden,
-                    if api.operation == "resolveAlert" {
-                        "The role this key acts with may not close this alert. Nothing was changed."
-                    } else {
-                        "The role this key acts with may not acknowledge alerts. Nothing was changed."
-                    },
+                    "Decisions need a sign-in made with the CLI, not an API key or another \
+                     application's token. Nothing was decided.",
                 )
                 .hint(
-                    "A key acts with the role of the user who created it. An MSSP analyst's key \
-                     closes medium and low alerts only. Use a key created by a user whose role may \
-                     do this in the app.",
+                    "Unset HODEISHIELD_API_KEY if it is set, and run `hodeishield login --decide`.",
                 ),
+                403 if detail(&api, "code") == Some("OWN_PROPOSAL") => Failure::new(
+                    Kind::Forbidden,
+                    "This proposal was made for you, and the tenant's rules do not let you approve \
+                     your own proposal. Nothing was decided.",
+                )
+                .hint("Another person with the right role has to approve it."),
+                403 if detail(&api, "code") == Some("ROLE_NOT_PERMITTED") => {
+                    let decision = api.operation.ends_with("ActProposal");
+                    Failure::new(
+                        Kind::Forbidden,
+                        match api.operation {
+                            "resolveAlert" => "The role this key acts with may not close this alert. Nothing was changed.",
+                            "transitionRisk" => "The role this key acts with may not move risks. Nothing was changed.",
+                            "approveActProposal" => "Your role may not approve this proposal. Nothing was decided.",
+                            "rejectActProposal" => "Your role may not reject this proposal. Nothing was decided.",
+                            _ => "The role this key acts with may not acknowledge alerts. Nothing was changed.",
+                        },
+                    )
+                    .hint(if decision {
+                        "The role an action class and the tenant's policy require decides who may \
+                         approve it. Ask a person with that role."
+                    } else if api.operation == "transitionRisk" {
+                        "A key acts with the role of the user who created it, and only an \
+                         administrator role of the tenant may move a risk. Use a key created by \
+                         such a user."
+                    } else {
+                        "A key acts with the role of the user who created it. An MSSP analyst's key \
+                         closes medium and low alerts only. Use a key created by a user whose role \
+                         may do this in the app."
+                    })
+                }
                 403 if detail(&api, "code") == Some("WRITE_ACTOR_UNRESOLVED") => Failure::new(
                     Kind::Forbidden,
-                    "The user who created this key no longer exists, is not active or no longer \
-                     reaches the tenant. Nothing was changed.",
+                    if api.operation.ends_with("ActProposal") {
+                        "Your account no longer exists, is not active or no longer reaches the \
+                         tenant. Nothing was decided."
+                    } else {
+                        "The user who created this key no longer exists, is not active or no longer \
+                         reaches the tenant. Nothing was changed."
+                    },
                 )
-                .hint("Ask for a new key, created by a user who can triage alerts."),
+                .hint(if api.operation == "transitionRisk" {
+                    "Ask for a new key, created by an administrator of the tenant."
+                } else if api.operation.ends_with("ActProposal") {
+                    "Ask a tenant administrator to check your access."
+                } else {
+                    "Ask for a new key, created by a user who can triage alerts."
+                }),
                 403 if detail(&api, "code") == Some("MFA_ENROLLMENT_REQUIRED") => Failure::new(
                     Kind::Forbidden,
                     "This account must enrol multi-factor authentication before it can use the API.",
@@ -276,7 +334,10 @@ pub fn from_api(error: hodeishield_api::Error, context: &ApiContext<'_>) -> Fail
                         .iter()
                         .map(|s| context.fill_scope(s))
                         .collect();
-                    let hint = if context.is_portfolio_key {
+                    let hint = if scopes.iter().any(|s| s == "act:decide") {
+                        "This sign-in was not given permission to decide. Run \
+                         `hodeishield login --decide`."
+                    } else if context.is_portfolio_key {
                         "Ask an organisation administrator of your MSSP organisation for a key or \
                          access with that scope."
                     } else {
@@ -330,6 +391,10 @@ pub fn from_api(error: hodeishield_api::Error, context: &ApiContext<'_>) -> Fail
                         Some("write_key") => Some(
                             "This key has used its allowance of changes for the minute; reads are \
                              counted apart. Space out the changes a script makes.",
+                        ),
+                        Some("decision_user") => Some(
+                            "You have made as many decisions as are allowed for the minute. Wait \
+                             before the next one.",
                         ),
                         Some("tenant") if context.tenant_selected => Some(
                             "This client tenant's own limit is used up; other client tenants are \
@@ -450,6 +515,64 @@ fn conflict(api: &hodeishield_api::ApiError, server_message: Option<&str>) -> Fa
             "The alert changed while this request was being applied. Nothing was changed.",
         )
         .hint("Read it again with `hodeishield alerts get <id>`, and repeat the command if it is still needed."),
+        Some("TRANSITION_NOT_ALLOWED") => {
+            let word = |s: &str| {
+                !s.is_empty()
+                    && s.len() <= 32
+                    && s.chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+            };
+            let current = detail(api, "status").filter(|s| word(s));
+            let allowed: Vec<&str> = details
+                .and_then(|d| d.get("allowed"))
+                .and_then(serde_json::Value::as_array)
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str())
+                        .filter(|s| word(s))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let failure = Failure::general(match current {
+                Some(status) => format!(
+                    "The risk's lifecycle does not allow that move from `{status}`. Nothing was changed."
+                ),
+                None => "The risk's lifecycle does not allow that move. Nothing was changed."
+                    .to_owned(),
+            });
+            if allowed.is_empty() {
+                failure
+            } else {
+                failure.hint(format!("From there it may move to: {}.", allowed.join(", ")))
+            }
+        }
+        Some("PROPOSAL_EXPIRED") => Failure::general(
+            "The proposal expired, so nobody can decide it any more. Nothing was decided.",
+        )
+        .hint("`hodeishield approvals list` shows what is still waiting."),
+        Some("ALREADY_DECIDED") => Failure::general(
+            "The proposal is no longer waiting for a decision: it was already approved, rejected, \
+             carried out or ended. Nothing was decided.",
+        )
+        .hint("`hodeishield approvals list` shows what is still waiting."),
+        Some("ACTIONS_PAUSED") => Failure::general(
+            "Actions are paused for this tenant or for the whole service, so a proposal cannot be \
+             decided now. Nothing was decided.",
+        )
+        .hint("Try again when actions are switched on again."),
+        Some("NOT_DECIDABLE") => {
+            let reason = detail(api, "reason")
+                .filter(|s| {
+                    !s.is_empty()
+                        && s.len() <= 48
+                        && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+                })
+                .map_or_else(String::new, |r| format!(" (reason: {r})"));
+            Failure::general(format!(
+                "The proposal cannot be decided{reason}. Nothing was decided."
+            ))
+            .hint("`hodeishield approvals list` shows what is still waiting.")
+        }
         Some("REPORT_NOT_READY") if detail(api, "status") == Some("failed") => {
             Failure::general("The report failed to generate, so it has no file.")
                 .hint("Generate it again in the app.")
@@ -505,9 +628,34 @@ fn sentence_body(message: &str) -> &str {
     message.trim_end().trim_end_matches(['.', '!', '?'])
 }
 
-/// Whether the call that failed was one of the alert writes.
+/// Whether the call that failed was one of the writes (alerts, risks, decisions).
 fn is_write(api: &hodeishield_api::ApiError) -> bool {
-    matches!(api.operation, "acknowledgeAlert" | "resolveAlert")
+    matches!(
+        api.operation,
+        "acknowledgeAlert"
+            | "resolveAlert"
+            | "transitionRisk"
+            | "approveActProposal"
+            | "rejectActProposal"
+    )
+}
+
+/// What a refused write was going to change, for the licence message.
+fn write_noun(api: &hodeishield_api::ApiError) -> &'static str {
+    match api.operation {
+        "transitionRisk" => "risks",
+        "approveActProposal" | "rejectActProposal" => "proposals",
+        _ => "alerts",
+    }
+}
+
+/// A non-negative whole number member of `error.details`.
+fn detail_u64(api: &hodeishield_api::ApiError, key: &str) -> Option<u64> {
+    api.body
+        .as_ref()
+        .and_then(|b| b.details.as_ref())
+        .and_then(|d| d.get(key))
+        .and_then(serde_json::Value::as_u64)
 }
 
 fn detail<'a>(api: &'a hodeishield_api::ApiError, key: &str) -> Option<&'a str> {

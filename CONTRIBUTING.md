@@ -4,10 +4,11 @@ Thanks for helping. Bug reports, fixes and documentation improvements are welcom
 
 ## Ground rules
 
-- **The CLI reads, with two explicit writes.** `alerts acknowledge` and `alerts resolve` are the only
-  commands that change data, and each is gated by a confirmation and an API key. A new write is added
-  only for a specific customer need, as its own command with a confirmation, a separate write scope,
-  tests and documentation.
+- **The CLI reads, with a few explicit writes.** `alerts acknowledge`, `alerts resolve` and `risks
+  transition` (each gated by a confirmation and an API key), and `approvals approve` and `approvals
+  reject` (each gated by a confirmation and a sign-in made with `login --decide`) are the only
+  commands that change data. A new write is added only for a specific customer need, as its own
+  command with a confirmation, a separate write scope, tests and documentation.
 - **Credentials stay in the keychain, the environment or the opt-in token file.** No change may write
   a token or key anywhere else, print it, or log it, and nothing may fall back from one store to the
   other. Tests assert this; keep them passing.

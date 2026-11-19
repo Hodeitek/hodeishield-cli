@@ -7,11 +7,12 @@ use crate::filters;
 use clap::builder::{PossibleValuesParser, TypedValueParser};
 use clap::{Args, CommandFactory, Parser, Subcommand};
 use hodeishield_api::ParseEnumError;
+use hodeishield_api::v1::Class as ActClass;
 use hodeishield_api::v1::operations;
 use hodeishield_api::v1::{
     AlertSort, AlertStatus, BusinessCriticality, ChangeCategory, ChangeSort, ChangeStatus,
     ChangeType, ComplianceControlSort, EndpointSort, EndpointStatus, EvidenceSort, Format, Locale,
-    Order, ReportSort, RiskSort, VendorSort,
+    Order, PendingActProposalSort, ReportSort, RiskSort, VendorSort,
 };
 use std::io::IsTerminal;
 use std::path::PathBuf;
@@ -28,11 +29,24 @@ Several client tenants (portfolio credential):
   hodeishield --tenant <slug|id> vendors list    One client.
   hodeishield --all-tenants vendors list         Every client, with a tenant column.
 
-Changing data (the only two commands that write):
+Changing data (the only commands that write):
   hodeishield alerts acknowledge <id>             Mark an open alert as taken.
   hodeishield alerts resolve <id> --reason TEXT   Close an alert, with the reason.
-  Both ask you to confirm first (--yes skips the question; without a terminal and without --yes they
-  refuse), and both need HODEISHIELD_API_KEY with the `alerts:write` scope.
+  hodeishield risks transition <id> --to STATUS   Move a risk along its lifecycle.
+  These need HODEISHIELD_API_KEY with the `alerts:write` or `risks:write` scope. A sign-in cannot
+  write them.
+
+Deciding proposals (needs a sign-in, never an API key):
+  hodeishield login --decide                      Sign in with permission to decide; it asks you to
+                                                  confirm your identity again.
+  hodeishield approvals list                      The proposals you may approve.
+  hodeishield approvals approve <id> --reason TEXT   Record your approval. It does not carry the
+                                                  action out: the service does that later.
+  hodeishield approvals reject <id> --reason TEXT    Reject a proposal, with the reason.
+  Decisions need a sign-in confirmed in the last 15 minutes.
+
+Every command that changes data or decides asks you to confirm first (--yes skips the question;
+without a terminal and without --yes it refuses and sends nothing).
 
 Exit codes:
   0 ok · 1 error · 2 usage · 3 not authenticated · 4 missing scope · 5 not found
@@ -40,9 +54,11 @@ Exit codes:
 
 /// Command-line client for HodeiShield.
 ///
-/// Every command reads, except two that change an alert: `alerts acknowledge` and `alerts
-/// resolve`. Each asks for confirmation (or `--yes`) before it writes, and each needs an API key
-/// with the `alerts:write` scope: a sign-in made with `hodeishield login` can only read.
+/// Every command reads, except those that change an alert (`alerts acknowledge`, `alerts resolve`)
+/// or a risk (`risks transition`), which need an API key with the `alerts:write` or `risks:write`
+/// scope, and the decisions on proposals (`approvals approve`, `approvals reject`), which need a
+/// sign-in made with `hodeishield login --decide`. Each asks for confirmation (or `--yes`) before
+/// it writes.
 #[derive(Debug, Parser)]
 #[command(name = "hodeishield", version, propagate_version = true, after_help = AFTER_HELP)]
 pub struct Cli {
@@ -111,6 +127,9 @@ pub enum Command {
     /// Entries of the risk register.
     #[command(subcommand)]
     Risks(RisksCommand),
+    /// Proposals waiting for a person's decision: list, approve, reject.
+    #[command(subcommand)]
+    Approvals(ApprovalsCommand),
     /// Change requests of the change-management register.
     #[command(subcommand)]
     Changes(ChangesCommand),
@@ -159,7 +178,14 @@ With --device, you get a short code to type in on any other device instead.
 On the consent screen you choose the one tenant the CLI may read; the token covers only that \
 tenant, and only reads. The scopes asked for are the ones the CLI's commands need (see \
 `config set oauth_scopes` to ask for fewer). Revoke the access with `hodeishield logout`, or in the \
-app under Account → Applications.";
+app under Account → Applications.
+
+With --decide the sign-in also asks for permission to see and decide the proposals waiting for \
+approval (`hodeishield approvals`). A plain login never asks for it. The sign-in asks you to \
+confirm your identity again (your second factor or password), and decisions work only for 15 \
+minutes after that confirmation: refreshing the sign-in does not extend it, so run `login --decide` \
+again when it lapses. If the server does not grant the permission (decisions can be switched off), \
+the command says so and exits 4.";
 
 #[derive(Debug, Args)]
 pub struct LoginArgs {
@@ -169,6 +195,10 @@ pub struct LoginArgs {
     /// Print the sign-in URL instead of opening a browser.
     #[arg(long, conflicts_with = "device")]
     pub no_browser: bool,
+    /// Also ask for permission to see and decide proposals waiting for approval (`approvals`).
+    /// The sign-in asks you to confirm your identity again.
+    #[arg(long)]
+    pub decide: bool,
 }
 
 impl Cli {
@@ -196,8 +226,8 @@ impl Cli {
             Self::command()
                 .error(
                     clap::error::ErrorKind::InvalidValue,
-                    "refusing to change an alert without confirmation: standard input is not a \
-                     terminal, so there is nobody to ask; pass --yes to confirm the change",
+                    "refusing to change data or decide without confirmation: standard input is not a \
+                     terminal, so there is nobody to ask; pass --yes to confirm",
                 )
                 .exit();
         }
@@ -281,6 +311,10 @@ impl Command {
         match self {
             Self::Alerts(AlertsCommand::Acknowledge(args)) => !args.confirm.yes,
             Self::Alerts(AlertsCommand::Resolve(args)) => !args.confirm.yes,
+            Self::Risks(RisksCommand::Transition(args)) => !args.confirm.yes,
+            Self::Approvals(ApprovalsCommand::Approve(args) | ApprovalsCommand::Reject(args)) => {
+                !args.confirm.yes
+            }
             _ => false,
         }
     }
@@ -432,8 +466,8 @@ the role of the user who created it; an MSSP analyst's key closes medium and low
 /// The confirmation every write asks for.
 #[derive(Debug, Args)]
 pub struct Confirm {
-    /// Do not ask for confirmation: change the alert straight away. Needed when standard input is
-    /// not a terminal.
+    /// Do not ask for confirmation: go ahead straight away. Needed when standard input is not a
+    /// terminal.
     #[arg(short = 'y', long)]
     pub yes: bool,
 }
@@ -507,6 +541,139 @@ pub enum RisksCommand {
         /// Risk id.
         id: String,
     },
+    /// Move a risk to another lifecycle status. Writes: asks for confirmation, needs an API key.
+    #[command(long_about = TRANSITION_ABOUT)]
+    Transition(RiskTransition),
+}
+
+const TRANSITION_ABOUT: &str = "\
+Move a risk-register entry to another lifecycle status, with an optional note. The lifecycle allows \
+identified -> assessed -> treatment_planned -> treatment_implemented -> closed, and closed -> \
+assessed; any other move is refused and nothing changes. Asking for the status the entry already \
+has changes nothing.
+
+This command writes. It first shows the risk (its title and status) and the change, and asks you to \
+confirm; --yes skips the question. With no terminal on standard input and no --yes it refuses and \
+sends nothing.
+
+It needs HODEISHIELD_API_KEY: a tenant API key, or an MSSP portfolio key (with --tenant), that holds \
+the `risks:write` scope. A sign-in made with `hodeishield login` cannot write. The key acts with the \
+role of the user who created it; only an administrator role of the tenant may move a risk. Every \
+change is written to the risk's history and to the tenant's audit trail.";
+
+/// The statuses a risk can be moved to, as the API document lists them.
+const RISK_STATUSES: &[&str] = &[
+    "identified",
+    "assessed",
+    "treatment_planned",
+    "treatment_implemented",
+    "closed",
+];
+
+#[derive(Debug, Args)]
+pub struct RiskTransition {
+    /// Risk id.
+    pub id: String,
+    /// The status to move the risk to.
+    #[arg(long = "to", value_name = "STATUS", required = true, value_parser = PossibleValuesParser::new(RISK_STATUSES))]
+    pub to_status: String,
+    /// Why, kept in the risk's history and the audit trail (at most 2000 characters).
+    #[arg(long, value_name = "TEXT", value_parser = risk_note)]
+    pub note: Option<String>,
+    #[command(flatten)]
+    pub confirm: Confirm,
+}
+
+fn risk_note(text: &str) -> Result<String, String> {
+    if text.chars().count() > 2000 {
+        return Err("at most 2000 characters".to_owned());
+    }
+    Ok(text.to_owned())
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ApprovalsCommand {
+    /// List the proposals waiting for you to decide. Needs `login --decide`.
+    #[command(long_about = APPROVALS_LIST_ABOUT)]
+    List(ApprovalsList),
+    /// Record your approval of a proposal. It does not carry the action out. Needs `login --decide`.
+    #[command(long_about = APPROVE_ABOUT)]
+    Approve(ApprovalDecision),
+    /// Reject a proposal, with the reason. Needs `login --decide`.
+    #[command(long_about = REJECT_ABOUT)]
+    Reject(ApprovalDecision),
+}
+
+const APPROVALS_LIST_ABOUT: &str = "\
+List the proposals of the tenant that you may approve and that are still waiting for a decision, \
+the one that expires first on top. The server decides what is listed: a proposal you could not \
+approve is not shown. `proposed by you` says the proposal was made for you. With --json you get \
+what each proposal would write (its payload) and why it was proposed.
+
+Needs a sign-in made with `hodeishield login --decide`, confirmed in the last 15 minutes; an API \
+key cannot decide.";
+
+const APPROVE_ABOUT: &str = "\
+Record your approval of one proposal. This only records the approval: it does not carry the \
+action out. The service carries it out later, with its own checks, and only before the approval \
+lapses (15 minutes).
+
+This command decides. It first shows the proposal from your list (what it would write and why it \
+was proposed) and asks you to confirm; --yes skips the question. With no terminal on standard input \
+and no --yes it refuses and sends nothing.
+
+Needs a sign-in made with `hodeishield login --decide`, confirmed in the last 15 minutes (refreshing \
+it does not extend that); an API key cannot decide. The decision is written to the tenant's audit \
+trail with your name and the reason.";
+
+const REJECT_ABOUT: &str = "\
+Reject one proposal, with the reason why. Nothing is carried out.
+
+This command decides. It first shows the proposal when it is in your list and asks you to confirm; \
+--yes skips the question. With no terminal on standard input and no --yes it refuses and sends \
+nothing.
+
+Needs a sign-in made with `hodeishield login --decide`, confirmed in the last 15 minutes (refreshing \
+it does not extend that); an API key cannot decide. The decision is written to the tenant's audit \
+trail with your name and the reason.";
+
+#[derive(Debug, Args)]
+pub struct ApprovalsList {
+    /// Only proposals of this action class.
+    #[arg(long, value_parser = choice::<ActClass>(ActClass::VALUES))]
+    pub class: Option<ActClass>,
+    /// Only proposals whose action class needs this module.
+    #[arg(long)]
+    pub module: Option<String>,
+    /// Only proposals that stop being decidable before this instant (RFC 3339).
+    #[arg(long, value_name = "WHEN")]
+    pub expires_before: Option<String>,
+    /// Field to order by.
+    #[arg(long, value_parser = choice::<PendingActProposalSort>(PendingActProposalSort::VALUES))]
+    pub sort: Option<PendingActProposalSort>,
+    #[command(flatten)]
+    pub paging: Paging,
+}
+
+#[derive(Debug, Args)]
+pub struct ApprovalDecision {
+    /// Proposal id, from `approvals list`.
+    pub id: String,
+    /// Why: 1 to 1000 characters, kept in the audit trail.
+    #[arg(long, required = true, value_name = "TEXT", value_parser = decision_reason)]
+    pub reason: String,
+    #[command(flatten)]
+    pub confirm: Confirm,
+}
+
+fn decision_reason(text: &str) -> Result<String, String> {
+    if text.trim().is_empty() {
+        return Err("a reason is required".to_owned());
+    }
+    if text.chars().count() > 1000 {
+        return Err("at most 1000 characters".to_owned());
+    }
+    Ok(text.to_owned())
 }
 
 #[derive(Debug, Args)]

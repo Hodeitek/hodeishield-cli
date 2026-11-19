@@ -89,6 +89,19 @@ fn every_query_parameter_the_client_sends_is_declared_for_its_operation() {
         .query_pairs(),
     );
     check(
+        "listPendingActProposals",
+        hodeishield_api::v1::ListPendingActProposalsParams {
+            page: Some(1),
+            per_page: Some(1),
+            sort: Some(hodeishield_api::v1::PendingActProposalSort::ExpiresAt),
+            order: Some(Order::Asc),
+            class: Some(hodeishield_api::v1::Class::CreateTask),
+            module: s("supply_risk"),
+            expires_before: s("2026-01-01T00:00:00Z"),
+        }
+        .query_pairs(),
+    );
+    check(
         "listRisks",
         ListRisksParams {
             page: Some(1),
@@ -321,4 +334,67 @@ fn the_alert_writes_send_what_the_document_declares() {
     ack.assert();
     resolve.assert();
     assert_eq!(operations::ACKNOWLEDGE_ALERT.method, "POST");
+}
+
+/// The risk move and the two decisions send exactly the body members the document declares.
+#[test]
+fn the_risk_and_decision_writes_send_what_the_document_declares() {
+    use hodeishield_api::Client;
+    use mockito::Matcher;
+    use secrecy::SecretString;
+    assert_eq!(
+        declared_body("transitionRisk"),
+        [("to_status".to_owned(), true), ("note".to_owned(), false)]
+    );
+    assert_eq!(
+        declared_body("approveActProposal"),
+        [("reason".to_owned(), true)]
+    );
+    assert_eq!(
+        declared_body("rejectActProposal"),
+        [("reason".to_owned(), true)]
+    );
+    for id in ["transitionRisk", "approveActProposal", "rejectActProposal"] {
+        assert!(declared(id).is_empty(), "{id} declares a query parameter");
+    }
+
+    let mut server = mockito::Server::new();
+    let keys = |allowed: &'static [&'static str]| {
+        move |request: &mockito::Request| {
+            let value: Value =
+                serde_json::from_slice(request.body().expect("a body")).expect("a JSON body");
+            value
+                .as_object()
+                .expect("an object")
+                .keys()
+                .all(|k| allowed.contains(&k.as_str()))
+        }
+    };
+    let risk = server
+        .mock("POST", "/v1/risks/r1/transition")
+        .match_query(Matcher::Missing)
+        .match_request(keys(&["to_status", "note"]))
+        .with_body(r#"{"data":{"id":"r1","status":"assessed","updated_at":"2026-11-18T10:00:00Z"},"changed":true}"#)
+        .expect(1)
+        .create();
+    let decision = server
+        .mock("POST", Matcher::Regex("^/v1/act/proposals/p1/(approve|reject)$".into()))
+        .match_query(Matcher::Missing)
+        .match_request(keys(&["reason"]))
+        .with_body(r#"{"data":{"id":"p1","status":"approved","approval_expires_at":null,"ledger_entry_id":"l1"}}"#)
+        .expect(2)
+        .create();
+    let client = Client::builder(
+        server.url().parse().expect("url"),
+        SecretString::from("hsk_example"),
+    )
+    .build()
+    .expect("client");
+    client
+        .transition_risk("r1", "assessed", Some("why"))
+        .expect("ok");
+    client.approve_act_proposal("p1", "why").expect("ok");
+    client.reject_act_proposal("p1", "why").expect("ok");
+    risk.assert();
+    decision.assert();
 }
