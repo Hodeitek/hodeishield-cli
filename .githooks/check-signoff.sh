@@ -12,6 +12,12 @@ set -eu
 # are signed off, by the same maintainer, and they are on a protected branch,
 # so they cannot be rewritten. Exactly these eight are exempt. Merges are now
 # made with a matching identity, so this list must not grow.
+#
+# One later exception: 9ae08abba9, the merge of pull request #288, was made
+# through the merge API without any Signed-off-by trailer. The commit it merges
+# (e20eca3) is signed off, it sits on a protected branch and cannot be
+# rewritten, so it is exempt by its exact SHA. Merges are made locally with
+# --signoff, so this list must not grow again.
 EXEMPT="
 4117b83a5ec23aa814095e49313242f4255fa4b5
 89037a9edc2da99dbdd2aba6f7144b6a38ee2d6d
@@ -21,6 +27,7 @@ EXEMPT="
 ed7517308c478e0c9a349f5ddde8e11235a6b649
 57602477dcd0de9eaa20cf14141bec3478691572
 17032b2f2c0033905d29ab43b51d5c7c1be9a9a5
+9ae08abba97163f788bcdab00765e9b6fef7886a
 "
 
 status=0
