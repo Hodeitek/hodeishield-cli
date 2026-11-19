@@ -6,9 +6,9 @@ from it; nothing in that client is written by hand from memory.
 
 | Field | Value |
 |---|---|
-| `info.version` | `2026-11-18` |
-| SHA-256 | `f2a791396786e012d6577ab56786f99da5882afb5995b5ea575b1d2ac4e3d8d7` |
-| Operations | 25 (19 `GET`, 6 `POST`); the client generates the `GET` ones and five writes: the two alert writes (`acknowledgeAlert`, `resolveAlert`), the risk move (`transitionRisk`) and the two decisions (`approveActProposal`, `rejectActProposal`) |
+| `info.version` | `2026-11-19` |
+| SHA-256 | `2988d7971258238b49eeed528ccd37db5a22af65afa73456f24b304039ace2e9` |
+| Operations | 29 (23 `GET`, 6 `POST`); the client generates the `GET` ones and five writes: the two alert writes (`acknowledgeAlert`, `resolveAlert`), the risk move (`transitionRisk`) and the two decisions (`approveActProposal`, `rejectActProposal`) |
 
 ## Updating it
 

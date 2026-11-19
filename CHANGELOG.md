@@ -8,6 +8,21 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ### Added
 
+- `hodeishield incidents list`, `incidents get <id>`, `hodeishield ai-systems list` and
+  `ai-systems get <id>` read the incident register (with each incident's regulatory notification
+  deadlines under DORA, NIS2, GDPR and the AI Act) and the register of AI systems, through
+  `GET /v1/incidents`, `/v1/incidents/{id}`, `/v1/ai-systems` and `/v1/ai-systems/{id}`. Incidents
+  filter by `--status`, `--severity` and `--type` and sort by `detected_at`, `created_at` or
+  `updated_at`; AI systems filter by `--risk-class`, `--lifecycle-status` and `--vendor` and sort by
+  `created_at`, `updated_at` or `name`. Both take the usual paging options, `--all`, `--csv` and
+  `--json` (the API's answer unchanged), and work with a portfolio key through `--tenant` and
+  `--all-tenants`. They need the `incidents:read` and `ai_systems:read` scopes: a sign-in now asks for
+  them when the app offers them (sign in again to get them), and a credential without the scope, or a
+  plan without the module, gets its own message and exit code 4. The vendored OpenAPI document is
+  updated to 2026-11-19.
+  ([#56](https://github.com/Hodeitek/hodeishield-cli/issues/56),
+  [#59](https://github.com/Hodeitek/hodeishield-cli/issues/59))
+
 - `hodeishield alerts acknowledge <id>` and `hodeishield alerts resolve <id> --reason <text>` change
   an alert's status through `POST /v1/alerts/{id}/acknowledge` and `.../resolve` (the first commands
   that write). Each shows the alert (id, title, severity, status) and the change and asks for

@@ -13,7 +13,7 @@
 use serde::{Deserialize, Serialize};
 
 /// `info.version` of the OpenAPI document this client was generated from.
-pub const OPENAPI_VERSION: &str = "2026-11-18";
+pub const OPENAPI_VERSION: &str = "2026-11-19";
 
 /// The server the OpenAPI document declares.
 pub const DEFAULT_SERVER: &str = "https://api.hodeishield.com";
@@ -656,6 +656,137 @@ pub struct Change {
 pub struct ListChangesResponse {
     pub data: Vec<Change>,
     pub pagination: Pagination,
+}
+
+/// One regulatory notification deadline of the incident.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Notifications {
+    /// Regulatory regime: dora | nis2 | gdpr | aiact.
+    pub framework: String,
+    /// The report this deadline is for, within its regime (for example `early_warning`, `notification` and `final` under NIS2; `initial`, `intermediate` and `final` under DORA): initial | intermediate | intermediate_recovery | final | client_notification | early_warning | notification | recipient_notification | dpa_notification | subject_notification | controller_notification | serious_incident.
+    pub stage: String,
+    /// Live state, computed on every read as the console computes it: `pending` (due, not yet submitted), `overdue` (past due, not submitted), `met` / `met_late` (submitted on or before / after the due date), `awaiting` (the event its clock runs from is not recorded yet, so it has no date), `undue_delay` (the norm sets no figure, so it has no date). Known values: pending | met | met_late | overdue | na | awaiting | undue_delay.
+    pub status: String,
+    /// The event the clock runs from: awareness | classified | previous_submission | resolved | recovered; null on a deadline stored before anchors were recorded.
+    #[serde(default)]
+    pub anchor: Option<String>,
+    /// RFC 3339, UTC. Null while `awaiting`, and for `undue_delay`: never an invented date.
+    #[serde(default)]
+    pub due_at: Option<String>,
+    /// RFC 3339, UTC: when the report that met this deadline was submitted (the earliest recorded submission that satisfies it). Null while none has.
+    #[serde(default)]
+    pub submitted_at: Option<String>,
+}
+
+/// One incident of the tenant register, with its notification deadlines.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Incident {
+    pub id: String,
+    /// Human reference, unique per tenant.
+    pub reference: String,
+    pub title: String,
+    /// Incident type: cybersecurity | service_disruption | data_breach | system_failure | third_party | fraud | physical | compliance.
+    pub r#type: String,
+    /// Severity: critical | high | medium | low.
+    pub severity: String,
+    /// Lifecycle status: open | investigating | contained | resolved | closed.
+    pub status: String,
+    /// Response phase: detection | classification | response | resolution | post_incident.
+    pub phase: String,
+    /// RFC 3339, UTC.
+    pub occurred_at: String,
+    /// RFC 3339, UTC: the moment of awareness.
+    pub detected_at: String,
+    /// RFC 3339, UTC: when the incident was classified as major (DORA).
+    #[serde(default)]
+    pub classified_major_at: Option<String>,
+    /// RFC 3339, UTC.
+    #[serde(default)]
+    pub contained_at: Option<String>,
+    /// RFC 3339, UTC: when regular activities were recovered (DORA).
+    #[serde(default)]
+    pub recovered_at: Option<String>,
+    /// RFC 3339, UTC.
+    #[serde(default)]
+    pub resolved_at: Option<String>,
+    /// RFC 3339, UTC: when it last entered `closed`.
+    #[serde(default)]
+    pub closed_at: Option<String>,
+    pub personal_data_breached: bool,
+    pub cross_border: bool,
+    pub ai_system_involved: bool,
+    /// The tenant's AI Act role towards the AI system involved: provider | deployer; null when not declared.
+    #[serde(default)]
+    pub aiact_role: Option<String>,
+    /// The tenant's GDPR role for this incident: controller | processor; null when the tenant's general declaration applies.
+    #[serde(default)]
+    pub gdpr_role: Option<String>,
+    /// The third party the incident involves, when any.
+    #[serde(default)]
+    pub vendor_id: Option<String>,
+    /// The regulatory notification deadlines of the incident, by regime then due date. Empty when no regime applies.
+    pub notifications: Vec<Notifications>,
+    /// RFC 3339, UTC.
+    pub created_at: String,
+    /// RFC 3339, UTC.
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ListIncidentsResponse {
+    pub data: Vec<Incident>,
+    pub pagination: Pagination,
+    /// Present only when at least one filter value is outside its published list; omitted otherwise.
+    #[serde(default)]
+    pub meta: Option<Meta>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GetIncidentResponse {
+    /// One incident of the tenant register, with its notification deadlines.
+    pub data: Incident,
+}
+
+/// One AI system of the tenant register.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AiSystem {
+    pub id: String,
+    /// Name of the system, unique per tenant.
+    pub name: String,
+    /// EU AI Act risk class recorded for the system: prohibited | high_risk | transparency | minimal.
+    pub risk_class: String,
+    /// Lifecycle status: planned | pilot | in_use | retired.
+    pub lifecycle_status: String,
+    /// Kind of system: llm | agent | rag | predictive; null when not stated.
+    #[serde(default)]
+    pub system_type: Option<String>,
+    /// The organisational unit that owns the system, as the tenant labelled it.
+    #[serde(default)]
+    pub department: Option<String>,
+    /// The third party that provides the system, when any.
+    #[serde(default)]
+    pub vendor_id: Option<String>,
+    /// Categories of data the system processes.
+    pub data_categories: Vec<String>,
+    /// RFC 3339, UTC.
+    pub created_at: String,
+    /// RFC 3339, UTC: the last change to the entry.
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ListAiSystemsResponse {
+    pub data: Vec<AiSystem>,
+    pub pagination: Pagination,
+    /// Present only when at least one filter value is outside its published list; omitted otherwise.
+    #[serde(default)]
+    pub meta: Option<Meta>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GetAiSystemResponse {
+    /// One AI system of the tenant register.
+    pub data: AiSystem,
 }
 
 /// The state of the alert after the request. Its content (title, description, vendor) is `GET /v1/alerts/{id}`, under `supply_risk:read`.
@@ -1645,6 +1776,96 @@ impl std::str::FromStr for ChangeCategory {
 
 /// Accepted values of a query parameter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum IncidentSort {
+    /// `detected_at`
+    DetectedAt,
+    /// `created_at`
+    CreatedAt,
+    /// `updated_at`
+    UpdatedAt,
+}
+
+impl IncidentSort {
+    /// Every accepted value, as sent on the wire.
+    pub const VALUES: &'static [&'static str] = &["detected_at", "created_at", "updated_at"];
+
+    /// The value as sent on the wire.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::DetectedAt => "detected_at",
+            Self::CreatedAt => "created_at",
+            Self::UpdatedAt => "updated_at",
+        }
+    }
+}
+
+impl std::fmt::Display for IncidentSort {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for IncidentSort {
+    type Err = crate::ParseEnumError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "detected_at" => Ok(Self::DetectedAt),
+            "created_at" => Ok(Self::CreatedAt),
+            "updated_at" => Ok(Self::UpdatedAt),
+            _ => Err(crate::ParseEnumError::new(value, Self::VALUES)),
+        }
+    }
+}
+
+/// Accepted values of a query parameter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AiSystemSort {
+    /// `created_at`
+    CreatedAt,
+    /// `updated_at`
+    UpdatedAt,
+    /// `name`
+    Name,
+}
+
+impl AiSystemSort {
+    /// Every accepted value, as sent on the wire.
+    pub const VALUES: &'static [&'static str] = &["created_at", "updated_at", "name"];
+
+    /// The value as sent on the wire.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::CreatedAt => "created_at",
+            Self::UpdatedAt => "updated_at",
+            Self::Name => "name",
+        }
+    }
+}
+
+impl std::fmt::Display for AiSystemSort {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for AiSystemSort {
+    type Err = crate::ParseEnumError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "created_at" => Ok(Self::CreatedAt),
+            "updated_at" => Ok(Self::UpdatedAt),
+            "name" => Ok(Self::Name),
+            _ => Err(crate::ParseEnumError::new(value, Self::VALUES)),
+        }
+    }
+}
+
+/// Accepted values of a query parameter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PendingActProposalSort {
     /// `expires_at`
     ExpiresAt,
@@ -2239,6 +2460,104 @@ impl ListChangesParams {
     }
 }
 
+/// Query parameters of `listIncidents`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ListIncidentsParams {
+    /// 1-based page number. Defaults to 1.
+    pub page: Option<i64>,
+    /// Items per page, 1..200. Defaults to 50.
+    pub per_page: Option<i64>,
+    /// Field to order by. One of: detected_at, created_at, updated_at.
+    pub sort: Option<IncidentSort>,
+    /// Sort direction. Defaults to desc.
+    pub order: Option<Order>,
+    /// Exact status match. Known values: open, investigating, contained, resolved, closed. Open vocabulary: any other value is matched exactly and matches nothing, and the answer then carries a `meta.warnings` entry and the `X-HS-Unknown-Filter` header.
+    pub status: Option<String>,
+    /// Exact severity match. Known values: critical, high, medium, low. Open vocabulary: any other value is matched exactly and matches nothing, and the answer then carries a `meta.warnings` entry and the `X-HS-Unknown-Filter` header.
+    pub severity: Option<String>,
+    /// Exact type match. Known values: cybersecurity, service_disruption, data_breach, system_failure, third_party, fraud, physical, compliance. Open vocabulary: any other value is matched exactly and matches nothing, and the answer then carries a `meta.warnings` entry and the `X-HS-Unknown-Filter` header.
+    pub r#type: Option<String>,
+}
+
+impl ListIncidentsParams {
+    /// The query string, in document order, without the parameters that are unset.
+    #[must_use]
+    pub fn query_pairs(&self) -> Vec<(&'static str, String)> {
+        let mut pairs = Vec::new();
+        if let Some(value) = &self.page {
+            pairs.push(("page", value.to_string()));
+        }
+        if let Some(value) = &self.per_page {
+            pairs.push(("per_page", value.to_string()));
+        }
+        if let Some(value) = &self.sort {
+            pairs.push(("sort", value.as_str().to_owned()));
+        }
+        if let Some(value) = &self.order {
+            pairs.push(("order", value.as_str().to_owned()));
+        }
+        if let Some(value) = &self.status {
+            pairs.push(("status", value.clone()));
+        }
+        if let Some(value) = &self.severity {
+            pairs.push(("severity", value.clone()));
+        }
+        if let Some(value) = &self.r#type {
+            pairs.push(("type", value.clone()));
+        }
+        pairs
+    }
+}
+
+/// Query parameters of `listAiSystems`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ListAiSystemsParams {
+    /// 1-based page number. Defaults to 1.
+    pub page: Option<i64>,
+    /// Items per page, 1..200. Defaults to 50.
+    pub per_page: Option<i64>,
+    /// Field to order by. One of: created_at, updated_at, name.
+    pub sort: Option<AiSystemSort>,
+    /// Sort direction. Defaults to desc.
+    pub order: Option<Order>,
+    /// Exact risk class match. Known values: prohibited, high_risk, transparency, minimal. Open vocabulary: any other value is matched exactly and matches nothing, and the answer then carries a `meta.warnings` entry and the `X-HS-Unknown-Filter` header.
+    pub risk_class: Option<String>,
+    /// Exact lifecycle status match. Known values: planned, pilot, in_use, retired. Open vocabulary: any other value is matched exactly and matches nothing, and the answer then carries a `meta.warnings` entry and the `X-HS-Unknown-Filter` header.
+    pub lifecycle_status: Option<String>,
+    /// Only systems provided by this vendor.
+    pub vendor_id: Option<String>,
+}
+
+impl ListAiSystemsParams {
+    /// The query string, in document order, without the parameters that are unset.
+    #[must_use]
+    pub fn query_pairs(&self) -> Vec<(&'static str, String)> {
+        let mut pairs = Vec::new();
+        if let Some(value) = &self.page {
+            pairs.push(("page", value.to_string()));
+        }
+        if let Some(value) = &self.per_page {
+            pairs.push(("per_page", value.to_string()));
+        }
+        if let Some(value) = &self.sort {
+            pairs.push(("sort", value.as_str().to_owned()));
+        }
+        if let Some(value) = &self.order {
+            pairs.push(("order", value.as_str().to_owned()));
+        }
+        if let Some(value) = &self.risk_class {
+            pairs.push(("risk_class", value.clone()));
+        }
+        if let Some(value) = &self.lifecycle_status {
+            pairs.push(("lifecycle_status", value.clone()));
+        }
+        if let Some(value) = &self.vendor_id {
+            pairs.push(("vendor_id", value.clone()));
+        }
+        pairs
+    }
+}
+
 /// Query parameters of `listPendingActProposals`.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ListPendingActProposalsParams {
@@ -2541,6 +2860,82 @@ pub mod operations {
         tenant_scoped: true,
     };
 
+    /// `GET /v1/incidents`: List incidents.
+    pub const LIST_INCIDENTS: Operation = Operation {
+        id: "listIncidents",
+        method: "GET",
+        path: "/v1/incidents",
+        summary: "List incidents",
+        scopes: &["incidents:read"],
+        known_values: &[
+            (
+                "status",
+                &["open", "investigating", "contained", "resolved", "closed"],
+            ),
+            ("severity", &["critical", "high", "medium", "low"]),
+            (
+                "type",
+                &[
+                    "cybersecurity",
+                    "service_disruption",
+                    "data_breach",
+                    "system_failure",
+                    "third_party",
+                    "fraud",
+                    "physical",
+                    "compliance",
+                ],
+            ),
+        ],
+        deprecated_values: &[],
+        tenant_scoped: true,
+    };
+
+    /// `GET /v1/incidents/{id}`: Fetch one incident.
+    pub const GET_INCIDENT: Operation = Operation {
+        id: "getIncident",
+        method: "GET",
+        path: "/v1/incidents/{id}",
+        summary: "Fetch one incident",
+        scopes: &["incidents:read"],
+        known_values: &[],
+        deprecated_values: &[],
+        tenant_scoped: true,
+    };
+
+    /// `GET /v1/ai-systems`: List AI systems.
+    pub const LIST_AI_SYSTEMS: Operation = Operation {
+        id: "listAiSystems",
+        method: "GET",
+        path: "/v1/ai-systems",
+        summary: "List AI systems",
+        scopes: &["ai_systems:read"],
+        known_values: &[
+            (
+                "risk_class",
+                &["prohibited", "high_risk", "transparency", "minimal"],
+            ),
+            (
+                "lifecycle_status",
+                &["planned", "pilot", "in_use", "retired"],
+            ),
+        ],
+        deprecated_values: &[],
+        tenant_scoped: true,
+    };
+
+    /// `GET /v1/ai-systems/{id}`: Fetch one AI system.
+    pub const GET_AI_SYSTEM: Operation = Operation {
+        id: "getAiSystem",
+        method: "GET",
+        path: "/v1/ai-systems/{id}",
+        summary: "Fetch one AI system",
+        scopes: &["ai_systems:read"],
+        known_values: &[],
+        deprecated_values: &[],
+        tenant_scoped: true,
+    };
+
     /// `POST /v1/alerts/{id}/acknowledge`: Acknowledge an alert.
     pub const ACKNOWLEDGE_ALERT: Operation = Operation {
         id: "acknowledgeAlert",
@@ -2644,6 +3039,10 @@ pub mod operations {
         GET_REPORT,
         DOWNLOAD_REPORT,
         LIST_CHANGES,
+        LIST_INCIDENTS,
+        GET_INCIDENT,
+        LIST_AI_SYSTEMS,
+        GET_AI_SYSTEM,
         ACKNOWLEDGE_ALERT,
         RESOLVE_ALERT,
         GET_ACT_PROPOSAL,
@@ -2999,6 +3398,90 @@ impl crate::Client {
             &operations::LIST_CHANGES,
             "/v1/changes".to_owned(),
             params.query_pairs(),
+        )
+    }
+
+    /// List incidents.
+    ///
+    /// The tenant's incident register: type, severity, status, the key dates and, per incident, its regulatory notification deadlines (DORA, NIS2, GDPR, AI Act) with their stage, status, due date and submission date. Read only; free text but the title and people are not published.
+    ///
+    /// Required scope: `incidents:read`. Published in `/v1` since 2026-11-17.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error`] when the request cannot be sent, the API answers with an error, or the
+    /// body does not match the document.
+    pub fn list_incidents(
+        &self,
+        params: &ListIncidentsParams,
+    ) -> Result<crate::ApiResponse<ListIncidentsResponse>, crate::Error> {
+        self.get(
+            &operations::LIST_INCIDENTS,
+            "/v1/incidents".to_owned(),
+            params.query_pairs(),
+        )
+    }
+
+    /// Fetch one incident.
+    ///
+    /// The same object `listIncidents` returns, for a single incident.
+    ///
+    /// Required scope: `incidents:read`. Published in `/v1` since 2026-11-17.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error`] when the request cannot be sent, the API answers with an error, or the
+    /// body does not match the document.
+    pub fn get_incident(
+        &self,
+        id: &str,
+    ) -> Result<crate::ApiResponse<GetIncidentResponse>, crate::Error> {
+        self.get(
+            &operations::GET_INCIDENT,
+            format!("/v1/incidents/{}", crate::encode_path_segment(id)?),
+            Vec::new(),
+        )
+    }
+
+    /// List AI systems.
+    ///
+    /// The tenant's register of AI systems: risk class, lifecycle status, kind, owning unit, provider and the categories of data each processes. Read only; free text and people are not published. The register records no AI Act role (provider or deployer) and no review date per system, so neither is published; the role an incident declared is `aiact_role` on `/v1/incidents`.
+    ///
+    /// Required scope: `ai_systems:read`. Published in `/v1` since 2026-11-17.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error`] when the request cannot be sent, the API answers with an error, or the
+    /// body does not match the document.
+    pub fn list_ai_systems(
+        &self,
+        params: &ListAiSystemsParams,
+    ) -> Result<crate::ApiResponse<ListAiSystemsResponse>, crate::Error> {
+        self.get(
+            &operations::LIST_AI_SYSTEMS,
+            "/v1/ai-systems".to_owned(),
+            params.query_pairs(),
+        )
+    }
+
+    /// Fetch one AI system.
+    ///
+    /// The same object `listAiSystems` returns, for a single system.
+    ///
+    /// Required scope: `ai_systems:read`. Published in `/v1` since 2026-11-17.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error`] when the request cannot be sent, the API answers with an error, or the
+    /// body does not match the document.
+    pub fn get_ai_system(
+        &self,
+        id: &str,
+    ) -> Result<crate::ApiResponse<GetAiSystemResponse>, crate::Error> {
+        self.get(
+            &operations::GET_AI_SYSTEM,
+            format!("/v1/ai-systems/{}", crate::encode_path_segment(id)?),
+            Vec::new(),
         )
     }
 

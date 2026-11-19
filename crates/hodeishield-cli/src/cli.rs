@@ -10,9 +10,9 @@ use hodeishield_api::ParseEnumError;
 use hodeishield_api::v1::Class as ActClass;
 use hodeishield_api::v1::operations;
 use hodeishield_api::v1::{
-    AlertSort, AlertStatus, BusinessCriticality, ChangeCategory, ChangeSort, ChangeStatus,
-    ChangeType, ComplianceControlSort, EndpointSort, EndpointStatus, EvidenceSort, Format, Locale,
-    Order, PendingActProposalSort, ReportSort, RiskSort, VendorSort,
+    AiSystemSort, AlertSort, AlertStatus, BusinessCriticality, ChangeCategory, ChangeSort,
+    ChangeStatus, ChangeType, ComplianceControlSort, EndpointSort, EndpointStatus, EvidenceSort,
+    Format, IncidentSort, Locale, Order, PendingActProposalSort, ReportSort, RiskSort, VendorSort,
 };
 use std::io::IsTerminal;
 use std::path::PathBuf;
@@ -127,6 +127,12 @@ pub enum Command {
     /// Entries of the risk register.
     #[command(subcommand)]
     Risks(RisksCommand),
+    /// Entries of the incident register, with their notification deadlines.
+    #[command(subcommand)]
+    Incidents(IncidentsCommand),
+    /// Entries of the AI system register.
+    #[command(name = "ai-systems", subcommand)]
+    AiSystems(AiSystemsCommand),
     /// Proposals waiting for a person's decision: list, approve, reject.
     #[command(subcommand)]
     Approvals(ApprovalsCommand),
@@ -298,6 +304,8 @@ impl Command {
             Self::Vendors(_)
                 | Self::Alerts(_)
                 | Self::Risks(_)
+                | Self::Incidents(_)
+                | Self::AiSystems(_)
                 | Self::Changes(_)
                 | Self::Compliance(_)
                 | Self::Evidence(_)
@@ -339,6 +347,8 @@ impl Command {
             Self::Vendors(VendorsCommand::List(list)) => Some(&list.paging),
             Self::Alerts(AlertsCommand::List(list)) => Some(&list.paging),
             Self::Risks(RisksCommand::List(list)) => Some(&list.paging),
+            Self::Incidents(IncidentsCommand::List(list)) => Some(&list.paging),
+            Self::AiSystems(AiSystemsCommand::List(list)) => Some(&list.paging),
             Self::Changes(ChangesCommand::List(list)) => Some(&list.paging),
             Self::Compliance(ComplianceCommand::Controls(list)) => Some(&list.paging),
             Self::Evidence(EvidenceCommand::List(list)) => Some(&list.paging),
@@ -693,6 +703,64 @@ pub struct RisksList {
     /// Field to order by.
     #[arg(long, value_parser = choice::<RiskSort>(RiskSort::VALUES))]
     pub sort: Option<RiskSort>,
+    #[command(flatten)]
+    pub paging: Paging,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum IncidentsCommand {
+    /// List incidents, with their regulatory notification deadlines.
+    List(IncidentsList),
+    /// Show one incident, with its notification deadlines.
+    Get {
+        /// Incident id.
+        id: String,
+    },
+}
+
+#[derive(Debug, Args)]
+pub struct IncidentsList {
+    /// Exact status.
+    #[arg(long, help = filters::help("Exact status.", &operations::LIST_INCIDENTS, "status"))]
+    pub status: Option<String>,
+    /// Exact severity.
+    #[arg(long, help = filters::help("Exact severity.", &operations::LIST_INCIDENTS, "severity"))]
+    pub severity: Option<String>,
+    /// Exact incident type.
+    #[arg(long = "type", value_name = "TYPE", help = filters::help("Exact incident type.", &operations::LIST_INCIDENTS, "type"))]
+    pub incident_type: Option<String>,
+    /// Field to order by.
+    #[arg(long, value_parser = choice::<IncidentSort>(IncidentSort::VALUES))]
+    pub sort: Option<IncidentSort>,
+    #[command(flatten)]
+    pub paging: Paging,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum AiSystemsCommand {
+    /// List AI systems of the register.
+    List(AiSystemsList),
+    /// Show one AI system.
+    Get {
+        /// AI system id.
+        id: String,
+    },
+}
+
+#[derive(Debug, Args)]
+pub struct AiSystemsList {
+    /// Exact risk class.
+    #[arg(long, help = filters::help("Exact risk class.", &operations::LIST_AI_SYSTEMS, "risk_class"))]
+    pub risk_class: Option<String>,
+    /// Exact lifecycle status.
+    #[arg(long, help = filters::help("Exact lifecycle status.", &operations::LIST_AI_SYSTEMS, "lifecycle_status"))]
+    pub lifecycle_status: Option<String>,
+    /// Only systems provided by this vendor id.
+    #[arg(long)]
+    pub vendor: Option<String>,
+    /// Field to order by.
+    #[arg(long, value_parser = choice::<AiSystemSort>(AiSystemSort::VALUES))]
+    pub sort: Option<AiSystemSort>,
     #[command(flatten)]
     pub paging: Paging,
 }

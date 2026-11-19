@@ -102,6 +102,32 @@ fn every_query_parameter_the_client_sends_is_declared_for_its_operation() {
         .query_pairs(),
     );
     check(
+        "listIncidents",
+        hodeishield_api::v1::ListIncidentsParams {
+            page: Some(1),
+            per_page: Some(1),
+            sort: Some(hodeishield_api::v1::IncidentSort::DetectedAt),
+            order: Some(Order::Asc),
+            status: s("open"),
+            severity: s("high"),
+            r#type: s("cybersecurity"),
+        }
+        .query_pairs(),
+    );
+    check(
+        "listAiSystems",
+        hodeishield_api::v1::ListAiSystemsParams {
+            page: Some(1),
+            per_page: Some(1),
+            sort: Some(hodeishield_api::v1::AiSystemSort::Name),
+            order: Some(Order::Asc),
+            risk_class: s("high_risk"),
+            lifecycle_status: s("in_use"),
+            vendor_id: s("v"),
+        }
+        .query_pairs(),
+    );
+    check(
         "listRisks",
         ListRisksParams {
             page: Some(1),

@@ -57,7 +57,7 @@ advisories are under
 
 `hodeishield` is a command-line client for the public `/v1` API of
 [HodeiShield](https://hodeishield.com). It reads one organisation's third-party inventory,
-supply-chain alerts, risk register, change requests, compliance posture, evidence, endpoint agents and reports, from
+supply-chain alerts, risk register, incidents, AI systems, change requests, compliance posture, evidence, endpoint agents and reports, from
 a terminal or a script. Every command reads, except five that change data: `alerts acknowledge`,
 `alerts resolve` and `risks transition` need an API key with the `alerts:write` or `risks:write`
 scope, which a sign-in does not carry; `approvals approve` and `approvals reject` record a decision on

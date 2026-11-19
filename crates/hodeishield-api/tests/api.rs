@@ -872,7 +872,7 @@ fn every_data_operation_sends_the_selection_and_checks_the_echo() {
         .match_header("x-hs-tenant", TENANT_A)
         .with_header("x-hs-tenant", TENANT_B)
         .with_body(EMPTY_PAGE)
-        .expect(5)
+        .expect(7)
         .create();
     let c = tenant_client(&server, TENANT_A);
     fn refused<T>(r: Result<T, Error>) -> bool {
@@ -880,6 +880,12 @@ fn every_data_operation_sends_the_selection_and_checks_the_echo() {
     }
     assert!(refused(c.list_alerts(&ListAlertsParams::default())));
     assert!(refused(c.list_risks(&ListRisksParams::default())));
+    assert!(refused(c.list_incidents(
+        &hodeishield_api::v1::ListIncidentsParams::default()
+    )));
+    assert!(refused(c.list_ai_systems(
+        &hodeishield_api::v1::ListAiSystemsParams::default()
+    )));
     assert!(refused(c.list_evidence(&ListEvidenceParams::default())));
     assert!(refused(c.list_endpoints(&ListEndpointsParams::default())));
     assert!(refused(c.list_compliance_controls(
@@ -1082,7 +1088,7 @@ fn every_single_item_operation_checks_the_echo() {
         .match_header("x-hs-tenant", TENANT_A)
         .with_header("x-hs-tenant", TENANT_B)
         .with_body("{}")
-        .expect(5)
+        .expect(7)
         .create();
     let c = tenant_client(&server, TENANT_A);
     fn refused<T>(r: Result<T, Error>) -> bool {
@@ -1091,6 +1097,8 @@ fn every_single_item_operation_checks_the_echo() {
     assert!(refused(c.get_vendor("v1")));
     assert!(refused(c.get_alert("a1")));
     assert!(refused(c.get_risk("r1")));
+    assert!(refused(c.get_incident("i1")));
+    assert!(refused(c.get_ai_system("s1")));
     assert!(refused(c.get_evidence("e1")));
     assert!(refused(c.get_framework_posture("nis2")));
     any.assert();
