@@ -644,6 +644,9 @@ pub fn risks(ctx: &Context, command: RisksCommand, out: &mut dyn Write) -> Resul
                 &r.data
             })
         }
+        RisksCommand::Transition(args) => {
+            super::risk_writes::transition(ctx, &settings, &args, out)
+        }
     }
 }
 

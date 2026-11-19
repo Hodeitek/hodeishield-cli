@@ -4125,3 +4125,1011 @@ fn the_help_says_which_two_commands_write_and_what_they_need() {
         assert!(text.contains("HODEISHIELD_API_KEY"), "{text}");
     }
 }
+
+// Moving a risk (`risks transition`), with an API key.
+
+const R1: &str = "5d2b7a10-1c3e-4f6a-8b9c-0d1e2f3a4b5c";
+
+fn risk_answer(status: &str, changed: bool) -> String {
+    format!(
+        r#"{{"data":{{"id":"{R1}","status":"{status}","updated_at":"2026-11-18T10:00:00Z"}},"changed":{changed}}}"#
+    )
+}
+
+#[test]
+fn risks_transition_with_yes_sends_the_status_and_the_note_and_says_what_changed() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    let post = server
+        .mock("POST", format!("/v1/risks/{R1}/transition").as_str())
+        .match_header("authorization", format!("Bearer {KEY}").as_str())
+        .match_body(mockito::Matcher::JsonString(
+            r#"{"to_status":"assessed","note":"scored with the team"}"#.into(),
+        ))
+        .with_body(risk_answer("assessed", true))
+        .expect(1)
+        .create();
+    let no_read = server.mock("GET", mockito::Matcher::Any).expect(0).create();
+    let output = env
+        .api(&server)
+        .args([
+            "risks",
+            "transition",
+            R1,
+            "--to",
+            "assessed",
+            "--note",
+            "scored with the team",
+            "--yes",
+        ])
+        .output()
+        .expect("run");
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!("Moved risk {R1} to assessed.\n")
+    );
+    assert_no_key(&output);
+    post.assert();
+    no_read.assert();
+
+    // The status it already had: nothing changed, and no note is sent when none is given.
+    let mut same = mockito::Server::new();
+    let post = same
+        .mock("POST", format!("/v1/risks/{R1}/transition").as_str())
+        .match_body(mockito::Matcher::JsonString(
+            r#"{"to_status":"assessed"}"#.into(),
+        ))
+        .with_body(risk_answer("assessed", false))
+        .expect(1)
+        .create();
+    let output = env
+        .api(&same)
+        .args(["risks", "transition", R1, "--to", "assessed", "-y"])
+        .output()
+        .expect("run");
+    assert!(output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stdout).contains("already assessed: nothing changed"));
+    post.assert();
+}
+
+#[test]
+fn risks_transition_json_is_the_apis_answer_untouched() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    let body = format!(
+        r#"{{"data":{{"id":"{R1}","status":"closed","updated_at":"2026-11-18T10:00:00Z","added_later":[1]}},"changed":true,"also_new":"x"}}"#
+    );
+    server
+        .mock("POST", format!("/v1/risks/{R1}/transition").as_str())
+        .with_body(&body)
+        .create();
+    let output = env
+        .api(&server)
+        .args(["--json", "risks", "transition", R1, "--to", "closed", "-y"])
+        .output()
+        .expect("run");
+    assert!(output.status.success(), "{output:?}");
+    let printed: serde_json::Value = serde_json::from_slice(&output.stdout).expect("JSON");
+    assert_eq!(
+        printed,
+        serde_json::from_str::<serde_json::Value>(&body).expect("JSON")
+    );
+}
+
+#[test]
+fn risks_transition_without_a_terminal_and_without_yes_sends_nothing() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    let never_post = silent(&mut server);
+    let never_get = server.mock("GET", mockito::Matcher::Any).expect(0).create();
+    let output = env
+        .api(&server)
+        .args(["risks", "transition", R1, "--to", "closed"])
+        .write_stdin("y\n")
+        .output()
+        .expect("run");
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("without confirmation"), "{stderr}");
+    assert!(stderr.contains("--yes"), "{stderr}");
+    never_post.assert();
+    never_get.assert();
+}
+
+#[test]
+fn risks_transition_takes_only_the_statuses_the_document_lists() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    let never = silent(&mut server);
+    for args in [
+        &["risks", "transition", R1, "--yes"][..],
+        &["risks", "transition", R1, "--to", "open", "--yes"][..],
+    ] {
+        let output = env.api(&server).args(args).output().expect("run");
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {output:?}");
+    }
+    let too_long = "x".repeat(2001);
+    let output = env
+        .api(&server)
+        .args([
+            "risks",
+            "transition",
+            R1,
+            "--to",
+            "closed",
+            "--note",
+            too_long.as_str(),
+            "--yes",
+        ])
+        .output()
+        .expect("run");
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    never.assert();
+}
+
+#[test]
+fn every_refusal_of_a_risk_move_has_its_own_message_and_exit_code() {
+    for (status, code, details, exit, message) in [
+        (403, "ROLE_NOT_PERMITTED", "", 4, "may not move risks"),
+        (
+            403,
+            "WRITE_ACTOR_UNRESOLVED",
+            "",
+            4,
+            "who created this key no longer exists",
+        ),
+        (
+            403,
+            "MODULE_NOT_ENTITLED",
+            r#","scopes":["risks:write"],"modules":["supply_risk"]"#,
+            4,
+            "does not include the module supply_risk",
+        ),
+        (
+            403,
+            "LICENCE_INACTIVE",
+            r#","licence":"grace""#,
+            8,
+            "licence is not in force (licence: grace), so risks cannot be changed",
+        ),
+        (
+            403,
+            "INSUFFICIENT_SCOPE",
+            r#","missing":["risks:write"]"#,
+            4,
+            "lacks the scope this needs: risks:write",
+        ),
+        (
+            409,
+            "TRANSITION_NOT_ALLOWED",
+            r#","status":"identified","allowed":["assessed"]"#,
+            1,
+            "does not allow that move from `identified`",
+        ),
+    ] {
+        let env = Env::new();
+        let mut server = mockito::Server::new();
+        server
+            .mock("POST", format!("/v1/risks/{R1}/transition").as_str())
+            .with_status(status)
+            .with_header("x-request-id", "req-r")
+            .with_body(write_error(code, details))
+            .expect(1)
+            .create();
+        let output = env
+            .api(&server)
+            .args(["risks", "transition", R1, "--to", "closed", "--yes"])
+            .output()
+            .expect("run");
+        assert_eq!(output.status.code(), Some(exit), "{code}: {output:?}");
+        assert!(output.stdout.is_empty(), "{code}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains(message), "{code}: {stderr}");
+        assert!(stderr.contains("req-w"), "{code}: {stderr}");
+        assert_no_key(&output);
+        if code == "TRANSITION_NOT_ALLOWED" {
+            assert!(stderr.contains("it may move to: assessed"), "{stderr}");
+        }
+    }
+}
+
+#[test]
+fn a_risk_move_hits_the_write_rate_limit_and_is_never_sent_again_after_a_gateway_error() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    server
+        .mock("POST", format!("/v1/risks/{R1}/transition").as_str())
+        .with_status(429)
+        .with_body(r#"{"error":{"code":"rate_limited","message":"m","request_id":"r","details":{"scope":"write_key"}}}"#)
+        .expect(1)
+        .create();
+    let output = env
+        .api(&server)
+        .args(["risks", "transition", R1, "--to", "closed", "-y"])
+        .output()
+        .expect("run");
+    assert_eq!(output.status.code(), Some(6), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("(limit: write_key)"));
+
+    for status in [502, 503, 504] {
+        let mut broken = mockito::Server::new();
+        let once = broken
+            .mock("POST", format!("/v1/risks/{R1}/transition").as_str())
+            .with_status(status)
+            .with_body("busy")
+            .expect(1)
+            .create();
+        let output = env
+            .api(&broken)
+            .args(["risks", "transition", R1, "--to", "closed", "-y"])
+            .output()
+            .expect("run");
+        assert_eq!(output.status.code(), Some(7), "{status}: {output:?}");
+        once.assert();
+    }
+}
+
+#[test]
+fn risks_transition_help_names_the_scope_and_the_gate() {
+    let env = Env::new();
+    let output = env
+        .cmd()
+        .args(["risks", "transition", "--help"])
+        .output()
+        .expect("run");
+    let text = String::from_utf8_lossy(&output.stdout);
+    for expected in [
+        "--to",
+        "--note",
+        "--yes",
+        "risks:write",
+        "HODEISHIELD_API_KEY",
+    ] {
+        assert!(text.contains(expected), "{expected}: {text}");
+    }
+}
+
+// Deciding proposals: `login --decide` and `approvals`.
+
+#[cfg(unix)]
+mod decisions {
+    use super::*;
+    use serde_json::json;
+    use std::sync::{Arc, Mutex};
+
+    const P1: &str = "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d";
+
+    /// A mock app that offers the device flow and records the scope each request asked for, and
+    /// a mock `/v1`.
+    struct App {
+        api: mockito::ServerGuard,
+        app: mockito::ServerGuard,
+        asked: Arc<Mutex<Vec<String>>>,
+        _mocks: Vec<mockito::Mock>,
+    }
+
+    /// `offered` is what the app lists as supported; `granted` is the `scope` of its token answer.
+    fn app(offered: &[&str], granted: Option<&str>) -> App {
+        let mut api = mockito::Server::new();
+        let mut app = mockito::Server::new();
+        let asked = Arc::new(Mutex::new(Vec::new()));
+        let seen = Arc::clone(&asked);
+        let url = app.url();
+        let mut token = json!({
+            "access_token": "at-new", "refresh_token": "rt-new",
+            "token_type": "Bearer", "expires_in": 3600,
+        });
+        if let Some(granted) = granted {
+            token["scope"] = json!(granted);
+        }
+        let mocks = vec![
+            api.mock("GET", "/.well-known/oauth-protected-resource")
+                .with_status(404)
+                .create(),
+            app.mock("GET", "/.well-known/oauth-authorization-server")
+                .with_body(
+                    json!({
+                        "issuer": url,
+                        "token_endpoint": format!("{url}/token"),
+                        "device_authorization_endpoint": format!("{url}/device/code"),
+                        "revocation_endpoint": format!("{url}/revoke"),
+                        "scopes_supported": offered,
+                    })
+                    .to_string(),
+                )
+                .create(),
+            app.mock("POST", "/device/code")
+                .with_body_from_request(move |request| {
+                    let form: Vec<(String, String)> =
+                        url::form_urlencoded::parse(request.body().expect("body"))
+                            .into_owned()
+                            .collect();
+                    let scope = form
+                        .iter()
+                        .find(|(k, _)| k == "scope")
+                        .map(|(_, v)| v.clone())
+                        .unwrap_or_default();
+                    seen.lock().expect("lock").push(scope);
+                    json!({
+                        "device_code": "dc", "user_code": "ABCD-EFGH",
+                        "verification_uri": "https://app.example.test/device",
+                        "expires_in": 600, "interval": 1,
+                    })
+                    .to_string()
+                    .into_bytes()
+                })
+                .create(),
+            app.mock("POST", "/token")
+                .with_body(token.to_string())
+                .create(),
+            app.mock("POST", "/revoke").with_body("").create(),
+        ];
+        App {
+            api,
+            app,
+            asked,
+            _mocks: mocks,
+        }
+    }
+
+    impl App {
+        fn with(&self, mut cmd: Command) -> Command {
+            cmd.env("HODEISHIELD_API_URL", self.api.url())
+                .env("HODEISHIELD_APP_URL", self.app.url());
+            cmd
+        }
+
+        fn login(&self, env: &Env, extra: &[&str]) -> std::process::Output {
+            self.with(env.cmd_file())
+                .args(["login", "--device"])
+                .args(extra)
+                .output()
+                .expect("run")
+        }
+    }
+
+    fn proposal(id: &str, by_you: bool) -> String {
+        format!(
+            r#"{{"id":"{id}","class":"create_task","module":null,"payload_kind":"task","payload":{{"title":"Rotate keys"}},"rationale":"The keys are old.","confidence":0.7,"proposed_via":"agent","proposed_by_you":{by_you},"created_at":"2026-11-18T09:00:00Z","expires_at":"2026-11-25T09:00:00Z"}}"#
+        )
+    }
+
+    fn inbox(items: &[String]) -> String {
+        format!(
+            r#"{{"data":[{}],"pagination":{{"page":1,"per_page":50,"total":{n},"total_pages":1}}}}"#,
+            items.join(","),
+            n = items.len()
+        )
+    }
+
+    fn decision_answer(status: &str) -> String {
+        let expires = if status == "approved" {
+            r#""2026-11-18T10:15:00Z""#
+        } else {
+            "null"
+        };
+        format!(
+            r#"{{"data":{{"id":"{P1}","status":"{status}","approval_expires_at":{expires},"ledger_entry_id":"11111111-2222-4333-8444-555555555555"}}}}"#
+        )
+    }
+
+    fn stderr_of(output: &std::process::Output) -> String {
+        String::from_utf8_lossy(&output.stderr).into_owned()
+    }
+
+    /// A signed-in profile that holds `act:decide`.
+    fn signed_in(env: &Env, app: &App) {
+        let output = app.login(env, &["--decide"]);
+        assert!(output.status.success(), "{output:?}");
+    }
+
+    const OFFERS_DECIDE: &[&str] = &["supply_risk:read", "offline_access", "act:decide"];
+
+    #[test]
+    fn a_plain_login_never_asks_for_act_decide() {
+        let env = Env::new();
+        // Even an app that offers it, and grants it when asked, is not asked by a plain login.
+        let app = app(OFFERS_DECIDE, Some("supply_risk:read act:decide"));
+        let output = app.login(&env, &[]);
+        assert!(output.status.success(), "{output:?}");
+        let asked = app.asked.lock().expect("lock").clone();
+        assert_eq!(asked.len(), 1, "{asked:?}");
+        assert!(!asked[0].contains("act:decide"), "{asked:?}");
+        let stderr = stderr_of(&output);
+        assert!(!stderr.contains("confirm your identity"), "{stderr}");
+        assert!(!stderr.contains("Decisions are enabled"), "{stderr}");
+    }
+
+    #[test]
+    fn login_decide_asks_for_it_and_warns_about_the_second_confirmation_first() {
+        let env = Env::new();
+        let app = app(
+            OFFERS_DECIDE,
+            Some("supply_risk:read offline_access act:decide"),
+        );
+        let output = app.login(&env, &["--decide"]);
+        assert!(output.status.success(), "{output:?}");
+        let asked = app.asked.lock().expect("lock").clone();
+        assert_eq!(asked.len(), 1, "{asked:?}");
+        let scopes: Vec<&str> = asked[0].split(' ').collect();
+        assert!(scopes.contains(&"act:decide"), "{asked:?}");
+        // On top of the normal scopes, not instead of them.
+        assert!(scopes.contains(&"supply_risk:read"), "{asked:?}");
+        let stderr = stderr_of(&output);
+        let warned = stderr.find("confirm your identity again").expect(&stderr);
+        let waiting = stderr.find("Waiting for approval").expect(&stderr);
+        assert!(warned < waiting, "{stderr}");
+        assert!(stderr.contains("15 minutes"), "{stderr}");
+        assert!(stderr.contains("Decisions are enabled"), "{stderr}");
+    }
+
+    #[test]
+    fn login_decide_says_so_plainly_when_the_token_does_not_include_act_decide() {
+        let env = Env::new();
+        let app = app(OFFERS_DECIDE, Some("supply_risk:read offline_access"));
+        let output = app.login(&env, &["--decide"]);
+        assert_eq!(output.status.code(), Some(4), "{output:?}");
+        let stderr = stderr_of(&output);
+        assert!(stderr.contains("without permission to decide"), "{stderr}");
+        assert!(stderr.contains("did not include `act:decide`"), "{stderr}");
+        assert!(!stderr.contains("Decisions are enabled"), "{stderr}");
+        // A token response with no scope at all confirms nothing either.
+        let env = Env::new();
+        let app = super::decisions::app(OFFERS_DECIDE, None);
+        let output = app.login(&env, &["--decide"]);
+        assert_eq!(output.status.code(), Some(4), "{output:?}");
+        assert!(!stderr_of(&output).contains("Decisions are enabled"));
+    }
+
+    #[test]
+    fn login_decide_stops_before_asking_when_the_server_does_not_offer_decisions() {
+        let env = Env::new();
+        let app = app(&["supply_risk:read", "offline_access"], None);
+        let output = app.login(&env, &["--decide"]);
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        let stderr = stderr_of(&output);
+        assert!(stderr.contains("does not offer decisions"), "{stderr}");
+        assert!(app.asked.lock().expect("lock").is_empty());
+    }
+
+    #[test]
+    fn approvals_list_shows_what_the_server_lists_and_the_proposed_by_you_flag() {
+        let env = Env::new();
+        let mut app = app(OFFERS_DECIDE, Some("act:decide"));
+        signed_in(&env, &app);
+        let body = inbox(&[proposal(P1, false), proposal("p2", true)]);
+        let get = app
+            .api
+            .mock("GET", "/v1/act/inbox")
+            .match_header("authorization", "Bearer at-new")
+            .with_body(&body)
+            .expect(2)
+            .create();
+        let output = app
+            .with(env.cmd_file())
+            .args(["approvals", "list"])
+            .output()
+            .expect("run");
+        assert!(output.status.success(), "{output:?}");
+        let text = String::from_utf8_lossy(&output.stdout);
+        assert!(text.contains("PROPOSED BY YOU"), "{text}");
+        assert!(text.contains(P1) && text.contains("p2"), "{text}");
+        assert!(text.contains("create_task"), "{text}");
+        let yes_rows = text.lines().filter(|l| l.contains(" yes ")).count();
+        assert_eq!(yes_rows, 1, "{text}");
+        // Nothing is dropped or invented: --json is the API's answer as it came.
+        let output = app
+            .with(env.cmd_file())
+            .args(["--json", "approvals", "list"])
+            .output()
+            .expect("run");
+        let printed: serde_json::Value = serde_json::from_slice(&output.stdout).expect("JSON");
+        assert_eq!(
+            printed,
+            serde_json::from_str::<serde_json::Value>(&body).expect("JSON")
+        );
+        get.assert();
+    }
+
+    #[test]
+    fn approvals_list_sends_the_declared_filters() {
+        let env = Env::new();
+        let mut app = app(OFFERS_DECIDE, Some("act:decide"));
+        signed_in(&env, &app);
+        let get = app
+            .api
+            .mock("GET", "/v1/act/inbox")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("class".into(), "create_task".into()),
+                mockito::Matcher::UrlEncoded("module".into(), "supply_risk".into()),
+                mockito::Matcher::UrlEncoded("sort".into(), "created_at".into()),
+            ]))
+            .with_body(inbox(&[]))
+            .expect(1)
+            .create();
+        app.with(env.cmd_file())
+            .args([
+                "approvals",
+                "list",
+                "--class",
+                "create_task",
+                "--module",
+                "supply_risk",
+                "--sort",
+                "created_at",
+            ])
+            .assert()
+            .success();
+        get.assert();
+    }
+
+    #[test]
+    fn approve_with_yes_sends_the_reason_and_never_says_the_action_was_carried_out() {
+        let env = Env::new();
+        let mut app = app(OFFERS_DECIDE, Some("act:decide"));
+        signed_in(&env, &app);
+        let post = app
+            .api
+            .mock("POST", format!("/v1/act/proposals/{P1}/approve").as_str())
+            .match_header("authorization", "Bearer at-new")
+            .match_body(mockito::Matcher::JsonString(
+                r#"{"reason":"Checked the payload"}"#.into(),
+            ))
+            .with_body(decision_answer("approved"))
+            .expect(1)
+            .create();
+        let no_read = app
+            .api
+            .mock("GET", mockito::Matcher::Any)
+            .expect(0)
+            .create();
+        let output = app
+            .with(env.cmd_file())
+            .args([
+                "approvals",
+                "approve",
+                P1,
+                "--reason",
+                "Checked the payload",
+                "--yes",
+            ])
+            .output()
+            .expect("run");
+        assert!(output.status.success(), "{output:?}");
+        let text = String::from_utf8_lossy(&output.stdout).to_lowercase();
+        assert!(text.contains("approval recorded"), "{text}");
+        assert!(text.contains("has not been carried out"), "{text}");
+        assert!(text.contains("2026-11-18t10:15:00z"), "{text}");
+        for word in ["executed", "applied", "done"] {
+            assert!(!text.contains(word), "{word}: {text}");
+        }
+        post.assert();
+        no_read.assert();
+    }
+
+    #[test]
+    fn reject_with_yes_sends_the_reason() {
+        let env = Env::new();
+        let mut app = app(OFFERS_DECIDE, Some("act:decide"));
+        signed_in(&env, &app);
+        let post = app
+            .api
+            .mock("POST", format!("/v1/act/proposals/{P1}/reject").as_str())
+            .match_body(mockito::Matcher::JsonString(
+                r#"{"reason":"Not needed"}"#.into(),
+            ))
+            .with_body(decision_answer("rejected"))
+            .expect(1)
+            .create();
+        let output = app
+            .with(env.cmd_file())
+            .args(["approvals", "reject", P1, "--reason", "Not needed", "-y"])
+            .output()
+            .expect("run");
+        assert!(output.status.success(), "{output:?}");
+        let text = String::from_utf8_lossy(&output.stdout);
+        assert!(text.contains("Rejected proposal"), "{text}");
+        assert!(text.contains("Nothing will be carried out"), "{text}");
+        post.assert();
+    }
+
+    #[test]
+    fn a_decision_json_is_the_apis_answer_untouched() {
+        let env = Env::new();
+        let mut app = app(OFFERS_DECIDE, Some("act:decide"));
+        signed_in(&env, &app);
+        let body = decision_answer("approved").replace("}}", r#","added_later":1}}"#);
+        app.api
+            .mock("POST", format!("/v1/act/proposals/{P1}/approve").as_str())
+            .with_body(&body)
+            .create();
+        let output = app
+            .with(env.cmd_file())
+            .args(["--json", "approvals", "approve", P1, "--reason", "ok", "-y"])
+            .output()
+            .expect("run");
+        let printed: serde_json::Value = serde_json::from_slice(&output.stdout).expect("JSON");
+        assert_eq!(
+            printed,
+            serde_json::from_str::<serde_json::Value>(&body).expect("JSON")
+        );
+    }
+
+    #[test]
+    fn a_decision_without_a_terminal_and_without_yes_is_refused_and_sends_nothing() {
+        let env = Env::new();
+        let mut app = app(OFFERS_DECIDE, Some("act:decide"));
+        signed_in(&env, &app);
+        let never_post = app
+            .api
+            .mock("POST", mockito::Matcher::Any)
+            .expect(0)
+            .create();
+        let never_get = app
+            .api
+            .mock("GET", mockito::Matcher::Regex("^/v1/".into()))
+            .expect(0)
+            .create();
+        for args in [
+            &["approvals", "approve", P1, "--reason", "ok"][..],
+            &["approvals", "reject", P1, "--reason", "no"][..],
+        ] {
+            let output = app
+                .with(env.cmd_file())
+                .args(args)
+                .write_stdin("y\n")
+                .output()
+                .expect("run");
+            assert_eq!(output.status.code(), Some(2), "{args:?}: {output:?}");
+            assert!(output.stdout.is_empty());
+            let stderr = stderr_of(&output);
+            assert!(stderr.contains("without confirmation"), "{stderr}");
+            assert!(stderr.contains("--yes"), "{stderr}");
+        }
+        never_post.assert();
+        never_get.assert();
+    }
+
+    #[test]
+    fn a_decision_needs_a_reason_and_sends_nothing_without_one() {
+        let env = Env::new();
+        let mut app = app(OFFERS_DECIDE, Some("act:decide"));
+        signed_in(&env, &app);
+        let never = app
+            .api
+            .mock("POST", mockito::Matcher::Any)
+            .expect(0)
+            .create();
+        let too_long = "x".repeat(1001);
+        for args in [
+            vec!["approvals", "approve", P1, "--yes"],
+            vec!["approvals", "approve", P1, "--reason", "  ", "--yes"],
+            vec!["approvals", "reject", P1, "--reason", "", "--yes"],
+            vec![
+                "approvals",
+                "reject",
+                P1,
+                "--reason",
+                too_long.as_str(),
+                "--yes",
+            ],
+        ] {
+            let output = app.with(env.cmd_file()).args(&args).output().expect("run");
+            assert_eq!(output.status.code(), Some(2), "{output:?}");
+        }
+        never.assert();
+    }
+
+    #[test]
+    fn an_api_key_is_refused_before_anything_is_sent() {
+        let env = Env::new();
+        let mut server = mockito::Server::new();
+        let never_post = silent(&mut server);
+        let never_get = server.mock("GET", mockito::Matcher::Any).expect(0).create();
+        for args in [
+            &["approvals", "list"][..],
+            &["approvals", "approve", P1, "--reason", "ok", "--yes"][..],
+            &["approvals", "reject", P1, "--reason", "no", "--yes"][..],
+        ] {
+            let output = env.api(&server).args(args).output().expect("run");
+            assert_eq!(output.status.code(), Some(4), "{args:?}: {output:?}");
+            assert!(output.stdout.is_empty());
+            let stderr = stderr_of(&output);
+            assert!(
+                stderr.contains("need a sign-in, not an API key"),
+                "{stderr}"
+            );
+            assert!(stderr.contains("login --decide"), "{stderr}");
+            assert_no_key(&output);
+        }
+        never_post.assert();
+        never_get.assert();
+    }
+
+    #[test]
+    fn every_refusal_the_contract_lists_has_its_own_message_and_exit_code() {
+        for (operation, status, code, details, exit, message) in [
+            (
+                "approve",
+                403,
+                "STEP_UP_REQUIRED",
+                r#","max_grant_age_seconds":900"#,
+                4,
+                "Decisions need a sign-in confirmed in the last 15 minutes. Run `hodeishield login --decide` and try again.",
+            ),
+            (
+                "reject",
+                403,
+                "STEP_UP_REQUIRED",
+                "",
+                4,
+                "confirmed in the last 15 minutes",
+            ),
+            (
+                "approve",
+                403,
+                "CREDENTIAL_NOT_ALLOWED",
+                "",
+                4,
+                "Decisions need a sign-in made with the CLI, not an API key",
+            ),
+            (
+                "approve",
+                403,
+                "INSUFFICIENT_SCOPE",
+                r#","missing":["act:decide"]"#,
+                4,
+                "lacks the scope this needs: act:decide",
+            ),
+            (
+                "approve",
+                403,
+                "ROLE_NOT_PERMITTED",
+                "",
+                4,
+                "Your role may not approve this proposal",
+            ),
+            (
+                "reject",
+                403,
+                "ROLE_NOT_PERMITTED",
+                "",
+                4,
+                "Your role may not reject this proposal",
+            ),
+            (
+                "approve",
+                403,
+                "OWN_PROPOSAL",
+                "",
+                4,
+                "do not let you approve your own proposal",
+            ),
+            (
+                "approve",
+                403,
+                "WRITE_ACTOR_UNRESOLVED",
+                "",
+                4,
+                "Your account no longer exists",
+            ),
+            (
+                "approve",
+                403,
+                "MODULE_NOT_ENTITLED",
+                r#","scopes":["act:decide"],"modules":["supply_risk"]"#,
+                4,
+                "does not include the module supply_risk",
+            ),
+            (
+                "approve",
+                403,
+                "LICENCE_INACTIVE",
+                r#","licence":"grace""#,
+                8,
+                "so proposals cannot be decided",
+            ),
+            (
+                "approve",
+                409,
+                "PROPOSAL_EXPIRED",
+                "",
+                1,
+                "The proposal expired",
+            ),
+            (
+                "reject",
+                409,
+                "ALREADY_DECIDED",
+                "",
+                1,
+                "no longer waiting for a decision",
+            ),
+            (
+                "approve",
+                409,
+                "ACTIONS_PAUSED",
+                "",
+                1,
+                "Actions are paused",
+            ),
+            (
+                "approve",
+                409,
+                "NOT_DECIDABLE",
+                r#","reason":"not_proposed""#,
+                1,
+                "cannot be decided (reason: not_proposed)",
+            ),
+            (
+                "approve",
+                403,
+                "SOMETHING_NEW",
+                "",
+                4,
+                "The API refused the request: The server's own words.",
+            ),
+        ] {
+            let env = Env::new();
+            let mut app = app(OFFERS_DECIDE, Some("act:decide"));
+            signed_in(&env, &app);
+            app.api
+                .mock(
+                    "POST",
+                    format!("/v1/act/proposals/{P1}/{operation}").as_str(),
+                )
+                .with_status(status)
+                .with_header("x-request-id", "req-d")
+                .with_body(write_error(code, details))
+                .expect(1)
+                .create();
+            let output = app
+                .with(env.cmd_file())
+                .args(["approvals", operation, P1, "--reason", "ok", "--yes"])
+                .output()
+                .expect("run");
+            assert_eq!(output.status.code(), Some(exit), "{code}: {output:?}");
+            assert!(output.stdout.is_empty(), "{code}");
+            let stderr = stderr_of(&output);
+            assert!(stderr.contains(message), "{code}: {stderr}");
+            assert!(stderr.contains("req-w"), "{code}: {stderr}");
+            assert!(!stderr.contains("at-new"), "{code}: {stderr}");
+            if code == "STEP_UP_REQUIRED" {
+                assert!(!stderr.contains("credential is valid"), "{stderr}");
+            }
+            if code == "INSUFFICIENT_SCOPE" {
+                assert!(stderr.contains("login --decide"), "{stderr}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_inbox_shows_the_step_up_message_too() {
+        let env = Env::new();
+        let mut app = app(OFFERS_DECIDE, Some("act:decide"));
+        signed_in(&env, &app);
+        app.api
+            .mock("GET", "/v1/act/inbox")
+            .with_status(403)
+            .with_body(write_error(
+                "STEP_UP_REQUIRED",
+                r#","max_grant_age_seconds":900"#,
+            ))
+            .create();
+        let output = app
+            .with(env.cmd_file())
+            .args(["approvals", "list"])
+            .output()
+            .expect("run");
+        assert_eq!(output.status.code(), Some(4), "{output:?}");
+        let stderr = stderr_of(&output);
+        assert!(
+            stderr.contains("confirmed in the last 15 minutes"),
+            "{stderr}"
+        );
+        assert!(
+            stderr.contains("Refreshing the sign-in does not extend"),
+            "{stderr}"
+        );
+    }
+
+    #[test]
+    fn the_decision_rate_limit_and_a_gateway_error_are_reported_and_never_retried() {
+        let env = Env::new();
+        let mut app = app(OFFERS_DECIDE, Some("act:decide"));
+        signed_in(&env, &app);
+        let limited = app
+            .api
+            .mock("POST", format!("/v1/act/proposals/{P1}/approve").as_str())
+            .with_status(429)
+            .with_body(r#"{"error":{"code":"rate_limited","message":"m","request_id":"r","details":{"scope":"decision_user"}}}"#)
+            .expect(1)
+            .create();
+        let output = app
+            .with(env.cmd_file())
+            .args(["approvals", "approve", P1, "--reason", "ok", "-y"])
+            .output()
+            .expect("run");
+        assert_eq!(output.status.code(), Some(6), "{output:?}");
+        let stderr = stderr_of(&output);
+        assert!(stderr.contains("(limit: decision_user)"), "{stderr}");
+        assert!(stderr.contains("decisions"), "{stderr}");
+        limited.assert();
+
+        for operation in ["approve", "reject"] {
+            for status in [502, 503, 504] {
+                let env = Env::new();
+                let mut app = super::decisions::app(OFFERS_DECIDE, Some("act:decide"));
+                signed_in(&env, &app);
+                let once = app
+                    .api
+                    .mock(
+                        "POST",
+                        format!("/v1/act/proposals/{P1}/{operation}").as_str(),
+                    )
+                    .with_status(status)
+                    .with_body("busy")
+                    .expect(1)
+                    .create();
+                let output = app
+                    .with(env.cmd_file())
+                    .args(["approvals", operation, P1, "--reason", "ok", "-y"])
+                    .output()
+                    .expect("run");
+                assert_eq!(
+                    output.status.code(),
+                    Some(7),
+                    "{operation} {status}: {output:?}"
+                );
+                once.assert();
+            }
+        }
+    }
+
+    #[test]
+    fn the_help_says_approving_does_not_carry_the_action_out() {
+        let env = Env::new();
+        let top = env.cmd().arg("--help").output().expect("run");
+        let text = String::from_utf8_lossy(&top.stdout);
+        assert!(text.contains("approvals approve"), "{text}");
+        assert!(text.contains("login --decide"), "{text}");
+        assert!(text.contains("15 minutes"), "{text}");
+        for args in [
+            &["approvals", "--help"][..],
+            &["approvals", "approve", "--help"][..],
+            &["approvals", "reject", "--help"][..],
+            &["approvals", "list", "--help"][..],
+            &["login", "--help"][..],
+        ] {
+            let output = env.cmd().args(args).output().expect("run");
+            let text = String::from_utf8_lossy(&output.stdout).to_lowercase();
+            for word in ["executed", "applied", "done"] {
+                assert!(!text.contains(word), "{args:?} {word}: {text}");
+            }
+        }
+        let output = env
+            .cmd()
+            .args(["approvals", "approve", "--help"])
+            .output()
+            .expect("run");
+        let text = String::from_utf8_lossy(&output.stdout)
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(text.contains("it does not carry the action out"), "{text}");
+        assert!(text.contains("with its own checks"), "{text}");
+        assert!(
+            text.contains("--yes") && text.contains("--reason"),
+            "{text}"
+        );
+        let output = env.cmd().args(["login", "--help"]).output().expect("run");
+        let text = String::from_utf8_lossy(&output.stdout)
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(text.contains("--decide"), "{text}");
+        assert!(text.contains("confirm your identity again"), "{text}");
+    }
+}

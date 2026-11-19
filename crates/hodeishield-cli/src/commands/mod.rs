@@ -5,7 +5,9 @@
 
 mod alert_writes;
 mod config;
+mod decisions;
 mod resources;
+mod risk_writes;
 mod save;
 mod session;
 mod tenants;
@@ -144,6 +146,7 @@ pub fn run(cli: Cli, out: &mut dyn Write) -> Result<()> {
         Command::Vendors(command) => resources::vendors(&ctx, command, out),
         Command::Alerts(command) => resources::alerts(&ctx, command, out),
         Command::Risks(command) => resources::risks(&ctx, command, out),
+        Command::Approvals(command) => decisions::run(&ctx, &ctx.settings()?, command, out),
         Command::Changes(command) => resources::changes(&ctx, command, out),
         Command::Compliance(command) => resources::compliance(&ctx, command, out),
         Command::Evidence(command) => resources::evidence(&ctx, command, out),

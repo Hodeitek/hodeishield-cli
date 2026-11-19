@@ -22,6 +22,41 @@ commands, `--json` output and exit codes. Each release's notes start with its se
   A write is never sent again after a transport or gateway error.
   ([#60](https://github.com/Hodeitek/hodeishield-cli/issues/60))
 
+- `hodeishield risks transition <id> --to <status> [--note <text>]` moves a risk-register entry along
+  its lifecycle through `POST /v1/risks/{id}/transition`. Like the alert writes, it shows the risk
+  and the change and asks for confirmation (`--yes` skips the question; with no terminal and no
+  `--yes` it exits with code 2 and sends nothing), and it needs an API key that holds the
+  `risks:write` scope: a sign-in cannot write, and the command says so (exit code 4) before sending
+  anything. A move the lifecycle does not allow (`TRANSITION_NOT_ALLOWED`) says where the risk may
+  go from its status; `ROLE_NOT_PERMITTED`, `WRITE_ACTOR_UNRESOLVED`, `LICENCE_INACTIVE` and the
+  write rate limit each get their own message and keep the existing exit codes.
+  ([#60](https://github.com/Hodeitek/hodeishield-cli/issues/60))
+
+- `hodeishield approvals list`, `approvals approve <id> --reason <text>` and `approvals reject <id>
+  --reason <text>` list the proposals waiting for your decision and record it, through `GET
+  /v1/act/inbox` and `POST /v1/act/proposals/{id}/approve` and `.../reject`. They need a sign-in,
+  never an API key (the CLI refuses an API key before sending anything, exit code 4). The list is
+  what the server says you may approve, with a `PROPOSED BY YOU` column; `--json` is the API's
+  answer. Approving only records your approval: the service carries the action out later, with its
+  own checks, and the answer says until when. Each decision shows the proposal (what it would write
+  and why it was proposed) and asks for confirmation; `--yes` skips the question, and with no
+  terminal and no `--yes` the command exits with code 2 and sends nothing. A decision is never sent
+  again after a transport or gateway error. Decisions need a sign-in confirmed in the last 15
+  minutes (`STEP_UP_REQUIRED`: the message says to run `hodeishield login --decide` again; refreshing
+  does not extend the window), and each of `CREDENTIAL_NOT_ALLOWED`, `INSUFFICIENT_SCOPE`,
+  `ROLE_NOT_PERMITTED`, `OWN_PROPOSAL`, `WRITE_ACTOR_UNRESOLVED`, `MODULE_NOT_ENTITLED`,
+  `PROPOSAL_EXPIRED`, `ALREADY_DECIDED`, `ACTIONS_PAUSED`, `NOT_DECIDABLE` and the decision rate limit
+  has its own message and keeps the existing exit codes (4 for a 403, 1 for a 409, 6 for the limit).
+  ([#259](https://github.com/Hodeitek/hodeishield-cli/issues/259),
+  [#60](https://github.com/Hodeitek/hodeishield-cli/issues/60))
+
+- `hodeishield login --decide` signs in with permission to decide proposals (`act:decide`) on top of
+  the normal scopes. It says beforehand that the sign-in asks you to confirm your identity again,
+  and, when the server's answer does not include the permission (decisions can be switched off),
+  it says so plainly and exits with code 4 instead of reporting success. A plain `hodeishield login`
+  never asks for it.
+  ([#259](https://github.com/Hodeitek/hodeishield-cli/issues/259))
+
 - `hodeishield alerts get` shows the MITRE ATT&CK techniques mapped to the alert in an "ATT&CK
   techniques" section (id, name and tactic, plus the sub-technique when there is one). With no
   techniques it says why: none mapped, not included in the current plan, or mapping not available.

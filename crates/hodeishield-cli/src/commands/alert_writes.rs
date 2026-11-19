@@ -56,7 +56,7 @@ fn apply(
     // Before anything is sent: only an API key can write.
     let (_, source) = ctx.api(settings, None)?;
     if source == CredentialSource::OAuth {
-        return Err(needs_api_key());
+        return Err(needs_api_key("an alert", "alerts:write"));
     }
     let (client, source) = ctx.single(settings)?;
     let api = ctx.call(source, None);
@@ -100,15 +100,17 @@ fn apply(
 }
 
 /// The refusal of a sign-in: the API accepts these writes from a key only.
-fn needs_api_key() -> Failure {
+pub(super) fn needs_api_key(what: &str, scope: &str) -> Failure {
     Failure::new(
         Kind::Forbidden,
-        "Changing an alert needs an API key. The sign-in made with `hodeishield login` can only read.",
+        format!(
+            "Changing {what} needs an API key. The sign-in made with `hodeishield login` can only read."
+        ),
     )
-    .hint(
+    .hint(format!(
         "Set HODEISHIELD_API_KEY to a tenant API key, or an MSSP portfolio key (and name the client \
-         with --tenant), that holds the `alerts:write` scope. Nothing was changed.",
-    )
+         with --tenant), that holds the `{scope}` scope. Nothing was changed."
+    ))
 }
 
 /// What the person is asked to confirm.
@@ -145,7 +147,7 @@ fn question(id: &str, current: Option<&Alert>, change: &Change<'_>) -> String {
 
 /// Asks the question and reads one line. Only `y` or `yes` (any case) is a yes; anything else, an
 /// empty line and the end of input included, is a no.
-fn confirmed(
+pub(super) fn confirmed(
     input: &mut dyn BufRead,
     prompt_to: &mut dyn Write,
     question: &str,

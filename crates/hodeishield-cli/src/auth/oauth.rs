@@ -76,7 +76,49 @@ const NOT_SIGNED_IN_OPERATIONS: &[Operation] = &[
     // The alert writes take an API key with `alerts:write`; a sign-in never carries it.
     operations::ACKNOWLEDGE_ALERT,
     operations::RESOLVE_ALERT,
+    // Moving a risk takes an API key with `risks:write`, like the alert writes.
+    operations::TRANSITION_RISK,
+    // Decisions take `act:decide`, which only `login --decide` asks for (see `decide_scopes`).
+    operations::LIST_PENDING_ACT_PROPOSALS,
+    operations::APPROVE_ACT_PROPOSAL,
+    operations::REJECT_ACT_PROPOSAL,
 ];
+
+/// The scope that lets a sign-in see and decide the proposals waiting for a person. A plain
+/// `login` never asks for it; `login --decide` does.
+pub const DECIDE_SCOPE: &str = "act:decide";
+
+/// `scopes` plus [`DECIDE_SCOPE`], for `login --decide`. Fails, before anything is opened, when the
+/// server lists the scopes it offers and decisions are not among them.
+pub fn with_decide_scope(
+    mut scopes: Vec<String>,
+    metadata: &Metadata,
+) -> std::result::Result<Vec<String>, Failure> {
+    if metadata
+        .scopes_supported
+        .as_ref()
+        .is_some_and(|offered| !offered.iter().any(|s| s == DECIDE_SCOPE))
+    {
+        return Err(Failure::general(
+            "This server does not offer decisions from the CLI: the sign-in server does not list \
+             the `act:decide` scope.",
+        )
+        .hint(
+            "Decisions may be switched off for this server. A plain `hodeishield login` still \
+             signs in to read.",
+        ));
+    }
+    if !scopes.iter().any(|s| s == DECIDE_SCOPE) {
+        scopes.push(DECIDE_SCOPE.to_owned());
+    }
+    Ok(scopes)
+}
+
+/// Whether the scope a token response reports includes `wanted`. A response with no `scope`
+/// member does not confirm it.
+pub fn grants(scope: Option<&str>, wanted: &str) -> bool {
+    scope.is_some_and(|scope| scope.split_whitespace().any(|s| s == wanted))
+}
 
 /// The scopes to ask for when the profile names none: the ones the operations in
 /// [`SIGNED_IN_OPERATIONS`] need, with a template such as `compliance.<framework>:read` standing for every scope of that
@@ -789,6 +831,59 @@ mod tests {
             "token_endpoint": "https://app.example.test/oauth/token",
         }))
         .expect("metadata")
+    }
+
+    #[test]
+    fn the_default_scopes_never_include_act_decide() {
+        let offered = |scopes: &[&str]| -> Metadata {
+            serde_json::from_value(serde_json::json!({
+                "issuer": "https://app.example.test",
+                "token_endpoint": "https://app.example.test/oauth/token",
+                "scopes_supported": scopes,
+            }))
+            .expect("metadata")
+        };
+        let all = offered(&["supply_risk:read", "offline_access", DECIDE_SCOPE]);
+        assert!(!default_scopes(&all).iter().any(|s| s == DECIDE_SCOPE));
+    }
+
+    #[test]
+    fn decide_adds_its_scope_on_top_and_only_when_the_server_offers_it() {
+        let metadata = |scopes: serde_json::Value| -> Metadata {
+            serde_json::from_value(serde_json::json!({
+                "issuer": "https://app.example.test",
+                "token_endpoint": "https://app.example.test/oauth/token",
+                "scopes_supported": scopes,
+            }))
+            .expect("metadata")
+        };
+        let base = vec!["supply_risk:read".to_owned()];
+        let offered = metadata(serde_json::json!(["supply_risk:read", "act:decide"]));
+        assert_eq!(
+            with_decide_scope(base.clone(), &offered).expect("offered"),
+            ["supply_risk:read", "act:decide"]
+        );
+        // Not added twice.
+        assert_eq!(
+            with_decide_scope(vec![DECIDE_SCOPE.to_owned()], &offered)
+                .expect("offered")
+                .len(),
+            1
+        );
+        let not_offered = metadata(serde_json::json!(["supply_risk:read"]));
+        let failure = with_decide_scope(base.clone(), &not_offered).expect_err("not offered");
+        assert!(failure.message.contains("does not offer decisions"));
+        // An app that publishes no list is asked anyway; the answer's scope settles it.
+        let silent = metadata(serde_json::Value::Null);
+        assert!(with_decide_scope(base, &silent).is_ok());
+    }
+
+    #[test]
+    fn only_a_scope_in_the_answer_confirms_a_grant() {
+        assert!(grants(Some("a act:decide b"), DECIDE_SCOPE));
+        assert!(!grants(Some("a b"), DECIDE_SCOPE));
+        assert!(!grants(Some("act:decide2"), DECIDE_SCOPE));
+        assert!(!grants(None, DECIDE_SCOPE));
     }
 
     fn resource_metadata(api: &mut mockito::ServerGuard, body: serde_json::Value) {

@@ -33,10 +33,12 @@ Verify the download before you run it: see [Install](#install) and [Verify a dow
 Read your third-party inventory, supply-chain alerts, risk register, change requests, compliance posture, evidence and
 endpoint agents from a terminal or a script.
 
-- **Reads, with two explicit writes.** Every command is a `GET` against the public `/v1` API, except
-  `alerts acknowledge` and `alerts resolve`. Each asks you to confirm before it changes anything and
-  needs an API key with the `alerts:write` scope; a sign-in can only read. See
-  [Change an alert](#change-an-alert).
+- **Reads, with a few explicit writes.** Every command is a `GET` against the public `/v1` API,
+  except `alerts acknowledge`, `alerts resolve` and `risks transition` (an API key with the
+  `alerts:write` or `risks:write` scope; a sign-in can only read) and `approvals approve` and
+  `approvals reject` (a sign-in made with `login --decide`; an API key cannot decide). Each asks you
+  to confirm before it changes anything. See [Change an alert](#change-an-alert),
+  [Change a risk](#change-a-risk) and [Decide proposals](#decide-proposals).
 - **Safe with credentials.** Sign-in tokens live in the system keychain unless you opt in to a
   plain-text file for machines that have none; nothing is ever printed or logged; credentials only travel over HTTPS and are never replayed to a redirect.
 - **Built for scripts.** `--json` prints the API's own JSON, exit codes say what went wrong, and
@@ -476,7 +478,7 @@ información → Ejecutar de todos modos» on a Spanish system).
 ### With a tenant API key (scripts, CI, servers)
 
 Create a key in [the app](https://app.hodeishield.com) under **Settings → API keys**, with only the
-scopes you need (the read scopes; add `alerts:write` only for a key that changes alerts), and export it:
+scopes you need (the read scopes; add `alerts:write` only for a key that changes alerts and `risks:write` only for a key that moves risks), and export it:
 
 ```sh
 export HODEISHIELD_API_KEY=hsk_...
@@ -504,13 +506,14 @@ every other command, so a script can tell that the profile is signed out.
 hodeishield login            # opens the browser; the app redirects back to 127.0.0.1
 hodeishield login --device   # no browser here: approve a short code from another device
 hodeishield login --no-browser   # print the sign-in URL instead of opening a browser
+hodeishield login --decide   # also ask for permission to decide proposals (see Decide proposals)
 hodeishield whoami
 hodeishield logout           # revokes the token at the app and removes it from the keychain
 ```
 
 You sign in to [app.hodeishield.com](https://app.hodeishield.com) as usual (2FA, passkey or SSO), and
 on the consent screen you choose **the one tenant** the CLI may read. A sign-in token never covers
-more than that tenant, and it only reads: [changing an alert](#change-an-alert) needs an API key.
+more than that tenant, and it only reads: [changing an alert](#change-an-alert) or [a risk](#change-a-risk) needs an API key. The one exception is a sign-in made with `login --decide`, which can also [decide proposals](#decide-proposals); a plain `login` never asks for that.
 
 When the sign-in ends, the browser shows a short page in the language of the browser (English, Spanish,
 German, French, Italian or Basque; English otherwise) that says whether it worked and that you can close the tab.
@@ -637,6 +640,10 @@ hodeishield endpoints list --status active
 hodeishield reports list --type monthly --status completed
 hodeishield alerts acknowledge 7c1e0a52-6a0e-4d5c-9d3e-1f2a3b4c5d6e   # writes: asks first, API key only
 hodeishield alerts resolve 7c1e0a52-6a0e-4d5c-9d3e-1f2a3b4c5d6e --reason "Patched in 2.4.1"   # writes
+hodeishield risks transition 5d2b7a10-1c3e-4f6a-8b9c-0d1e2f3a4b5c --to assessed   # writes: asks first, API key only
+hodeishield login --decide                       # once, to be allowed to decide
+hodeishield approvals list                       # the proposals you may approve
+hodeishield approvals approve 9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d --reason "Checked the payload"   # records the approval only
 ```
 
 ```console
@@ -750,6 +757,97 @@ Proceed? [y/N] y
 Resolved alert 7c1e0a52-6a0e-4d5c-9d3e-1f2a3b4c5d6e (status: resolved).
 ```
 
+### Change a risk
+
+One command moves a risk-register entry along its lifecycle.
+
+```sh
+hodeishield risks transition <id> --to STATUS [--note TEXT] [--yes]
+```
+
+`STATUS` is one of `identified`, `assessed`, `treatment_planned`, `treatment_implemented` and
+`closed`. The lifecycle allows `identified` to `assessed`, `assessed` to `treatment_planned`,
+`treatment_planned` to `treatment_implemented`, `treatment_implemented` to `closed`, and `closed`
+back to `assessed`; any other move is refused (exit code 1, and the message says where the risk may
+go from its current status).
+
+- **It asks first, like the alert writes.** The command reads the risk, shows its id, title and
+  status and the change, and asks `Proceed? [y/N]`. `--yes` (`-y`) skips the question; with no
+  terminal and no `--yes` it refuses with exit code 2 and sends nothing.
+- **API key only.** It needs a tenant API key, or a portfolio key (name the client with `--tenant`),
+  that holds the `risks:write` scope. A sign-in made with `hodeishield login` cannot write: the
+  command says so, exits with code 4 and sends nothing. The key acts as the user who created it, and
+  only an administrator role of the tenant may move a risk.
+- **`--note`** (at most 2000 characters) is kept in the risk's history and in the tenant's audit trail.
+- **Repeating is safe.** A risk that already has the status asked for is not touched: the command
+  prints `already <status>: nothing changed` and exits 0. With `--json` it prints the API's
+  `{"data": {...}, "changed": true|false}`.
+- **Refusals** keep the exit codes of the alert writes: 4 for a role or creator that may not do it,
+  8 for a licence not in force (or in its grace period), 6 for the write rate limit. A write is never
+  sent again after a transport or gateway error.
+
+### Decide proposals
+
+Software and agents can propose an action that a person has to approve. These commands list the
+proposals waiting for you and record your decision. They need a sign-in, not an API key.
+
+```sh
+hodeishield login --decide                              # once, then every 15 minutes (see below)
+hodeishield approvals list [--class C] [--module M] [--expires-before WHEN] [--sort S]
+hodeishield approvals approve <id> --reason TEXT [--yes]
+hodeishield approvals reject <id> --reason TEXT [--yes]
+```
+
+- **Opt in at sign-in.** A plain `hodeishield login` never asks for permission to decide
+  (`act:decide`). `login --decide` does, on top of the normal scopes, and tells you first that the
+  sign-in will ask you to confirm your identity again (your second factor or password). If the
+  server does not grant it (decisions can be switched off), the command says so plainly, exits with
+  code 4 and does not claim success; the sign-in still works for reading.
+- **The list is what you may approve.** The server decides what is listed: a proposal you could not
+  approve is not shown. The table has a `PROPOSED BY YOU` column; `--json` is the API's answer, with
+  each proposal's `payload` (exactly what it would write) and its `rationale`.
+- **Approving does not carry the action out.** `approvals approve` only records your approval. The
+  service carries the action out later, with its own checks, and only before the approval lapses
+  (15 minutes); the answer shows that time. `approvals reject` records a rejection, with the reason,
+  and nothing is carried out.
+- **They ask first.** Before it decides, the command shows the proposal from your list (what it would
+  write and why it was proposed) and asks `Proceed? [y/N]`. `--yes` skips the question; with no
+  terminal and no `--yes` it refuses with exit code 2 and sends nothing. Without `--yes`, a proposal that is not in
+  your list cannot be approved from here (exit code 5); it can still be rejected, and the question
+  then shows the id alone.
+- **The 15-minute window.** A decision, and the list itself, need a sign-in whose identity was
+  confirmed in the last 15 minutes. Refreshing the sign-in does not extend it. When the window has
+  passed, the command says so (exit code 4): run `hodeishield login --decide` and try again.
+- **Not with an API key.** The CLI refuses before sending anything when `HODEISHIELD_API_KEY` is set
+  (exit code 4), and shows the API's own refusal for any other credential that is not a sign-in made
+  with the CLI.
+- **`--reason`** is required (1 to 1000 characters) and kept in the tenant's audit trail with your name.
+- **Refusals** each have their own message: a role that may not decide (`ROLE_NOT_PERMITTED`), your
+  own proposal (`OWN_PROPOSAL`), an account that no longer reaches the tenant
+  (`WRITE_ACTOR_UNRESOLVED`), a module the plan does not include (`MODULE_NOT_ENTITLED`), all exit
+  code 4; a proposal that expired (`PROPOSAL_EXPIRED`), was already decided (`ALREADY_DECIDED`),
+  cannot be decided (`NOT_DECIDABLE`) or whose tenant has actions paused (`ACTIONS_PAUSED`), all exit
+  code 1; and the limit of decisions per minute, exit code 6. A decision is never sent again after a
+  transport or gateway error.
+
+```console
+$ hodeishield approvals approve 9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d --reason "Checked the payload"
+Proposal 9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d
+  action:          create_task
+  proposed by you: no
+  proposed via:    agent
+  why:             The keys are old.
+  expires:         2026-11-25T09:00:00Z
+  it would write:
+    {
+      "title": "Rotate keys"
+    }
+Change: approve it, reason: Checked the payload. This only records your approval; it does not carry the action out.
+Proceed? [y/N] y
+Approval recorded for proposal 9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d (status: approved; ledger entry 11111111-2222-4333-8444-555555555555).
+The action has not been carried out: approving only records your decision. The service carries it out later, with its own checks, only before 2026-11-18T10:15:00Z (the approval lapses after that).
+```
+
 ### Several tenants (MSSP)
 
 An MSSP reads all of its client tenants with **one** credential: a **portfolio key**, created in the
@@ -758,7 +856,7 @@ Nobody else can create one: not a tenant administrator, and not a platform opera
 an MSSP organisation. You do not need
 a profile, a key or a sign-in per client, and you should not set them up that way.
 
-A portfolio key reads, plus the one write scope `alerts:write` (see [Change an alert](#change-an-alert)) when an
+A portfolio key reads, plus the two write scopes `alerts:write` and `risks:write` (see [Change an alert](#change-an-alert) and [Change a risk](#change-a-risk)) when an
 organisation administrator grants it; it always expires (90 days by default, 365 at most), and works on the
 HodeiShield API only. It can be limited when it is created to some of your clients and to source IP
 ranges; a request from another address is refused like an unknown key (exit code 3). Signing in
@@ -883,10 +981,10 @@ hodeishield vendors list --all --csv > vendors.csv
 | Code | Meaning |
 |---|---|
 | 0 | Success |
-| 1 | Error (invalid input, configuration, unexpected answer), or an alert write that was cancelled at the prompt, refused because the alert is already resolved, or refused because the alert changed meanwhile |
-| 2 | Invalid command line, including an alert write with no terminal and no `--yes` |
+| 1 | Error (invalid input, configuration, unexpected answer), or a write that was cancelled at the prompt or refused because of the state of what it changes (an alert already resolved or changed meanwhile, a risk move the lifecycle does not allow, a proposal that expired, was already decided, cannot be decided or whose tenant has actions paused) |
+| 2 | Invalid command line, including a write or a decision with no terminal and no `--yes` |
 | 3 | Not authenticated: no credential (also when the system keychain cannot be reached in this session, or the opt-in token file is refused as unsafe; `login` and `logout` exit 1 for that), or the API rejected it (`whoami` too, after showing the local details) |
-| 4 | The credential lacks the scope the command needs, the tenant's plan does not include the module (or the compliance framework is not enabled), the request comes from an IP address that is not allowed, the tenant's plan does not include API or CLI access, the account must enrol multi-factor authentication in the web app first, or an alert write is refused: it was tried with a sign-in instead of an API key, or the key's role or creator may not do it |
+| 4 | The credential lacks the scope the command needs, the tenant's plan does not include the module (or the compliance framework is not enabled), the request comes from an IP address that is not allowed, the tenant's plan does not include API or CLI access, the account must enrol multi-factor authentication in the web app first, an alert or risk write is refused (it was tried with a sign-in instead of an API key, or the key's role or creator may not do it), or a decision is refused (it was tried with an API key, the sign-in was not made with `login --decide` or was confirmed more than 15 minutes ago, the role may not decide it, or it is your own proposal), or `login --decide` was not granted permission to decide |
 | 5 | Not found (or not in your organisation) |
 | 6 | Rate limit exhausted (the CLI already retried short waits) |
 | 7 | The API could not be reached or failed, or does not offer portfolio access yet |
