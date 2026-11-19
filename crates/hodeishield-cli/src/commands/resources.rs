@@ -7,8 +7,9 @@ use super::Context;
 use super::save;
 use super::tenants::{Selection, Target};
 use crate::cli::{
-    AlertsCommand, ChangesCommand, ComplianceCommand, EndpointsCommand, EvidenceCommand, Paging,
-    ReportsCommand, ReportsDownload, RisksCommand, VendorsCommand,
+    AiSystemsCommand, AlertsCommand, ChangesCommand, ComplianceCommand, EndpointsCommand,
+    EvidenceCommand, IncidentsCommand, Paging, ReportsCommand, ReportsDownload, RisksCommand,
+    VendorsCommand,
 };
 use crate::failure::{ApiContext, CredentialSource, Failure, Kind, Result, from_api};
 use crate::filters::warn_unknown;
@@ -19,10 +20,11 @@ use crate::output::{
 use hodeishield_api::Client;
 use hodeishield_api::portfolio::Tenant;
 use hodeishield_api::v1::{
-    Alert, AlertsPagination, Change, ComplianceControl, DownloadReportParams, Endpoint, Evidence,
-    Format, ListAlertsParams, ListChangesParams, ListComplianceControlsParams, ListEndpointsParams,
-    ListEvidenceParams, ListReportsParams, ListRisksParams, ListVendorsParams, Pagination, Report,
-    Risk, Vendor, operations,
+    AiSystem, Alert, AlertsPagination, Change, ComplianceControl, DownloadReportParams, Endpoint,
+    Evidence, Format, Incident, ListAiSystemsParams, ListAlertsParams, ListChangesParams,
+    ListComplianceControlsParams, ListEndpointsParams, ListEvidenceParams, ListIncidentsParams,
+    ListReportsParams, ListRisksParams, ListVendorsParams, Pagination, Report, Risk, Vendor,
+    operations,
 };
 use hodeishield_api::{ApiResponse, Error};
 use serde::Serialize;
@@ -664,6 +666,182 @@ fn risk_table(items: &[Risk]) -> Rows {
                     r.inherent_score.to_string(),
                     r.residual_score
                         .map_or_else(|| "-".to_owned(), |s| s.to_string()),
+                ]
+            })
+            .collect(),
+    )
+}
+
+pub fn incidents(ctx: &Context, command: IncidentsCommand, out: &mut dyn Write) -> Result<()> {
+    let settings = ctx.settings()?;
+    match command {
+        IncidentsCommand::List(args) => {
+            warn_unknown(
+                &operations::LIST_INCIDENTS,
+                &[
+                    ("status", args.status.as_deref()),
+                    ("severity", args.severity.as_deref()),
+                    ("type", args.incident_type.as_deref()),
+                ],
+            );
+            let (targets, source) = ctx.targets(&settings)?;
+            let base = ListIncidentsParams {
+                status: args.status,
+                severity: args.severity,
+                r#type: args.incident_type,
+                sort: args.sort,
+                order: args.paging.order,
+                ..ListIncidentsParams::default()
+            };
+            list(
+                ctx,
+                out,
+                &args.paging,
+                "incidents",
+                plain(ctx, source),
+                &targets,
+                &mut |client, page, per_page| {
+                    client.list_incidents(&ListIncidentsParams {
+                        page,
+                        per_page,
+                        ..base.clone()
+                    })
+                },
+                |r| (r.data, r.pagination.into()),
+                incident_table,
+            )
+        }
+        IncidentsCommand::Get { id } => {
+            let (client, source) = ctx.single(&settings)?;
+            show(
+                ctx,
+                out,
+                plain(ctx, source),
+                client.get_incident(&id),
+                |r| &r.data,
+            )
+        }
+    }
+}
+
+fn incident_table(items: &[Incident]) -> Rows {
+    Rows::new(
+        &[
+            "REF",
+            "TITLE",
+            "SEVERITY",
+            "STATUS",
+            "TYPE",
+            "DETECTED",
+            "DEADLINES",
+        ],
+        items
+            .iter()
+            .map(|i| {
+                vec![
+                    clean(&i.reference),
+                    clean(&i.title),
+                    clean(&i.severity),
+                    clean(&i.status),
+                    clean(&i.r#type),
+                    short_time(Some(&i.detected_at)),
+                    deadlines(i),
+                ]
+            })
+            .collect(),
+    )
+}
+
+/// The notification deadlines of an incident for the list column: how many there are and how many
+/// are overdue. `-` when no regime applies.
+fn deadlines(incident: &Incident) -> String {
+    let total = incident.notifications.len();
+    if total == 0 {
+        return "-".to_owned();
+    }
+    let overdue = incident
+        .notifications
+        .iter()
+        .filter(|n| n.status == "overdue")
+        .count();
+    if overdue == 0 {
+        total.to_string()
+    } else {
+        format!("{total} ({overdue} overdue)")
+    }
+}
+
+pub fn ai_systems(ctx: &Context, command: AiSystemsCommand, out: &mut dyn Write) -> Result<()> {
+    let settings = ctx.settings()?;
+    match command {
+        AiSystemsCommand::List(args) => {
+            warn_unknown(
+                &operations::LIST_AI_SYSTEMS,
+                &[
+                    ("risk_class", args.risk_class.as_deref()),
+                    ("lifecycle_status", args.lifecycle_status.as_deref()),
+                ],
+            );
+            let (targets, source) = ctx.targets(&settings)?;
+            let base = ListAiSystemsParams {
+                risk_class: args.risk_class,
+                lifecycle_status: args.lifecycle_status,
+                vendor_id: args.vendor,
+                sort: args.sort,
+                order: args.paging.order,
+                ..ListAiSystemsParams::default()
+            };
+            list(
+                ctx,
+                out,
+                &args.paging,
+                "AI systems",
+                plain(ctx, source),
+                &targets,
+                &mut |client, page, per_page| {
+                    client.list_ai_systems(&ListAiSystemsParams {
+                        page,
+                        per_page,
+                        ..base.clone()
+                    })
+                },
+                |r| (r.data, r.pagination.into()),
+                ai_system_table,
+            )
+        }
+        AiSystemsCommand::Get { id } => {
+            let (client, source) = ctx.single(&settings)?;
+            show(
+                ctx,
+                out,
+                plain(ctx, source),
+                client.get_ai_system(&id),
+                |r| &r.data,
+            )
+        }
+    }
+}
+
+fn ai_system_table(items: &[AiSystem]) -> Rows {
+    Rows::new(
+        &[
+            "ID",
+            "NAME",
+            "RISK CLASS",
+            "LIFECYCLE",
+            "TYPE",
+            "DEPARTMENT",
+        ],
+        items
+            .iter()
+            .map(|a| {
+                vec![
+                    clean(&a.id),
+                    clean(&a.name),
+                    clean(&a.risk_class),
+                    clean(&a.lifecycle_status),
+                    cell(a.system_type.as_deref()),
+                    cell(a.department.as_deref()),
                 ]
             })
             .collect(),

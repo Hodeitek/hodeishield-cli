@@ -984,12 +984,14 @@ fn only_get_is_ever_sent() {
     let gets = server
         .mock("GET", mockito::Matcher::Any)
         .with_body(page(&[], 1, 0, 0))
-        .expect(8)
+        .expect(10)
         .create();
     for args in [
         vec!["vendors", "list"],
         vec!["alerts", "list"],
         vec!["risks", "list"],
+        vec!["incidents", "list"],
+        vec!["ai-systems", "list"],
         vec!["changes", "list"],
         vec!["evidence", "list"],
         vec!["endpoints", "list"],
@@ -5131,5 +5133,335 @@ mod decisions {
             .join(" ");
         assert!(text.contains("--decide"), "{text}");
         assert!(text.contains("confirm your identity again"), "{text}");
+    }
+}
+
+// Incident and AI system registers: list and get.
+
+const INCIDENT_ID: &str = "7b1f0c2e-5d3a-4c8e-9a41-2f6d8e0b7c13";
+const AI_SYSTEM_ID: &str = "0d9e4a7c-3b2f-4e51-8c60-a1b2c3d4e5f6";
+
+fn incident_json(overdue: bool) -> String {
+    let status = if overdue { "overdue" } else { "pending" };
+    format!(
+        r#"{{"id":"{INCIDENT_ID}","reference":"INC-2026-0012","title":"Credential stuffing on the portal","type":"cybersecurity","severity":"high","status":"investigating","phase":"response","occurred_at":"2026-11-10T08:00:00Z","detected_at":"2026-11-10T09:30:00Z","classified_major_at":null,"contained_at":null,"recovered_at":null,"resolved_at":null,"closed_at":null,"personal_data_breached":true,"cross_border":false,"ai_system_involved":false,"aiact_role":null,"gdpr_role":"controller","vendor_id":null,"notifications":[{{"framework":"nis2","stage":"early_warning","status":"met","anchor":"awareness","due_at":"2026-11-11T09:30:00Z","submitted_at":"2026-11-10T12:00:00Z"}},{{"framework":"gdpr","stage":"dpa_notification","status":"{status}","anchor":"awareness","due_at":"2026-11-13T09:30:00Z","submitted_at":null}}],"created_at":"2026-11-10T09:31:00Z","updated_at":"2026-11-10T10:00:00Z"}}"#
+    )
+}
+
+fn ai_system_json() -> String {
+    format!(
+        r#"{{"id":"{AI_SYSTEM_ID}","name":"Support assistant","risk_class":"transparency","lifecycle_status":"in_use","system_type":"llm","department":"Customer care","vendor_id":null,"data_categories":["customer","personal"],"created_at":"2026-10-01T00:00:00Z","updated_at":"2026-11-01T00:00:00Z"}}"#
+    )
+}
+
+#[test]
+fn incidents_list_prints_a_table_and_sends_the_published_filters() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    let mock = server
+        .mock("GET", "/v1/incidents")
+        .match_header("authorization", format!("Bearer {KEY}").as_str())
+        .match_query(mockito::Matcher::AllOf(vec![
+            mockito::Matcher::UrlEncoded("status".into(), "investigating".into()),
+            mockito::Matcher::UrlEncoded("severity".into(), "high".into()),
+            mockito::Matcher::UrlEncoded("type".into(), "cybersecurity".into()),
+            mockito::Matcher::UrlEncoded("sort".into(), "detected_at".into()),
+            mockito::Matcher::UrlEncoded("order".into(), "asc".into()),
+            mockito::Matcher::UrlEncoded("page".into(), "2".into()),
+            mockito::Matcher::UrlEncoded("per_page".into(), "20".into()),
+        ]))
+        .with_body(page(&[incident_json(true)], 2, 21, 2))
+        .create();
+    let output = env
+        .api(&server)
+        .args([
+            "incidents",
+            "list",
+            "--status",
+            "investigating",
+            "--severity",
+            "high",
+            "--type",
+            "cybersecurity",
+            "--sort",
+            "detected_at",
+            "--order",
+            "asc",
+            "--page",
+            "2",
+            "--per-page",
+            "20",
+        ])
+        .output()
+        .expect("run");
+    assert!(output.status.success(), "{output:?}");
+    mock.assert();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.starts_with("REF"), "{stdout}");
+    assert!(
+        stdout.contains("INC-2026-0012")
+            && stdout.contains("Credential stuffing on the portal")
+            && stdout.contains("2026-11-10 09:30Z")
+            && stdout.contains("2 (1 overdue)"),
+        "{stdout}"
+    );
+    assert_no_key(&output);
+}
+
+#[test]
+fn incidents_list_json_and_get_print_the_api_body_unchanged() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    let body = page(&[incident_json(false)], 1, 1, 1);
+    server
+        .mock("GET", "/v1/incidents")
+        .match_query(mockito::Matcher::Any)
+        .with_body(&body)
+        .create();
+    let output = env
+        .api(&server)
+        .args(["--json", "incidents", "list"])
+        .output()
+        .expect("run");
+    assert!(output.status.success(), "{output:?}");
+    let printed: serde_json::Value = serde_json::from_slice(&output.stdout).expect("json");
+    assert_eq!(
+        printed,
+        serde_json::from_str::<serde_json::Value>(&body).expect("json")
+    );
+
+    let one = format!(r#"{{"data":{}}}"#, incident_json(false));
+    server
+        .mock("GET", format!("/v1/incidents/{INCIDENT_ID}").as_str())
+        .with_body(&one)
+        .create();
+    let output = env
+        .api(&server)
+        .args(["--json", "incidents", "get", INCIDENT_ID])
+        .output()
+        .expect("run");
+    assert!(output.status.success(), "{output:?}");
+    let printed: serde_json::Value = serde_json::from_slice(&output.stdout).expect("json");
+    assert_eq!(
+        printed,
+        serde_json::from_str::<serde_json::Value>(&one).expect("json")
+    );
+
+    let output = env
+        .api(&server)
+        .args(["incidents", "get", INCIDENT_ID])
+        .output()
+        .expect("run");
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("INC-2026-0012") && stdout.contains("dpa_notification"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn incidents_list_warns_about_a_value_outside_the_published_list_and_sends_it() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    let mock = server
+        .mock("GET", "/v1/incidents")
+        .match_query(mockito::Matcher::UrlEncoded("status".into(), "Open".into()))
+        .with_body(page(&[], 1, 0, 0))
+        .expect(1)
+        .create();
+    let output = env
+        .api(&server)
+        .args(["incidents", "list", "--status", "Open"])
+        .output()
+        .expect("run");
+    assert!(output.status.success(), "{output:?}");
+    mock.assert();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("status") && stderr.contains("Open"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn ai_systems_list_prints_a_table_and_sends_the_published_filters() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    let mock = server
+        .mock("GET", "/v1/ai-systems")
+        .match_header("authorization", format!("Bearer {KEY}").as_str())
+        .match_query(mockito::Matcher::AllOf(vec![
+            mockito::Matcher::UrlEncoded("risk_class".into(), "transparency".into()),
+            mockito::Matcher::UrlEncoded("lifecycle_status".into(), "in_use".into()),
+            mockito::Matcher::UrlEncoded("vendor_id".into(), "v1".into()),
+            mockito::Matcher::UrlEncoded("sort".into(), "name".into()),
+            mockito::Matcher::UrlEncoded("order".into(), "asc".into()),
+        ]))
+        .with_body(page(&[ai_system_json()], 1, 1, 1))
+        .create();
+    let output = env
+        .api(&server)
+        .args([
+            "ai-systems",
+            "list",
+            "--risk-class",
+            "transparency",
+            "--lifecycle-status",
+            "in_use",
+            "--vendor",
+            "v1",
+            "--sort",
+            "name",
+            "--order",
+            "asc",
+        ])
+        .output()
+        .expect("run");
+    assert!(output.status.success(), "{output:?}");
+    mock.assert();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.starts_with("ID"), "{stdout}");
+    assert!(
+        stdout.contains("Support assistant")
+            && stdout.contains("transparency")
+            && stdout.contains("in_use")
+            && stdout.contains("Customer care"),
+        "{stdout}"
+    );
+    assert_no_key(&output);
+}
+
+#[test]
+fn ai_systems_get_and_json_print_the_api_body_unchanged() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    let one = format!(r#"{{"data":{}}}"#, ai_system_json());
+    server
+        .mock("GET", format!("/v1/ai-systems/{AI_SYSTEM_ID}").as_str())
+        .with_body(&one)
+        .expect(2)
+        .create();
+    let output = env
+        .api(&server)
+        .args(["--json", "ai-systems", "get", AI_SYSTEM_ID])
+        .output()
+        .expect("run");
+    assert!(output.status.success(), "{output:?}");
+    let printed: serde_json::Value = serde_json::from_slice(&output.stdout).expect("json");
+    assert_eq!(
+        printed,
+        serde_json::from_str::<serde_json::Value>(&one).expect("json")
+    );
+    let output = env
+        .api(&server)
+        .args(["ai-systems", "get", AI_SYSTEM_ID])
+        .output()
+        .expect("run");
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Support assistant") && stdout.contains("customer"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn ai_systems_list_csv_has_the_api_fields() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    server
+        .mock("GET", "/v1/ai-systems")
+        .match_query(mockito::Matcher::Any)
+        .with_body(page(&[ai_system_json()], 1, 1, 1))
+        .create();
+    let output = env
+        .api(&server)
+        .args(["ai-systems", "list", "--csv"])
+        .output()
+        .expect("run");
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.starts_with("id,name,risk_class,lifecycle_status"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn a_missing_incidents_or_ai_systems_scope_exits_4_and_names_it() {
+    for (args, path, scope) in [
+        (vec!["incidents", "list"], "/v1/incidents", "incidents:read"),
+        (
+            vec!["ai-systems", "list"],
+            "/v1/ai-systems",
+            "ai_systems:read",
+        ),
+    ] {
+        let env = Env::new();
+        let mut server = mockito::Server::new();
+        server
+            .mock("GET", path)
+            .match_query(mockito::Matcher::Any)
+            .with_status(403)
+            .with_header("x-request-id", "req_scope")
+            .with_body(
+                r#"{"error":{"code":"forbidden","message":"no","request_id":"req_scope","details":{"code":"INSUFFICIENT_SCOPE"}}}"#,
+            )
+            .create();
+        let output = env.api(&server).args(&args).output().expect("run");
+        assert_eq!(output.status.code(), Some(4), "{output:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains(scope), "{stderr}");
+        assert!(stderr.contains("Ask a tenant administrator"), "{stderr}");
+        assert!(stderr.contains("request id: req_scope"), "{stderr}");
+    }
+}
+
+#[test]
+fn a_module_not_entitled_answer_for_incidents_names_the_module() {
+    let env = Env::new();
+    let mut server = mockito::Server::new();
+    server
+        .mock("GET", "/v1/incidents")
+        .match_query(mockito::Matcher::Any)
+        .with_status(403)
+        .with_body(
+            r#"{"error":{"code":"forbidden","message":"no","request_id":"req_mod","details":{"code":"MODULE_NOT_ENTITLED","scopes":["incidents:read"],"modules":["incidents"]}}}"#,
+        )
+        .create();
+    let output = env
+        .api(&server)
+        .args(["incidents", "list"])
+        .output()
+        .expect("run");
+    assert_eq!(output.status.code(), Some(4), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("plan does not include the module incidents (scope: incidents:read)"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("lacks the scope"), "{stderr}");
+}
+
+#[test]
+fn incidents_and_ai_systems_help_name_their_filters() {
+    let env = Env::new();
+    for (args, words) in [
+        (
+            vec!["incidents", "list", "--help"],
+            vec!["--status", "--severity", "--type", "--sort", "--per-page"],
+        ),
+        (
+            vec!["ai-systems", "list", "--help"],
+            vec!["--risk-class", "--lifecycle-status", "--vendor", "--sort"],
+        ),
+    ] {
+        let output = env.cmd().args(&args).output().expect("run");
+        assert!(output.status.success(), "{output:?}");
+        let text = String::from_utf8_lossy(&output.stdout);
+        for word in words {
+            assert!(text.contains(word), "{args:?} {word}: {text}");
+        }
     }
 }

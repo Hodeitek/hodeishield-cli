@@ -64,6 +64,10 @@ const SIGNED_IN_OPERATIONS: &[Operation] = &[
     operations::GET_REPORT,
     operations::DOWNLOAD_REPORT,
     operations::LIST_CHANGES,
+    operations::LIST_INCIDENTS,
+    operations::GET_INCIDENT,
+    operations::LIST_AI_SYSTEMS,
+    operations::GET_AI_SYSTEM,
 ];
 
 /// The `/v1` operations whose scopes sign-in does not ask for.
@@ -1019,6 +1023,8 @@ mod tests {
                 "evidence:read",
                 "endpoints:read",
                 "changes:read",
+                "incidents:read",
+                "ai_systems:read",
                 "management:read",
                 "offline_access",
             ]
@@ -1034,6 +1040,8 @@ mod tests {
                 "evidence:read",
                 "endpoints:read",
                 "changes:read",
+                "incidents:read",
+                "ai_systems:read",
                 "offline_access",
             ]
         );
@@ -1100,6 +1108,8 @@ mod tests {
                 "endpoints:read",
                 "reports:read",
                 "changes:read",
+                "incidents:read",
+                "ai_systems:read",
                 "offline_access"
             ]
         );

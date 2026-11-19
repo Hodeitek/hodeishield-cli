@@ -541,7 +541,7 @@ An MSSP reads its clients with one credential instead: see
 With `--device`, open the address the CLI prints on any device and **type the code by hand**: the app
 does not accept a link with the code filled in, on purpose.
 
-The CLI asks for the read scopes its commands need (vendors, alerts and risks; change requests; every
+The CLI asks for the read scopes its commands need (vendors, alerts and risks; incidents; AI systems; change requests; every
 compliance framework the app offers; evidence; endpoints; reports) and for a refresh token. To ask for fewer, set them:
 `hodeishield config set oauth_scopes "supply_risk:read offline_access"`.
 
@@ -630,6 +630,10 @@ hodeishield vendors get 0b8f2a52-6a0e-4d5c-9d3e-1f2a3b4c5d6e
 hodeishield alerts list --status open --since 2026-01-01T00:00:00Z
 hodeishield alerts get 7c1e0a52-6a0e-4d5c-9d3e-1f2a3b4c5d6e   # includes the ATT&CK techniques
 hodeishield risks list --min-inherent-score 15 --sort inherent_score
+hodeishield incidents list --status open --severity high   # with each incident's notification deadlines
+hodeishield incidents get 7b1f0c2e-5d3a-4c8e-9a41-2f6d8e0b7c13
+hodeishield ai-systems list --risk-class high_risk --lifecycle-status in_use
+hodeishield ai-systems get 0d9e4a7c-3b2f-4e51-8c60-a1b2c3d4e5f6
 hodeishield changes list --status scheduled --created-from 2026-11-01
 hodeishield compliance posture nis2
 hodeishield compliance controls --framework nis2 --status missing
@@ -652,6 +656,25 @@ ID                                    NAME             DOMAIN               CRIT
 0b8f2a52-6a0e-4d5c-9d3e-1f2a3b4c5d6e  Example Hosting  hosting.example.com  critical     yes     2026-09-27 06:12Z
 5c1d9e0a-3b7f-4a2e-8c6d-2e4f6a8b0c1d  Sample Payments  pay.example.net      critical     yes     2026-09-26 22:40Z
 ```
+
+```console
+$ hodeishield incidents list --severity high
+REF            TITLE                              SEVERITY  STATUS         TYPE           DETECTED           DEADLINES
+INC-2026-0012  Credential stuffing on the portal  high      investigating  cybersecurity  2026-11-10 09:30Z  2 (1 overdue)
+$ hodeishield ai-systems list --risk-class transparency
+ID                                    NAME               RISK CLASS    LIFECYCLE  TYPE  DEPARTMENT
+0d9e4a7c-3b2f-4e51-8c60-a1b2c3d4e5f6  Support assistant  transparency  in_use     llm   Customer care
+```
+
+`incidents` needs the `incidents:read` scope and `ai-systems` the `ai_systems:read` scope. A sign-in
+asks for both when the app offers them; if you signed in with an older version, run
+`hodeishield login` again. A key needs them added in the app, under **Settings → API keys**. When the
+credential lacks the scope, the command exits with code 4 and names it; when the tenant's plan does not
+include the module, it says so and names the module. `incidents list` takes `--status`, `--severity`,
+`--type` and `--sort` (`detected_at`, `created_at`, `updated_at`); `ai-systems list` takes
+`--risk-class`, `--lifecycle-status`, `--vendor` and `--sort` (`created_at`, `updated_at`, `name`).
+Both take the paging options below and `--csv`; `get` shows one entry, and with `--json` prints the API's
+answer unchanged.
 
 Lists show one page (50 items by default); `--page`, `--per-page` (up to 200) and `--all` walk the
 rest. `--all` stops with an error past 100,000 items (or 1,000 pages); narrow the list with filters
