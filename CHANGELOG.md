@@ -245,7 +245,7 @@ commands, `--json` output and exit codes. Each release's notes start with its se
   `--help` still names them.
   ([#201](https://github.com/Hodeitek/hodeishield-cli/issues/201))
 
-### Changed
+### Documentation
 
 - The README lists the Linux prerequisites to install and to verify a download, gives a checksum
   command that BusyBox also runs, and has Windows steps to check a download and to get Scoop and
