@@ -492,7 +492,8 @@ your CI's secret store; the CLI never prints it.
 organisation and, for a key, its scopes; for a sign-in, also the signed-in user when the service
 provides it; for a portfolio key, the MSSP and how many client tenants it
 can select. With `--json` these are the `tenant`, `organization`, `portfolio` and
-`credential_scopes` fields. For a tenant API key that expires, `whoami` also shows when (a `Key
+`credential_scopes` fields. For a tenant API key (which always expires: an expiry is required, at most 365 days, and there are no
+never-expiring keys), `whoami` also shows when (a `Key
 expires` line, and `credential_expires_at` in `--json`, null when there is no expiry or the API
 cannot say), and warns on standard error when the key expires within 14 days or has already expired.
 If the API cannot be reached or fails on its side, `whoami` still shows
@@ -880,8 +881,10 @@ an MSSP organisation. You do not need
 a profile, a key or a sign-in per client, and you should not set them up that way.
 
 A portfolio key reads, plus the two write scopes `alerts:write` and `risks:write` (see [Change an alert](#change-an-alert) and [Change a risk](#change-a-risk)) when an
-organisation administrator grants it; it always expires (90 days by default, 365 at most), and works on the
-HodeiShield API only. It can be limited when it is created to some of your clients and to source IP
+organisation administrator grants it; it always expires (90 days by default and at most 90 days after it is created, whatever
+expiry was set), and works on the HodeiShield API only. It stops working when the administrator who created it
+leaves the organisation or is no longer an administrator of it; another administrator can create a
+replacement (rotate it). It can be limited when it is created to some of your clients and to source IP
 ranges; a request from another address is refused like an unknown key (exit code 3). Signing in
 with `hodeishield login` does not cover a whole portfolio: use the key. Rotate your portfolio keys
 before they expire, so scripts do not stop working; a new key and its predecessor both work for up

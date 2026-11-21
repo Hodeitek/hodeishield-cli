@@ -6,6 +6,12 @@ commands, `--json` output and exit codes. Each release's notes start with its se
 
 ## [Unreleased]
 
+### Changed
+
+- The README states the current API key lifetimes: portfolio keys last at most 90 days and stop working
+  when the administrator who created them leaves the organisation or loses the administrator role;
+  tenant keys always have an expiry, at most 365 days.
+
 ### Added
 
 - `hodeishield incidents list`, `incidents get <id>`, `hodeishield ai-systems list` and
@@ -239,7 +245,7 @@ commands, `--json` output and exit codes. Each release's notes start with its se
   `--help` still names them.
   ([#201](https://github.com/Hodeitek/hodeishield-cli/issues/201))
 
-### Documentation
+### Changed
 
 - The README lists the Linux prerequisites to install and to verify a download, gives a checksum
   command that BusyBox also runs, and has Windows steps to check a download and to get Scoop and
