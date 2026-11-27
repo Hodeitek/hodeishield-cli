@@ -295,9 +295,9 @@ const RESOURCES: [Resource; 7] = [
         command: &["endpoints"],
         list_args: &[],
         path: "/v1/endpoints",
-        item: r#"{"id":"n1","producer":"agent","producer_kind":"edr","status":"active","signature_alg":"ed25519","agent_version":"1.2.3","hostname":"host.example.test","enrolled_at":"2026-01-01T00:00:00Z","last_seen_at":null,"revoked_at":null,"added_later":null}"#,
-        csv_header: "id,producer,producer_kind,status,signature_alg,agent_version,hostname,enrolled_at,last_seen_at,revoked_at,added_later",
-        types: "id:string,producer:string,producer_kind:string,status:string,signature_alg:string,agent_version:string,hostname:string,enrolled_at:string,last_seen_at:null,revoked_at:null,added_later:null",
+        item: r#"{"id":"n1","producer":"agent","producer_kind":"edr","status":"active","signature_alg":"ed25519","agent_version":"1.2.3","hostname":"host.example.test","enrolled_at":"2026-01-01T00:00:00Z","last_seen_at":null,"revoked_at":null,"host_binding_state":"bound","host_binding_changed_at":null,"added_later":null}"#,
+        csv_header: "id,producer,producer_kind,status,signature_alg,agent_version,hostname,enrolled_at,last_seen_at,revoked_at,host_binding_state,host_binding_changed_at,added_later",
+        types: "id:string,producer:string,producer_kind:string,status:string,signature_alg:string,agent_version:string,hostname:string,enrolled_at:string,last_seen_at:null,revoked_at:null,host_binding_state:string,host_binding_changed_at:null,added_later:null",
     },
     Resource {
         command: &["changes"],

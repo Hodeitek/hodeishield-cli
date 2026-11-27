@@ -13,7 +13,7 @@
 use serde::{Deserialize, Serialize};
 
 /// `info.version` of the OpenAPI document this client was generated from.
-pub const OPENAPI_VERSION: &str = "2026-11-19";
+pub const OPENAPI_VERSION: &str = "2026-11-22";
 
 /// The server the OpenAPI document declares.
 pub const DEFAULT_SERVER: &str = "https://api.hodeishield.com";
@@ -420,6 +420,13 @@ pub struct Endpoint {
     /// RFC 3339, UTC.
     #[serde(default)]
     pub revoked_at: Option<String>,
+    /// Whether this enrolment is bound to the machine it was made on. unbound: enrolled by an agent that does not bind, or reinstated. bound / unavailable: bound, or the machine has no usable identifier. mismatch: a signed report presented another machine’s binding, a possible cloned host; revoke and re-enrol.
+    ///
+    /// Documented values: `unbound`, `bound`, `unavailable`, `mismatch`. Treat any other value as valid: the vocabulary may grow.
+    pub host_binding_state: String,
+    /// RFC 3339, UTC. The first transition into mismatch; null otherwise.
+    #[serde(default)]
+    pub host_binding_changed_at: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1920,6 +1927,8 @@ pub enum Class {
     SetVendorCriticality,
     /// `open_vendor_review`
     OpenVendorReview,
+    /// `add_roadmap_item`
+    AddRoadmapItem,
 }
 
 impl Class {
@@ -1931,6 +1940,7 @@ impl Class {
         "schedule_vendor_scan",
         "set_vendor_criticality",
         "open_vendor_review",
+        "add_roadmap_item",
     ];
 
     /// The value as sent on the wire.
@@ -1943,6 +1953,7 @@ impl Class {
             Self::ScheduleVendorScan => "schedule_vendor_scan",
             Self::SetVendorCriticality => "set_vendor_criticality",
             Self::OpenVendorReview => "open_vendor_review",
+            Self::AddRoadmapItem => "add_roadmap_item",
         }
     }
 }
@@ -1964,6 +1975,7 @@ impl std::str::FromStr for Class {
             "schedule_vendor_scan" => Ok(Self::ScheduleVendorScan),
             "set_vendor_criticality" => Ok(Self::SetVendorCriticality),
             "open_vendor_review" => Ok(Self::OpenVendorReview),
+            "add_roadmap_item" => Ok(Self::AddRoadmapItem),
             _ => Err(crate::ParseEnumError::new(value, Self::VALUES)),
         }
     }
@@ -2569,7 +2581,7 @@ pub struct ListPendingActProposalsParams {
     pub sort: Option<PendingActProposalSort>,
     /// Sort direction. Defaults to asc (the proposal that expires soonest first).
     pub order: Option<Order>,
-    /// Only proposals of this action class. One of: create_risk_entry, create_task, request_vendor_evidence, schedule_vendor_scan, set_vendor_criticality, open_vendor_review.
+    /// Only proposals of this action class. One of: create_risk_entry, create_task, request_vendor_evidence, schedule_vendor_scan, set_vendor_criticality, open_vendor_review, add_roadmap_item.
     pub class: Option<Class>,
     /// Only proposals whose action class needs this module (`supply_risk`, …). A module no class needs matches nothing.
     pub module: Option<String>,
